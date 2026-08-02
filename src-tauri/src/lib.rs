@@ -3,6 +3,7 @@ mod search;
 mod ebook;
 mod pdf_utils;
 mod image_utils;
+mod convert;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,10 +34,11 @@ pub fn run() {
             image_utils::flip_image,
             image_utils::crop_image,
             image_utils::apply_filter,
+            convert::text_to_epub,
+            convert::text_to_mobi,
+            convert::text_to_pdf,
         ])
-        .setup(|_app| {
-            Ok(())
-        })
+        .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

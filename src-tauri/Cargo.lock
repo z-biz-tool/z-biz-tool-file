@@ -6085,6 +6085,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-shell",
+ "uuid",
  "walkdir",
  "zip 2.4.2",
 ]

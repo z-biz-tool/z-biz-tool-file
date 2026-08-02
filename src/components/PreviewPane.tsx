@@ -8,6 +8,7 @@ import PdfViewer from "./PdfViewer";
 import AudioPlayer from "./AudioPlayer";
 import VideoPlayer from "./VideoPlayer";
 import ImageEditor from "./ImageEditor";
+import TextConverter from "./TextConverter";
 import { EmptyState, LoadingState, ErrorState } from "../_shared";
 
 const { Text } = Typography;
@@ -32,6 +33,7 @@ export default function PreviewPane() {
   const [error, setError] = useState("");
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [editingImage, setEditingImage] = useState(false);
+  const [showConverter, setShowConverter] = useState(false);
 
   useEffect(() => {
     if (!selectedFile || selectedFile.is_dir) {
@@ -192,7 +194,16 @@ export default function PreviewPane() {
         )}
 
         {!error && !loading && fileType === "text" && (
-          <pre className="preview-text">{textContent}</pre>
+          <div style={{ position: "relative", height: "100%" }}>
+            <pre className="preview-text">{textContent}</pre>
+            <Button
+              icon={<SwapOutlined />}
+              onClick={() => setShowConverter(true)}
+              style={{ position: "absolute", top: 12, right: 12 }}
+            >
+              转换格式
+            </Button>
+          </div>
         )}
 
         {!error && !loading && (fileType === "epub" || fileType === "mobi") && (
@@ -213,6 +224,17 @@ export default function PreviewPane() {
           />
         )}
       </div>
+
+      {/* 文本转格式弹窗 */}
+      {selectedFile && fileType === "text" && (
+        <TextConverter
+          filePath={selectedFile.path}
+          fileName={selectedFile.name}
+          content={textContent}
+          open={showConverter}
+          onClose={() => setShowConverter(false)}
+        />
+      )}
     </div>
   );
 }
