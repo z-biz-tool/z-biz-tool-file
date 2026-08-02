@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { Input, Button, List, Typography, Segmented, Spin, Empty } from "antd";
+import { Input, Segmented, List, Typography, theme } from "antd";
 import { SearchOutlined, FolderOutlined, FileOutlined } from "@ant-design/icons";
+import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, formatFileSize, type SearchResultItem } from "../stores/fileStore";
+import { EmptyState, LoadingState } from "../_shared";
 
 const { Text } = Typography;
 
@@ -10,7 +12,34 @@ interface SearchBarProps {
   rootPath: string;
 }
 
+/// 高亮关键词
+function highlightMatch(text: string, query: string): ReactNode {
+  if (!query.trim()) return text;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escaped})`, "gi");
+  const parts = text.split(regex);
+  return parts.map((part, i) => {
+    if (i % 2 === 1) {
+      return (
+        <mark
+          key={i}
+          style={{
+            background: "var(--ant-colorPrimaryBg)",
+            color: "var(--ant-colorPrimary)",
+            padding: "0 2px",
+            borderRadius: 2,
+          }}
+        >
+          {part}
+        </mark>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
+
 export default function SearchBar({ rootPath }: SearchBarProps) {
+  const { token } = theme.useToken();
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<"filename" | "content">("filename");
   const [results, setResults] = useState<SearchResultItem[]>([]);
@@ -70,6 +99,7 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, mode, rootPath]);
 
   const handleResultClick = (item: SearchResultItem) => {
@@ -85,14 +115,16 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
     }
   };
 
+  const trimmedQuery = query.trim();
+
   return (
-    <div style={{ padding: "8px 12px", borderBottom: "1px solid #f0f0f0" }}>
+    <div style={{ padding: "8px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <Input
           placeholder="全盘搜索文件名或内容..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          prefix={<SearchOutlined style={{ color: "#999" }} />}
+          prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
           allowClear
           style={{ flex: 1 }}
         />
@@ -107,14 +139,16 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
         />
       </div>
 
-      {loading && (
-        <div style={{ textAlign: "center", padding: 12 }}>
-          <Spin size="small" /> <Text type="secondary">搜索中...</Text>
-        </div>
-      )}
+      {loading && <LoadingState tip="搜索中..." minHeight={120} />}
 
       {!loading && hasSearched && results.length === 0 && (
-        <Empty description="未找到匹配结果" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 12 }} />
+        <EmptyState
+          title="未找到匹配文件"
+          description={`没有找到包含「${trimmedQuery}」的结果`}
+          icon={
+            <SearchOutlined style={{ fontSize: 48, color: "var(--ant-color-text-tertiary)" }} />
+          }
+        />
       )}
 
       {!loading && results.length > 0 && (
@@ -134,7 +168,7 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {item.is_dir ? <FolderOutlined /> : <FileOutlined />}
                     <Text strong style={{ fontSize: 13 }}>
-                      {item.name}
+                      {highlightMatch(item.name, trimmedQuery)}
                     </Text>
                     {!item.is_dir && (
                       <Text type="secondary" style={{ fontSize: 11 }}>
@@ -144,16 +178,29 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
                   </div>
                   <Text
                     type="secondary"
-                    style={{ fontSize: 11, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                    style={{
+                      fontSize: 11,
+                      display: "block",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
                   >
-                    {item.path}
+                    {highlightMatch(item.path, trimmedQuery)}
                   </Text>
                   {item.matched_line && (
                     <Text
                       code
-                      style={{ fontSize: 11, display: "block", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                      style={{
+                        fontSize: 11,
+                        display: "block",
+                        marginTop: 2,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
                     >
-                      {item.matched_line}
+                      {highlightMatch(item.matched_line, trimmedQuery)}
                     </Text>
                   )}
                 </div>

@@ -19,14 +19,7 @@ export interface SearchResultItem {
 }
 
 // 文件类型分类
-export type FileType =
-  | "image"
-  | "video"
-  | "audio"
-  | "text"
-  | "epub"
-  | "pdf"
-  | "other";
+export type FileType = "image" | "video" | "audio" | "text" | "epub" | "mobi" | "pdf" | "other";
 
 interface FileStore {
   // 当前路径
@@ -95,11 +88,50 @@ export function getFileType(fileName: string): FileType {
   if (["mp3", "wav", "flac", "aac", "m4a", "wma", "ogg"].includes(ext)) {
     return "audio";
   }
-  if (["txt", "md", "rs", "go", "py", "js", "ts", "tsx", "jsx", "json", "yaml", "yml", "toml", "xml", "html", "css", "scss", "sh", "java", "c", "cpp", "h", "cs", "rb", "php", "swift", "kt", "sql", "log", "csv", "conf", "ini", "env"].includes(ext)) {
+  if (
+    [
+      "txt",
+      "md",
+      "rs",
+      "go",
+      "py",
+      "js",
+      "ts",
+      "tsx",
+      "jsx",
+      "json",
+      "yaml",
+      "yml",
+      "toml",
+      "xml",
+      "html",
+      "css",
+      "scss",
+      "sh",
+      "java",
+      "c",
+      "cpp",
+      "h",
+      "cs",
+      "rb",
+      "php",
+      "swift",
+      "kt",
+      "sql",
+      "log",
+      "csv",
+      "conf",
+      "ini",
+      "env",
+    ].includes(ext)
+  ) {
     return "text";
   }
   if (ext === "epub") {
     return "epub";
+  }
+  if (ext === "mobi") {
+    return "mobi";
   }
   if (ext === "pdf") {
     return "pdf";

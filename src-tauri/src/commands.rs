@@ -116,13 +116,21 @@ pub fn read_file_content(path: &str) -> Result<ReadFileResult, String> {
 
     let bytes = fs::read(file_path).map_err(|e| format!("读取文件失败: {}", e))?;
 
+    // EPUB/MOBI文件由专门的解析器处理，不标记为二进制
+    let ext = file_path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if ext == "epub" || ext == "mobi" {
+        return Ok(ReadFileResult {
+            content: String::from("[电子书文件，请使用专用阅读器查看]"),
+            size,
+            is_binary: false,
+        });
+    }
+
     // 简单检测是否为二进制文件
-    let is_binary = bytes
-        .iter()
-        .take(1024)
-        .filter(|&&b| b == 0)
-        .count()
-        > 0;
+    let is_binary = bytes.iter().take(1024).filter(|&&b| b == 0).count() > 0;
 
     if is_binary {
         return Ok(ReadFileResult {

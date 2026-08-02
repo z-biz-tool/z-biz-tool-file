@@ -1,48 +1,81 @@
-import { useState, useEffect } from "react";
-import { Spin, Empty, Typography, Button, Space } from "antd";
-import { LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { useState, useEffect, useMemo } from "react";
+import { Typography, Button, Progress, theme } from "antd";
+import { LeftOutlined, RightOutlined, ReadOutlined, BookOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
+import { useTheme, LoadingState, EmptyState, ErrorState } from "../_shared";
 
 const { Text } = Typography;
+
+interface Chapter {
+  title: string;
+  content: string;
+}
 
 interface EpubReaderProps {
   filePath: string;
   fileName: string;
 }
 
+interface ReadResult {
+  is_binary: boolean;
+  content: string;
+}
+
+/// 解析章节：优先识别中英文标题，回退按段落分割
+function parseChapters(text: string): Chapter[] {
+  // 中文章节标题：第X章/回/节/篇
+  const cnRegex = /^[ \t]*(第[\d一二三四五六七八九十百千两]+[章回节篇][^\n]*)$/gm;
+  // 英文章节标题：Chapter X
+  const enRegex = /^[ \t]*(Chapter\s+\d+[^\n]*)$/gim;
+
+  const cnMatches = [...text.matchAll(cnRegex)];
+  const enMatches = [...text.matchAll(enRegex)];
+  const matches = cnMatches.length >= enMatches.length ? cnMatches : enMatches;
+
+  if (matches.length > 0) {
+    const chapters: Chapter[] = [];
+    for (let i = 0; i < matches.length; i++) {
+      const start = matches[i].index ?? 0;
+      const end = i + 1 < matches.length ? (matches[i + 1].index ?? text.length) : text.length;
+      const content = text.slice(start, end).trim();
+      chapters.push({ title: matches[i][1].trim(), content });
+    }
+    return chapters;
+  }
+
+  // 回退：按段落分割
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim());
+  if (paragraphs.length === 0) return [{ title: "全文", content: text }];
+  return paragraphs.map((p, i) => ({
+    title: `段落 ${i + 1}`,
+    content: p.trim(),
+  }));
+}
+
 export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
+  const { mode } = useTheme();
+  const { token } = theme.useToken();
   const [loading, setLoading] = useState(true);
-  const [textContent, setTextContent] = useState("");
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [currentChapter, setCurrentChapter] = useState(0);
   const [error, setError] = useState("");
-  const [page, setPage] = useState(0);
-  const [pages, setPages] = useState<string[]>([]);
+  const [showSidebar, setShowSidebar] = useState(true);
 
   useEffect(() => {
     setLoading(true);
     setError("");
-    setTextContent("");
-    setPages([]);
-    setPage(0);
+    setChapters([]);
+    setCurrentChapter(0);
 
-    // EPUB本质是ZIP文件，尝试通过read_file_content读取
-    // 如果是二进制则提示无法预览
     invoke("read_file_content", { path: filePath })
-      .then((result: any) => {
-        if (result.is_binary) {
-          // EPUB是二进制文件，无法直接解析为文本
-          setError("EPUB是二进制格式（ZIP压缩包），当前版本支持简单文本提取。完整EPUB阅读器需要额外的解压库支持。");
+      .then((result: unknown) => {
+        const r = result as ReadResult;
+        if (r.is_binary) {
+          setError(
+            "EPUB是二进制格式（ZIP压缩包），当前版本仅支持简单文本提取。完整EPUB阅读器需要额外的解压库支持。"
+          );
         } else {
-          // 如果意外是文本，直接显示
-          const text = result.content;
-          // 按段落分页
-          const paragraphs = text.split(/\n\s*\n/).filter((p: string) => p.trim());
-          if (paragraphs.length > 0) {
-            setPages(paragraphs);
-            setTextContent(paragraphs[0]);
-          } else {
-            setTextContent(text);
-            setPages([text]);
-          }
+          setChapters(parseChapters(r.content));
         }
       })
       .catch((err) => {
@@ -51,81 +84,175 @@ export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
       .finally(() => setLoading(false));
   }, [filePath]);
 
-  const handlePrevPage = () => {
-    if (page > 0) {
-      setPage(page - 1);
-      setTextContent(pages[page - 1]);
-    }
-  };
+  const progress = useMemo(() => {
+    if (chapters.length === 0) return 0;
+    return Math.round(((currentChapter + 1) / chapters.length) * 100);
+  }, [currentChapter, chapters.length]);
 
-  const handleNextPage = () => {
-    if (page < pages.length - 1) {
-      setPage(page + 1);
-      setTextContent(pages[page + 1]);
-    }
+  const handlePrev = () => {
+    if (currentChapter > 0) setCurrentChapter((c) => c - 1);
+  };
+  const handleNext = () => {
+    if (currentChapter < chapters.length - 1) setCurrentChapter((c) => c + 1);
   };
 
   if (loading) {
-    return (
-      <div className="preview-container">
-        <Spin tip="加载EPUB..." />
-      </div>
-    );
+    return <LoadingState tip="加载EPUB中..." minHeight={300} />;
   }
 
   if (error) {
     return (
-      <div className="preview-container" style={{ flexDirection: "column", gap: 16, padding: 24 }}>
-        <Empty description="EPUB预览" />
-        <Text type="secondary" style={{ textAlign: "center", maxWidth: 600 }}>
-          {error}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          文件: {fileName}
-        </Text>
+      <div style={{ padding: 24 }}>
+        <ErrorState message={error} />
+        <div style={{ textAlign: "center", marginTop: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            文件: {fileName}
+          </Text>
+        </div>
       </div>
     );
   }
 
+  if (chapters.length === 0) {
+    return <EmptyState title="EPUB内容为空" description="未能从该文件提取到任何文本内容" />;
+  }
+
+  // 暗色模式下自动夜间模式
+  const isDark = mode === "dark";
+  const readingBg = isDark ? "#1a1a1a" : "#ffffff";
+  const readingColor = isDark ? "#d4d4d4" : "#333333";
+  const headingColor = isDark ? "#ffffff" : "#000000";
+
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", padding: 16 }}>
-      <div style={{ textAlign: "center", marginBottom: 12 }}>
-        <Text strong style={{ fontSize: 16 }}>{fileName}</Text>
-      </div>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* 顶部标题栏 */}
       <div
         style={{
-          flex: 1,
-          overflow: "auto",
-          padding: "16px 24px",
-          background: "#fff",
-          borderRadius: 8,
-          lineHeight: 1.8,
-          fontSize: 15,
-          whiteSpace: "pre-wrap",
+          textAlign: "center",
+          padding: "8px 12px",
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        {textContent}
+        <Text strong style={{ fontSize: 14 }}>
+          <BookOutlined style={{ marginRight: 6 }} />
+          {fileName}
+        </Text>
       </div>
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 16, padding: "12px 0" }}>
-        <Space>
-          <Button
-            icon={<LeftOutlined />}
-            disabled={page === 0}
-            onClick={handlePrevPage}
+
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* 章节目录侧边栏 */}
+        {showSidebar && (
+          <div
+            style={{
+              width: 180,
+              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              overflow: "auto",
+              background: token.colorBgContainer,
+            }}
           >
-            上一页
-          </Button>
-          <Text type="secondary">
-            {page + 1} / {pages.length}
-          </Text>
-          <Button
-            disabled={page >= pages.length - 1}
-            onClick={handleNextPage}
+            <div
+              style={{
+                padding: "8px 12px",
+                fontWeight: 600,
+                fontSize: 12,
+                color: token.colorTextSecondary,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                position: "sticky",
+                top: 0,
+                background: token.colorBgContainer,
+              }}
+            >
+              目录 ({chapters.length} 章)
+            </div>
+            {chapters.map((ch, i) => (
+              <div
+                key={i}
+                onClick={() => setCurrentChapter(i)}
+                style={{
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  background: i === currentChapter ? token.colorPrimaryBg : "transparent",
+                  color: i === currentChapter ? token.colorPrimary : token.colorText,
+                  fontWeight: i === currentChapter ? 600 : 400,
+                  borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+                title={ch.title}
+              >
+                {ch.title}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 阅读区 */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div
+            style={{
+              flex: 1,
+              overflow: "auto",
+              padding: "16px 24px",
+              background: readingBg,
+              color: readingColor,
+              lineHeight: 1.8,
+              fontSize: 15,
+              whiteSpace: "pre-wrap",
+            }}
           >
-            下一页
-            <RightOutlined />
-          </Button>
-        </Space>
+            <div
+              style={{
+                fontWeight: 600,
+                fontSize: 17,
+                marginBottom: 16,
+                color: headingColor,
+              }}
+            >
+              {chapters[currentChapter].title}
+            </div>
+            {chapters[currentChapter].content}
+          </div>
+
+          {/* 底部进度 + 翻页 */}
+          <div
+            style={{
+              padding: "8px 16px",
+              borderTop: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgContainer,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
+              <Button
+                size="small"
+                icon={<LeftOutlined />}
+                disabled={currentChapter === 0}
+                onClick={handlePrev}
+              />
+              <Progress percent={progress} size="small" style={{ flex: 1, minWidth: 0 }} />
+              <Button
+                size="small"
+                icon={<RightOutlined />}
+                disabled={currentChapter >= chapters.length - 1}
+                onClick={handleNext}
+              />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {currentChapter + 1} / {chapters.length} 章 · {progress}%
+              </Text>
+              <Button
+                type="text"
+                size="small"
+                icon={<ReadOutlined />}
+                onClick={() => setShowSidebar((s) => !s)}
+              >
+                {showSidebar ? "隐藏目录" : "显示目录"}
+              </Button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

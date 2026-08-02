@@ -1,28 +1,33 @@
 import { useState, useEffect } from "react";
-import { Layout, Input, Button, Breadcrumb, Table, Dropdown, message, Modal, theme } from "antd";
-import type { MenuProps } from "antd";
+import { Input, Button, Breadcrumb, Table, Dropdown, message, Modal, theme } from "antd";
+import type { MenuProps, BreadcrumbProps } from "antd";
 import {
   FolderOutlined,
   FileOutlined,
   HomeOutlined,
   ArrowLeftOutlined,
+  ArrowRightOutlined,
   ReloadOutlined,
   DeleteOutlined,
   EditOutlined,
+  FolderOpenOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, formatFileSize, formatTime, type FileEntry } from "./stores/fileStore";
 import FileTree from "./components/FileTree";
 import PreviewPane from "./components/PreviewPane";
 import SearchBar from "./components/SearchBar";
-
-const { Sider, Content, Header } = Layout;
+import { ThemeProvider, AppShell } from "./_shared";
 
 export default function App() {
   const [rootPath, setRootPath] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [renameModal, setRenameModal] = useState<{ visible: boolean; path: string; oldName: string }>({
+  const [renameModal, setRenameModal] = useState<{
+    visible: boolean;
+    path: string;
+    oldName: string;
+  }>({
     visible: false,
     path: "",
     oldName: "",
@@ -30,22 +35,15 @@ export default function App() {
   const [newName, setNewName] = useState("");
   const { token } = theme.useToken();
 
-  const {
-    currentPath,
-    fileList,
-    selectedFile,
-    setSelectedFile,
-    setCurrentPath,
-    setFileList,
-  } = useFileStore();
+  const { currentPath, fileList, selectedFile, setSelectedFile, setCurrentPath, setFileList } =
+    useFileStore();
 
-  // 初始化：获取用户主目录
+  // 初始化：macOS默认用户目录
   useEffect(() => {
-    const homeDir = "/Users/" + (typeof window !== "undefined" ? "" : "");
-    // macOS默认用户目录
     const defaultPath = "/Users/zifang";
     setRootPath(defaultPath);
     navigateTo(defaultPath, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 导航到路径
@@ -67,8 +65,8 @@ export default function App() {
   // 加载目录
   const loadDirectory = (path: string) => {
     invoke("list_directory", { path })
-      .then((entries: any) => {
-        setFileList(entries);
+      .then((entries: unknown) => {
+        setFileList(entries as FileEntry[]);
       })
       .catch((err) => {
         message.error("加载目录失败: " + err);
@@ -116,10 +114,10 @@ export default function App() {
   };
 
   // 面包屑导航
-  const breadcrumbItems = () => {
+  const buildBreadcrumbItems = (): BreadcrumbProps["items"] => {
     if (!currentPath) return [];
     const parts = currentPath.split("/").filter(Boolean);
-    const items: any[] = [
+    const items: NonNullable<BreadcrumbProps["items"]> = [
       {
         title: (
           <span onClick={() => navigateTo("/", true)} style={{ cursor: "pointer" }}>
@@ -129,15 +127,12 @@ export default function App() {
       },
     ];
     let path = "";
-    parts.forEach((part, idx) => {
+    parts.forEach((part) => {
       path += "/" + part;
       const currentPathCopy = path;
       items.push({
         title: (
-          <span
-            onClick={() => navigateTo(currentPathCopy)}
-            style={{ cursor: "pointer" }}
-          >
+          <span onClick={() => navigateTo(currentPathCopy)} style={{ cursor: "pointer" }}>
             {part}
           </span>
         ),
@@ -211,8 +206,17 @@ export default function App() {
           style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
           onClick={() => handleFileClick(record)}
         >
-          {record.is_dir ? <FolderOutlined style={{ color: "#faad14" }} /> : <FileOutlined style={{ color: "#8c8c8c" }} />}
-          <span style={{ color: selectedFile?.path === record.path ? "#1677ff" : "inherit", fontWeight: selectedFile?.path === record.path ? 600 : 400 }}>
+          {record.is_dir ? (
+            <FolderOutlined style={{ color: "#faad14" }} />
+          ) : (
+            <FileOutlined style={{ color: "#8c8c8c" }} />
+          )}
+          <span
+            style={{
+              color: selectedFile?.path === record.path ? "#1677ff" : "inherit",
+              fontWeight: selectedFile?.path === record.path ? 600 : 400,
+            }}
+          >
             {text}
           </span>
         </div>
@@ -224,7 +228,7 @@ export default function App() {
       key: "size",
       width: 100,
       sorter: (a: FileEntry, b: FileEntry) => a.size - b.size,
-      render: (size: number, record: FileEntry) => record.is_dir ? "-" : formatFileSize(size),
+      render: (size: number, record: FileEntry) => (record.is_dir ? "-" : formatFileSize(size)),
     },
     {
       title: "修改时间",
@@ -236,28 +240,63 @@ export default function App() {
     },
   ];
 
-  return (
-    <Layout style={{ height: "100vh" }}>
-      {/* 顶部搜索栏 */}
-      <Header style={{ background: token.colorBgContainer, padding: "0 16px", height: "auto", lineHeight: "normal", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+  // 侧栏：搜索栏 + 文件树
+  const sidebar = (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ flexShrink: 0 }}>
         <SearchBar rootPath={rootPath} />
-      </Header>
+      </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <FileTree rootPath={rootPath} />
+      </div>
+    </div>
+  );
 
-      <Layout>
-        {/* 左侧文件树 */}
-        <Sider width={240} style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}`, overflow: "auto" }}>
-          <FileTree rootPath={rootPath} />
-        </Sider>
+  // 顶栏额外内容：工具栏
+  const headerExtra = (
+    <>
+      <Button
+        icon={<ArrowLeftOutlined />}
+        onClick={goBack}
+        disabled={historyIndex <= 0}
+        size="small"
+      />
+      <Button
+        icon={<ArrowRightOutlined />}
+        onClick={goForward}
+        disabled={historyIndex >= history.length - 1}
+        size="small"
+      />
+      <Button icon={<ReloadOutlined />} onClick={() => loadDirectory(currentPath)} size="small" />
+      <Button onClick={goUp} size="small">
+        上级
+      </Button>
+    </>
+  );
 
-        {/* 中间文件列表 */}
-        <Content style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {/* 工具栏 */}
-          <div style={{ padding: "8px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}`, display: "flex", alignItems: "center", gap: 8, background: token.colorBgContainer }}>
-            <Button icon={<ArrowLeftOutlined />} onClick={goBack} disabled={historyIndex <= 0} size="small" />
-            <Button icon={<ReloadOutlined />} onClick={() => loadDirectory(currentPath)} size="small" />
-            <Button onClick={goUp} size="small">上级</Button>
-            <div style={{ flex: 1 }}>
-              <Breadcrumb items={breadcrumbItems()} />
+  return (
+    <ThemeProvider>
+      <AppShell
+        title="z-biz-tool-file"
+        icon={<FolderOpenOutlined style={{ fontSize: 18, color: "#1677ff" }} />}
+        sidebar={sidebar}
+        headerExtra={headerExtra}
+        siderWidth={280}
+      >
+        <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          {/* 面包屑 + 路径输入 */}
+          <div
+            style={{
+              padding: "8px 12px",
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: token.colorBgContainer,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Breadcrumb items={buildBreadcrumbItems()} />
             </div>
             <Input
               placeholder="根目录路径"
@@ -269,43 +308,54 @@ export default function App() {
             />
           </div>
 
-          {/* 文件列表表格 */}
-          <div style={{ flex: 1, overflow: "auto" }}>
-            <Dropdown
-              trigger={["contextMenu"]}
-              menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}
+          {/* 文件列表 + 预览区 */}
+          <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+            <div style={{ flex: 1, overflow: "auto" }}>
+              <Dropdown
+                trigger={["contextMenu"]}
+                menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}
+              >
+                <div style={{ height: "100%" }}>
+                  <Table
+                    columns={columns}
+                    dataSource={fileList}
+                    rowKey="path"
+                    size="small"
+                    pagination={false}
+                    scroll={{ y: "calc(100vh - 200px)" }}
+                  />
+                </div>
+              </Dropdown>
+            </div>
+            <div
+              style={{
+                width: 420,
+                background: token.colorBgContainer,
+                borderLeft: `1px solid ${token.colorBorderSecondary}`,
+                overflow: "hidden",
+              }}
             >
-              <div style={{ height: "100%" }}>
-                <Table
-                  columns={columns}
-                  dataSource={fileList}
-                  rowKey="path"
-                  size="small"
-                  pagination={false}
-                  scroll={{ y: "calc(100vh - 200px)" }}
-                />
-              </div>
-            </Dropdown>
+              <PreviewPane />
+            </div>
           </div>
-        </Content>
+        </div>
 
-        {/* 右侧预览区 */}
-        <Sider width={420} style={{ background: token.colorBgContainer, borderLeft: `1px solid ${token.colorBorderSecondary}`, overflow: "hidden" }}>
-          <PreviewPane />
-        </Sider>
-      </Layout>
-
-      {/* 重命名弹窗 */}
-      <Modal
-        title="重命名"
-        open={renameModal.visible}
-        onOk={handleRename}
-        onCancel={() => setRenameModal({ visible: false, path: "", oldName: "" })}
-        okText="确定"
-        cancelText="取消"
-      >
-        <Input value={newName} onChange={(e) => setNewName(e.target.value)} onPressEnter={handleRename} />
-      </Modal>
-    </Layout>
+        {/* 重命名弹窗 */}
+        <Modal
+          title="重命名"
+          open={renameModal.visible}
+          onOk={handleRename}
+          onCancel={() => setRenameModal({ visible: false, path: "", oldName: "" })}
+          okText="确定"
+          cancelText="取消"
+        >
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onPressEnter={handleRename}
+          />
+        </Modal>
+      </AppShell>
+    </ThemeProvider>
   );
 }

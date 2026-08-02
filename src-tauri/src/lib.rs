@@ -1,5 +1,7 @@
 mod commands;
 mod search;
+mod ebook;
+mod pdf_utils;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,6 +20,11 @@ pub fn run() {
             commands::move_file,
             search::full_disk_search,
             search::search_file_content,
+            ebook::parse_epub,
+            ebook::parse_mobi,
+            ebook::get_epub_cover,
+            pdf_utils::extract_pdf_text,
+            pdf_utils::get_pdf_metadata,
         ])
         .setup(|_app| {
             Ok(())

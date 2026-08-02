@@ -1,14 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { Tree, Dropdown, message, Modal, Input } from "antd";
 import type { MenuProps, TreeDataNode } from "antd";
-import {
-  FolderOutlined,
-  FileOutlined,
-  FolderOpenOutlined,
-  ReloadOutlined,
-} from "@ant-design/icons";
+import { FolderOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, type FileEntry } from "../stores/fileStore";
+import { EmptyState, LoadingState } from "../_shared";
 
 interface FileTreeProps {
   rootPath: string;
@@ -18,7 +14,12 @@ export default function FileTree({ rootPath }: FileTreeProps) {
   const [treeData, setTreeData] = useState<TreeDataNode[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [loadedKeys, setLoadedKeys] = useState<React.Key[]>([]);
-  const [renameModal, setRenameModal] = useState<{ visible: boolean; path: string; oldName: string }>({
+  const [loading, setLoading] = useState(false);
+  const [renameModal, setRenameModal] = useState<{
+    visible: boolean;
+    path: string;
+    oldName: string;
+  }>({
     visible: false,
     path: "",
     oldName: "",
@@ -28,34 +29,43 @@ export default function FileTree({ rootPath }: FileTreeProps) {
   const { selectedFile, setSelectedFile, setCurrentPath, setFileList } = useFileStore();
 
   // 加载目录内容
-  const loadDirectory = useCallback(async (path: string): Promise<TreeDataNode[]> => {
-    try {
-      const entries: FileEntry[] = await invoke("list_directory", { path });
-      // 同时更新fileList（仅根目录级别）
-      if (path === rootPath) {
-        setFileList(entries);
+  const loadDirectory = useCallback(
+    async (path: string): Promise<TreeDataNode[]> => {
+      try {
+        const entries = (await invoke("list_directory", { path })) as FileEntry[];
+        // 同时更新fileList（仅根目录级别）
+        if (path === rootPath) {
+          setFileList(entries);
+        }
+        return entries
+          .filter((e) => e.is_dir)
+          .map((entry) => ({
+            key: entry.path,
+            title: entry.name,
+            icon: expandedKeys.includes(entry.path) ? <FolderOpenOutlined /> : <FolderOutlined />,
+            isLeaf: false,
+            children: undefined,
+          }));
+      } catch (err) {
+        console.error("加载目录失败:", err);
+        return [];
       }
-      return entries
-        .filter((e) => e.is_dir)
-        .map((entry) => ({
-          key: entry.path,
-          title: entry.name,
-          icon: expandedKeys.includes(entry.path) ? <FolderOpenOutlined /> : <FolderOutlined />,
-          isLeaf: false,
-          children: undefined,
-        }));
-    } catch (err) {
-      console.error("加载目录失败:", err);
-      return [];
-    }
-  }, [rootPath, expandedKeys, setFileList]);
+    },
+    [rootPath, expandedKeys, setFileList]
+  );
 
   // 初始加载
   useEffect(() => {
     if (rootPath) {
-      loadDirectory(rootPath).then(setTreeData);
+      setLoading(true);
+      loadDirectory(rootPath)
+        .then(setTreeData)
+        .finally(() => setLoading(false));
       setCurrentPath(rootPath);
+    } else {
+      setTreeData([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootPath]);
 
   // 异步加载子目录
@@ -83,7 +93,7 @@ export default function FileTree({ rootPath }: FileTreeProps) {
   };
 
   // 选中节点
-  const onSelect = (keys: React.Key[], info: any) => {
+  const onSelect = (keys: React.Key[], info: { node: TreeDataNode }) => {
     if (keys.length > 0) {
       const path = keys[0] as string;
       const node = info.node;
@@ -98,8 +108,8 @@ export default function FileTree({ rootPath }: FileTreeProps) {
       setCurrentPath(path);
 
       // 加载该目录下的文件列表
-      invoke("list_directory", { path }).then((entries: any) => {
-        setFileList(entries);
+      invoke("list_directory", { path }).then((entries: unknown) => {
+        setFileList(entries as FileEntry[]);
       });
     }
   };
@@ -118,7 +128,7 @@ export default function FileTree({ rootPath }: FileTreeProps) {
     setRenameModal({ visible: false, path: "", oldName: "" });
   };
 
-  const handleDelete = async (path: string) => {
+  const handleDelete = (path: string) => {
     Modal.confirm({
       title: "确认删除",
       content: "确定要删除此文件/目录吗？此操作不可恢复。",
@@ -158,29 +168,55 @@ export default function FileTree({ rootPath }: FileTreeProps) {
     <div className="file-tree" style={{ padding: "8px" }}>
       <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontWeight: 600, fontSize: 13 }}>文件树</span>
-        <ReloadOutlined
-          style={{ cursor: "pointer" }}
-          onClick={() => loadDirectory(rootPath).then(setTreeData)}
-        />
-      </div>
-      <Dropdown
-        trigger={["contextMenu"]}
-        menu={{ items: contextMenuItems(selectedFile?.path || rootPath, selectedFile?.name || "") }}
-      >
-        <div>
-          <Tree
-            treeData={treeData}
-            loadData={onLoadData}
-            onSelect={onSelect}
-            expandedKeys={expandedKeys}
-            onExpand={setExpandedKeys}
-            loadedKeys={loadedKeys}
-            onLoad={setLoadedKeys}
-            showIcon
-            blockNode
+        {rootPath && (
+          <ReloadOutlined
+            style={{ cursor: "pointer" }}
+            onClick={() => loadDirectory(rootPath).then(setTreeData)}
           />
-        </div>
-      </Dropdown>
+        )}
+      </div>
+
+      {!rootPath ? (
+        <EmptyState
+          title="请选择目录"
+          description="请先在上方输入根目录路径"
+          icon={
+            <FolderOutlined style={{ fontSize: 48, color: "var(--ant-color-text-tertiary)" }} />
+          }
+        />
+      ) : loading ? (
+        <LoadingState tip="加载目录中..." minHeight={200} />
+      ) : treeData.length === 0 ? (
+        <EmptyState
+          title="文件夹为空"
+          description="该目录下没有子文件夹"
+          icon={
+            <FolderOutlined style={{ fontSize: 48, color: "var(--ant-color-text-tertiary)" }} />
+          }
+        />
+      ) : (
+        <Dropdown
+          trigger={["contextMenu"]}
+          menu={{
+            items: contextMenuItems(selectedFile?.path || rootPath, selectedFile?.name || ""),
+          }}
+        >
+          <div>
+            <Tree
+              treeData={treeData}
+              loadData={onLoadData}
+              onSelect={onSelect}
+              expandedKeys={expandedKeys}
+              onExpand={setExpandedKeys}
+              loadedKeys={loadedKeys}
+              onLoad={setLoadedKeys}
+              showIcon
+              blockNode
+            />
+          </div>
+        </Dropdown>
+      )}
+
       <Modal
         title="重命名"
         open={renameModal.visible}
