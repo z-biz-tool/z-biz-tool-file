@@ -2,6 +2,7 @@ mod commands;
 mod search;
 mod ebook;
 mod pdf_utils;
+mod image_utils;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,6 +26,13 @@ pub fn run() {
             ebook::get_epub_cover,
             pdf_utils::extract_pdf_text,
             pdf_utils::get_pdf_metadata,
+            image_utils::get_image_info,
+            image_utils::export_image,
+            image_utils::resize_image,
+            image_utils::rotate_image,
+            image_utils::flip_image,
+            image_utils::crop_image,
+            image_utils::apply_filter,
         ])
         .setup(|_app| {
             Ok(())

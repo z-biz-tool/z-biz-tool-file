@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import { Typography, theme } from "antd";
-import { FileOutlined } from "@ant-design/icons";
+import { Typography, theme, Button, Tooltip } from "antd";
+import { FileOutlined, EditOutlined, SwapOutlined } from "@ant-design/icons";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useFileStore, getFileType, formatFileSize, formatTime } from "../stores/fileStore";
 import EpubReader from "./EpubReader";
 import PdfViewer from "./PdfViewer";
 import AudioPlayer from "./AudioPlayer";
 import VideoPlayer from "./VideoPlayer";
+import ImageEditor from "./ImageEditor";
 import { EmptyState, LoadingState, ErrorState } from "../_shared";
 
 const { Text } = Typography;
@@ -30,6 +31,7 @@ export default function PreviewPane() {
   const [textContent, setTextContent] = useState("");
   const [error, setError] = useState("");
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
+  const [editingImage, setEditingImage] = useState(false);
 
   useEffect(() => {
     if (!selectedFile || selectedFile.is_dir) {
@@ -96,6 +98,17 @@ export default function PreviewPane() {
   const fileType = getFileType(selectedFile.name);
   const fileUrl = convertFileSrc(selectedFile.path);
 
+  // 图片编辑模式
+  if (editingImage && fileType === "image") {
+    return (
+      <ImageEditor
+        filePath={selectedFile.path}
+        fileName={selectedFile.name}
+        onBack={() => setEditingImage(false)}
+      />
+    );
+  }
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {/* 文件信息栏 */}
@@ -155,9 +168,18 @@ export default function PreviewPane() {
               alignItems: "center",
               justifyContent: "center",
               height: "100%",
+              position: "relative",
             }}
           >
             <img src={fileUrl} alt={selectedFile.name} className="preview-image" />
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => setEditingImage(true)}
+              style={{ position: "absolute", top: 12, right: 12 }}
+            >
+              编辑
+            </Button>
           </div>
         )}
 
