@@ -1,5 +1,8 @@
-import { useState, useEffect } from "react";
-import { Input, Button, Breadcrumb, Table, Dropdown, message, Modal, theme } from "antd";
+import { useState, useEffect, useCallback } from "react";
+import {
+  Input, Button, Breadcrumb, Table, Dropdown, message, Modal, theme,
+  Tooltip, Switch, Segmented,
+} from "antd";
 import type { MenuProps, BreadcrumbProps } from "antd";
 import {
   FolderOutlined,
@@ -11,12 +14,31 @@ import {
   DeleteOutlined,
   EditOutlined,
   FolderOpenOutlined,
+  CopyOutlined,
+  ScissorOutlined,
+  ClipboardOutlined,
+  FileAddOutlined,
+  FolderAddOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  AppstoreOutlined,
+  UnorderedListOutlined,
+  TableOutlined,
+  InfoCircleOutlined,
+  FileZipOutlined,
+  FormOutlined,
+  StarOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
-import { useFileStore, formatFileSize, formatTime, type FileEntry } from "./stores/fileStore";
+import {
+  useFileStore, formatFileSize, formatTime, type FileEntry, type ClipboardItem,
+} from "./stores/fileStore";
 import FileTree from "./components/FileTree";
 import PreviewPane from "./components/PreviewPane";
 import SearchBar from "./components/SearchBar";
+import Bookmarks from "./components/Bookmarks";
+import BatchRename from "./components/BatchRename";
+import FileProperties from "./components/FileProperties";
 import { ThemeProvider, AppShell } from "./_shared";
 
 export default function App() {
@@ -27,16 +49,25 @@ export default function App() {
     visible: boolean;
     path: string;
     oldName: string;
-  }>({
-    visible: false,
-    path: "",
-    oldName: "",
-  });
+  }>({ visible: false, path: "", oldName: "" });
   const [newName, setNewName] = useState("");
+  const [createModal, setCreateModal] = useState<{
+    visible: boolean;
+    type: "file" | "dir";
+  }>({ visible: false, type: "file" });
+  const [createName, setCreateName] = useState("");
+  const [batchRenameOpen, setBatchRenameOpen] = useState(false);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const { token } = theme.useToken();
 
-  const { currentPath, fileList, selectedFile, setSelectedFile, setCurrentPath, setFileList } =
-    useFileStore();
+  const {
+    currentPath, fileList, selectedFile, showHidden, viewMode,
+    clipboard, bookmarks,
+    setSelectedFile, setCurrentPath, setFileList,
+    setShowHidden, setViewMode,
+    setClipboard, clearClipboard,
+  } = useFileStore();
 
   // 初始化：macOS默认用户目录
   useEffect(() => {
@@ -63,15 +94,22 @@ export default function App() {
   };
 
   // 加载目录
-  const loadDirectory = (path: string) => {
-    invoke("list_directory", { path })
+  const loadDirectory = useCallback((path: string) => {
+    const cmd = showHidden ? "list_directory_with_hidden" : "list_directory";
+    const args = showHidden ? { path, showHidden: true } : { path };
+    invoke(cmd, args)
       .then((entries: unknown) => {
         setFileList(entries as FileEntry[]);
       })
       .catch((err) => {
         message.error("加载目录失败: " + err);
       });
-  };
+  }, [showHidden, setFileList]);
+
+  // showHidden变化时重新加载
+  useEffect(() => {
+    if (currentPath) loadDirectory(currentPath);
+  }, [showHidden, currentPath, loadDirectory]);
 
   // 后退
   const goBack = () => {
@@ -141,25 +179,89 @@ export default function App() {
     return items;
   };
 
-  // 右键菜单
-  const contextMenuItems = (record: FileEntry): MenuProps["items"] => [
-    {
-      key: "rename",
-      label: "重命名",
-      icon: <EditOutlined />,
-      onClick: () => {
-        setRenameModal({ visible: true, path: record.path, oldName: record.name });
-        setNewName(record.name);
-      },
-    },
-    {
-      key: "delete",
-      label: "删除",
-      icon: <DeleteOutlined />,
-      danger: true,
-      onClick: () => handleDelete(record),
-    },
-  ];
+  // 剪贴板操作
+  const handleCopy = (entries: FileEntry[]) => {
+    setClipboard(
+      entries.map((e) => ({ path: e.path, name: e.name, is_dir: e.is_dir, operation: "copy" as const })),
+      "copy"
+    );
+    message.success(`已复制 ${entries.length} 项`);
+  };
+
+  const handleCut = (entries: FileEntry[]) => {
+    setClipboard(
+      entries.map((e) => ({ path: e.path, name: e.name, is_dir: e.is_dir, operation: "cut" as const })),
+      "cut"
+    );
+    message.success(`已剪切 ${entries.length} 项`);
+  };
+
+  const handlePaste = async () => {
+    if (clipboard.length === 0 || !currentPath) return;
+    try {
+      for (const item of clipboard) {
+        if (item.operation === "copy") {
+          await invoke("copy_file", { srcPath: item.path, destDir: currentPath });
+        } else {
+          await invoke("move_file", { srcPath: item.path, destDir: currentPath });
+        }
+      }
+      message.success(`已粘贴 ${clipboard.length} 项`);
+      clearClipboard();
+      loadDirectory(currentPath);
+    } catch (err) {
+      message.error("粘贴失败: " + err);
+    }
+  };
+
+  // 新建文件/文件夹
+  const handleCreate = async () => {
+    if (!createName.trim() || !currentPath) return;
+    const fullPath = currentPath + "/" + createName.trim();
+    try {
+      if (createModal.type === "file") {
+        await invoke("create_file", { path: fullPath });
+        message.success("文件创建成功");
+      } else {
+        await invoke("create_directory", { path: fullPath });
+        message.success("文件夹创建成功");
+      }
+      loadDirectory(currentPath);
+    } catch (err) {
+      message.error("创建失败: " + err);
+    }
+    setCreateModal({ visible: false, type: "file" });
+    setCreateName("");
+  };
+
+  // 压缩
+  const handleCompress = async () => {
+    if (selectedRowKeys.length === 0 && !selectedFile) return;
+    const paths = selectedRowKeys.length > 0
+      ? selectedRowKeys.map(String)
+      : [selectedFile!.path];
+    const defaultName = (paths.length === 1 ? selectedFile?.name || "archive" : "archive") + ".zip";
+    try {
+      await invoke("compress_to_zip", { paths, destPath: currentPath + "/" + defaultName });
+      message.success("压缩成功: " + defaultName);
+      loadDirectory(currentPath);
+    } catch (err) {
+      message.error("压缩失败: " + err);
+    }
+  };
+
+  // 解压
+  const handleExtract = async (entry: FileEntry) => {
+    if (!entry.name.endsWith(".zip")) return;
+    const dirName = entry.name.replace(/\.zip$/i, "");
+    try {
+      await invoke("extract_zip", { zipPath: entry.path, destDir: currentPath + "/" + dirName });
+      message.success("解压成功: " + dirName);
+      loadDirectory(currentPath);
+    } catch (err) {
+      message.error("解压失败: " + err);
+    }
+  };
 
   // 删除文件
   const handleDelete = (entry: FileEntry) => {
@@ -192,6 +294,73 @@ export default function App() {
       message.error("重命名失败: " + err);
     }
     setRenameModal({ visible: false, path: "", oldName: "" });
+  };
+
+  // 右键菜单
+  const contextMenuItems = (record: FileEntry): MenuProps["items"] => {
+    const items: MenuProps["items"] = [
+      {
+        key: "open",
+        label: "用默认应用打开",
+        icon: <AppstoreOutlined />,
+        onClick: () => {
+          invoke("open_with_default_app", { path: record.path }).catch((err) =>
+            message.error("打开失败: " + err)
+          );
+        },
+      },
+      { type: "divider" },
+      {
+        key: "copy",
+        label: "复制",
+        icon: <CopyOutlined />,
+        onClick: () => handleCopy([record]),
+      },
+      {
+        key: "cut",
+        label: "剪切",
+        icon: <ScissorOutlined />,
+        onClick: () => handleCut([record]),
+      },
+      {
+        key: "rename",
+        label: "重命名",
+        icon: <EditOutlined />,
+        onClick: () => {
+          setRenameModal({ visible: true, path: record.path, oldName: record.name });
+          setNewName(record.name);
+        },
+      },
+      {
+        key: "delete",
+        label: "删除",
+        icon: <DeleteOutlined />,
+        danger: true,
+        onClick: () => handleDelete(record),
+      },
+      { type: "divider" },
+      {
+        key: "properties",
+        label: "属性",
+        icon: <InfoCircleOutlined />,
+        onClick: () => {
+          setSelectedFile(record);
+          setPropertiesOpen(true);
+        },
+      },
+    ];
+
+    // ZIP文件增加解压选项
+    if (record.name.endsWith(".zip")) {
+      items.splice(5, 0, {
+        key: "extract",
+        label: "解压缩",
+        icon: <FileZipOutlined />,
+        onClick: () => handleExtract(record),
+      });
+    }
+
+    return items;
   };
 
   // 表格列定义
@@ -240,11 +409,14 @@ export default function App() {
     },
   ];
 
-  // 侧栏：搜索栏 + 文件树
+  // 侧栏：搜索栏 + 收藏夹 + 文件树
   const sidebar = (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ flexShrink: 0 }}>
         <SearchBar rootPath={rootPath} />
+      </div>
+      <div style={{ flexShrink: 0, maxHeight: 180, overflow: "auto" }}>
+        <Bookmarks onNavigate={(path) => navigateTo(path)} />
       </div>
       <div style={{ flex: 1, overflow: "auto" }}>
         <FileTree rootPath={rootPath} />
@@ -271,8 +443,22 @@ export default function App() {
       <Button onClick={goUp} size="small">
         上级
       </Button>
+      <Button
+        size="small"
+        icon={showHidden ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+        onClick={() => setShowHidden(!showHidden)}
+        type={showHidden ? "primary" : "text"}
+        title={showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}
+      />
     </>
   );
+
+  // 批量操作选中的文件
+  const selectedFiles = selectedRowKeys.length > 0
+    ? fileList.filter((f) => selectedRowKeys.includes(f.path))
+    : selectedFile
+    ? [selectedFile]
+    : [];
 
   return (
     <ThemeProvider>
@@ -284,7 +470,7 @@ export default function App() {
         siderWidth={280}
       >
         <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-          {/* 面包屑 + 路径输入 */}
+          {/* 面包屑 + 路径输入 + 操作按钮 */}
           <div
             style={{
               padding: "8px 12px",
@@ -293,6 +479,7 @@ export default function App() {
               alignItems: "center",
               gap: 8,
               background: token.colorBgContainer,
+              flexWrap: "wrap",
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -303,8 +490,99 @@ export default function App() {
               value={rootPath}
               onChange={(e) => setRootPath(e.target.value)}
               onPressEnter={() => navigateTo(rootPath, true)}
-              style={{ width: 250 }}
+              style={{ width: 200 }}
               size="small"
+            />
+          </div>
+
+          {/* 操作工具栏 */}
+          <div
+            style={{
+              padding: "4px 12px",
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgContainer,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              flexWrap: "wrap",
+            }}
+          >
+            <Tooltip title="新建文件">
+              <Button
+                size="small"
+                icon={<FileAddOutlined />}
+                onClick={() => { setCreateModal({ visible: true, type: "file" }); setCreateName(""); }}
+              >
+                新建文件
+              </Button>
+            </Tooltip>
+            <Tooltip title="新建文件夹">
+              <Button
+                size="small"
+                icon={<FolderAddOutlined />}
+                onClick={() => { setCreateModal({ visible: true, type: "dir" }); setCreateName(""); }}
+              >
+                新建文件夹
+              </Button>
+            </Tooltip>
+            <Tooltip title="复制">
+              <Button
+                size="small"
+                icon={<CopyOutlined />}
+                onClick={() => selectedFiles.length > 0 && handleCopy(selectedFiles)}
+                disabled={selectedFiles.length === 0}
+              />
+            </Tooltip>
+            <Tooltip title="剪切">
+              <Button
+                size="small"
+                icon={<ScissorOutlined />}
+                onClick={() => selectedFiles.length > 0 && handleCut(selectedFiles)}
+                disabled={selectedFiles.length === 0}
+              />
+            </Tooltip>
+            <Tooltip title="粘贴">
+              <Button
+                size="small"
+                icon={<ClipboardOutlined />}
+                onClick={handlePaste}
+                disabled={clipboard.length === 0}
+              />
+            </Tooltip>
+            <Tooltip title="批量重命名">
+              <Button
+                size="small"
+                icon={<FormOutlined />}
+                onClick={() => setBatchRenameOpen(true)}
+                disabled={selectedFiles.length === 0}
+              />
+            </Tooltip>
+            <Tooltip title="压缩为ZIP">
+              <Button
+                size="small"
+                icon={<FileZipOutlined />}
+                onClick={handleCompress}
+                disabled={selectedFiles.length === 0}
+              />
+            </Tooltip>
+            <Tooltip title="文件属性">
+              <Button
+                size="small"
+                icon={<InfoCircleOutlined />}
+                onClick={() => selectedFile && setPropertiesOpen(true)}
+                disabled={!selectedFile}
+              />
+            </Tooltip>
+            <div style={{ flex: 1 }} />
+            <Segmented
+              size="small"
+              value={viewMode}
+              onChange={(v) => setViewMode(v as "table" | "grid" | "list")}
+              options={[
+                { value: "table", icon: <TableOutlined /> },
+                { value: "list", icon: <UnorderedListOutlined /> },
+                { value: "grid", icon: <AppstoreOutlined /> },
+              ]}
             />
           </div>
 
@@ -322,7 +600,19 @@ export default function App() {
                     rowKey="path"
                     size="small"
                     pagination={false}
-                    scroll={{ y: "calc(100vh - 200px)" }}
+                    scroll={{ y: "calc(100vh - 240px)" }}
+                    rowSelection={{
+                      selectedRowKeys,
+                      onChange: setSelectedRowKeys,
+                    }}
+                    onRow={(record) => ({
+                      onClick: () => {
+                        setSelectedFile(record);
+                        if (!record.is_dir) {
+                          setSelectedRowKeys([record.path]);
+                        }
+                      },
+                    })}
                   />
                 </div>
               </Dropdown>
@@ -355,6 +645,39 @@ export default function App() {
             onPressEnter={handleRename}
           />
         </Modal>
+
+        {/* 新建文件/文件夹弹窗 */}
+        <Modal
+          title={createModal.type === "file" ? "新建文件" : "新建文件夹"}
+          open={createModal.visible}
+          onOk={handleCreate}
+          onCancel={() => setCreateModal({ visible: false, type: "file" })}
+          okText="创建"
+          cancelText="取消"
+        >
+          <Input
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            onPressEnter={handleCreate}
+            placeholder={createModal.type === "file" ? "请输入文件名（含扩展名）" : "请输入文件夹名"}
+            autoFocus
+          />
+        </Modal>
+
+        {/* 批量重命名 */}
+        <BatchRename
+          open={batchRenameOpen}
+          onClose={() => setBatchRenameOpen(false)}
+          onRefresh={() => loadDirectory(currentPath)}
+          files={selectedFiles}
+        />
+
+        {/* 文件属性 */}
+        <FileProperties
+          open={propertiesOpen}
+          onClose={() => setPropertiesOpen(false)}
+          filePath={selectedFile?.path || null}
+        />
       </AppShell>
     </ThemeProvider>
   );

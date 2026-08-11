@@ -18,8 +18,22 @@ export interface SearchResultItem {
   matched_line?: string | null;
 }
 
+// 剪贴板条目类型
+export interface ClipboardItem {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  operation: "copy" | "cut"; // cut = move, copy = copy
+}
+
+// 书签条目类型
+export interface BookmarkItem {
+  name: string;
+  path: string;
+}
+
 // 文件类型分类
-export type FileType = "image" | "video" | "audio" | "text" | "epub" | "mobi" | "pdf" | "other";
+export type FileType = "image" | "video" | "audio" | "text" | "markdown" | "doc" | "epub" | "mobi" | "pdf" | "other";
 
 interface FileStore {
   // 当前路径
@@ -38,6 +52,14 @@ interface FileStore {
   searchMode: "filename" | "content";
   // 搜索根路径
   searchRoot: string;
+  // 是否显示隐藏文件
+  showHidden: boolean;
+  // 剪贴板
+  clipboard: ClipboardItem[];
+  // 书签
+  bookmarks: BookmarkItem[];
+  // 文件列表显示模式
+  viewMode: "table" | "grid" | "list";
   // 设置当前路径
   setCurrentPath: (path: string) => void;
   // 设置文件列表
@@ -54,6 +76,18 @@ interface FileStore {
   setSearchMode: (mode: "filename" | "content") => void;
   // 设置搜索根路径
   setSearchRoot: (path: string) => void;
+  // 设置是否显示隐藏文件
+  setShowHidden: (show: boolean) => void;
+  // 设置剪贴板
+  setClipboard: (items: ClipboardItem[], operation: "copy" | "cut") => void;
+  // 清空剪贴板
+  clearClipboard: () => void;
+  // 添加书签
+  addBookmark: (item: BookmarkItem) => void;
+  // 移除书签
+  removeBookmark: (path: string) => void;
+  // 设置文件列表显示模式
+  setViewMode: (mode: "table" | "grid" | "list") => void;
 }
 
 export const useFileStore = create<FileStore>((set) => ({
@@ -65,6 +99,10 @@ export const useFileStore = create<FileStore>((set) => ({
   isSearching: false,
   searchMode: "filename",
   searchRoot: "",
+  showHidden: false,
+  clipboard: [],
+  bookmarks: JSON.parse(localStorage.getItem("z-tool-bookmarks") || "[]") as BookmarkItem[],
+  viewMode: "table" as const,
 
   setCurrentPath: (path) => set({ currentPath: path }),
   setFileList: (list) => set({ fileList: list }),
@@ -74,6 +112,25 @@ export const useFileStore = create<FileStore>((set) => ({
   setIsSearching: (searching) => set({ isSearching: searching }),
   setSearchMode: (mode) => set({ searchMode: mode }),
   setSearchRoot: (path) => set({ searchRoot: path }),
+  setShowHidden: (show) => set({ showHidden: show }),
+  setClipboard: (items, operation) =>
+    set({
+      clipboard: items.map((item) => ({ ...item, operation })),
+    }),
+  clearClipboard: () => set({ clipboard: [] }),
+  addBookmark: (item) =>
+    set((state) => {
+      const bookmarks = [...state.bookmarks, item];
+      localStorage.setItem("z-tool-bookmarks", JSON.stringify(bookmarks));
+      return { bookmarks };
+    }),
+  removeBookmark: (path) =>
+    set((state) => {
+      const bookmarks = state.bookmarks.filter((b) => b.path !== path);
+      localStorage.setItem("z-tool-bookmarks", JSON.stringify(bookmarks));
+      return { bookmarks };
+    }),
+  setViewMode: (mode) => set({ viewMode: mode }),
 }));
 
 /// 根据文件扩展名判断文件类型
@@ -91,7 +148,6 @@ export function getFileType(fileName: string): FileType {
   if (
     [
       "txt",
-      "md",
       "rs",
       "go",
       "py",
@@ -126,6 +182,12 @@ export function getFileType(fileName: string): FileType {
     ].includes(ext)
   ) {
     return "text";
+  }
+  if (["md", "markdown"].includes(ext)) {
+    return "markdown";
+  }
+  if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"].includes(ext)) {
+    return "doc";
   }
   if (ext === "epub") {
     return "epub";

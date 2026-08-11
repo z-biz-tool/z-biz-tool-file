@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Typography, theme, Button, Tooltip } from "antd";
-import { FileOutlined, EditOutlined, SwapOutlined } from "@ant-design/icons";
+import { FileOutlined, EditOutlined, SwapOutlined, EyeOutlined, CodeOutlined } from "@ant-design/icons";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useFileStore, getFileType, formatFileSize, formatTime } from "../stores/fileStore";
 import EpubReader from "./EpubReader";
@@ -9,6 +9,7 @@ import AudioPlayer from "./AudioPlayer";
 import VideoPlayer from "./VideoPlayer";
 import ImageEditor from "./ImageEditor";
 import TextConverter from "./TextConverter";
+import MarkdownPreview from "./MarkdownPreview";
 import { EmptyState, LoadingState, ErrorState } from "../_shared";
 
 const { Text } = Typography;
@@ -34,6 +35,7 @@ export default function PreviewPane() {
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [editingImage, setEditingImage] = useState(false);
   const [showConverter, setShowConverter] = useState(false);
+  const [mdPreviewMode, setMdPreviewMode] = useState(true); // true=预览, false=源码
 
   useEffect(() => {
     if (!selectedFile || selectedFile.is_dir) {
@@ -46,13 +48,14 @@ export default function PreviewPane() {
     const fileType = getFileType(selectedFile.name);
     setError("");
     setTextContent("");
+    setMdPreviewMode(true);
 
     // 获取文件信息
     invoke("get_file_info", { path: selectedFile.path })
       .then((info) => setFileInfo(info as FileInfo))
       .catch(() => setFileInfo(null));
 
-    if (fileType === "text") {
+    if (fileType === "text" || fileType === "markdown") {
       setLoading(true);
       invoke("read_file_content", { path: selectedFile.path })
         .then((result: unknown) => {
@@ -124,6 +127,7 @@ export default function PreviewPane() {
           display: "flex",
           gap: 16,
           flexWrap: "wrap",
+          alignItems: "center",
         }}
       >
         <Text strong style={{ fontSize: 13 }}>
@@ -133,8 +137,19 @@ export default function PreviewPane() {
           <>
             <Text type="secondary">大小: {formatFileSize(fileInfo.size)}</Text>
             <Text type="secondary">修改: {formatTime(fileInfo.modified)}</Text>
-            <Text type="secondary">路径: {fileInfo.path}</Text>
           </>
+        )}
+        <div style={{ flex: 1 }} />
+        {/* Markdown 预览/源码切换 */}
+        {fileType === "markdown" && (
+          <Button
+            size="small"
+            type={mdPreviewMode ? "primary" : "text"}
+            icon={mdPreviewMode ? <EyeOutlined /> : <CodeOutlined />}
+            onClick={() => setMdPreviewMode(!mdPreviewMode)}
+          >
+            {mdPreviewMode ? "预览" : "源码"}
+          </Button>
         )}
       </div>
 
@@ -193,6 +208,24 @@ export default function PreviewPane() {
           <AudioPlayer filePath={selectedFile.path} fileName={selectedFile.name} />
         )}
 
+        {!error && !loading && fileType === "markdown" && (
+          <div style={{ position: "relative", height: "100%" }}>
+            {mdPreviewMode ? (
+              <MarkdownPreview content={textContent} />
+            ) : (
+              <pre className="preview-text">{textContent}</pre>
+            )}
+            <Button
+              icon={<SwapOutlined />}
+              onClick={() => setShowConverter(true)}
+              style={{ position: "absolute", top: 12, right: 12 }}
+              size="small"
+            >
+              转换
+            </Button>
+          </div>
+        )}
+
         {!error && !loading && fileType === "text" && (
           <div style={{ position: "relative", height: "100%" }}>
             <pre className="preview-text">{textContent}</pre>
@@ -214,6 +247,16 @@ export default function PreviewPane() {
           <PdfViewer filePath={selectedFile.path} fileName={selectedFile.name} />
         )}
 
+        {!error && !loading && fileType === "doc" && (
+          <EmptyState
+            title="Office 文档预览"
+            description="可右键选择「用默认应用打开」查看"
+            icon={
+              <FileOutlined style={{ fontSize: 56, color: "var(--ant-color-text-tertiary)" }} />
+            }
+          />
+        )}
+
         {!error && !loading && fileType === "other" && (
           <EmptyState
             title="暂不支持预览此格式"
@@ -226,7 +269,7 @@ export default function PreviewPane() {
       </div>
 
       {/* 文本转格式弹窗 */}
-      {selectedFile && fileType === "text" && (
+      {selectedFile && (fileType === "text" || fileType === "markdown") && (
         <TextConverter
           filePath={selectedFile.path}
           fileName={selectedFile.name}

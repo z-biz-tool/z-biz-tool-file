@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{Read as IoRead, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use walkdir::WalkDir;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 /// 文件条目
 #[derive(Debug, Serialize, Deserialize)]
@@ -312,4 +316,431 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// 复制文件/目录
+#[tauri::command]
+pub fn copy_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
+    let src = Path::new(src_path);
+    let dest_dir_path = Path::new(dest_dir);
+
+    if !src.exists() {
+        return Err(format!("源路径不存在: {}", src_path));
+    }
+    if !dest_dir_path.is_dir() {
+        return Err(format!("目标不是目录: {}", dest_dir));
+    }
+
+    let file_name = src
+        .file_name()
+        .ok_or("无法获取文件名")?;
+
+    let dest_path = dest_dir_path.join(file_name);
+
+    if src.is_dir() {
+        copy_dir_recursive(src, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
+    } else {
+        fs::copy(src, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
+    }
+
+    Ok(dest_path.to_string_lossy().to_string())
+}
+
+/// 创建新文件
+#[tauri::command]
+pub fn create_file(path: &str) -> Result<(), String> {
+    let file_path = Path::new(path);
+    if file_path.exists() {
+        return Err(format!("文件已存在: {}", path));
+    }
+
+    // 确保父目录存在
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
+    }
+
+    fs::File::create(file_path).map_err(|e| format!("创建文件失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 创建新目录（包括父目录）
+#[tauri::command]
+pub fn create_directory(path: &str) -> Result<(), String> {
+    let dir_path = Path::new(path);
+    if dir_path.exists() {
+        return Err(format!("目录已存在: {}", path));
+    }
+
+    fs::create_dir_all(dir_path).map_err(|e| format!("创建目录失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 批量重命名项
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchRenameItem {
+    pub old_path: String,
+    pub new_path: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+/// 批量重命名结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchRenameResult {
+    pub success: bool,
+    pub renamed: Vec<BatchRenameItem>,
+    pub errors: Vec<String>,
+}
+
+/// 批量重命名文件
+#[tauri::command]
+pub fn batch_rename(
+    paths: Vec<String>,
+    mode: &str,
+    find_text: Option<String>,
+    replace_text: Option<String>,
+    prefix: Option<String>,
+    suffix: Option<String>,
+    start_number: Option<u32>,
+) -> Result<BatchRenameResult, String> {
+    let mut renamed: Vec<BatchRenameItem> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let start_num = start_number.unwrap_or(1);
+
+    for (index, path_str) in paths.iter().enumerate() {
+        let path = Path::new(path_str);
+        if !path.exists() {
+            errors.push(format!("路径不存在: {}", path_str));
+            continue;
+        }
+
+        let old_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let new_name = match mode {
+            "find_replace" => {
+                let find = find_text.as_deref().unwrap_or("");
+                let replace = replace_text.as_deref().unwrap_or("");
+                old_name.replace(find, replace)
+            }
+            "prefix_suffix" => {
+                let p = prefix.as_deref().unwrap_or("");
+                let s = suffix.as_deref().unwrap_or("");
+                format!("{}{}{}", p, old_name, s)
+            }
+            "auto_number" => {
+                let num = start_num + index as u32;
+                if let Some(ext) = path.extension() {
+                    let stem = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    format!("{}{}.{}", stem, num, ext.to_string_lossy())
+                } else {
+                    format!("{}{}", old_name, num)
+                }
+            }
+            _ => {
+                errors.push(format!("不支持的重命名模式: {}", mode));
+                continue;
+            }
+        };
+
+        if new_name == old_name {
+            continue;
+        }
+
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => {
+                errors.push(format!("无法获取父目录: {}", path_str));
+                continue;
+            }
+        };
+
+        let new_path = parent.join(&new_name);
+
+        match fs::rename(path, &new_path) {
+            Ok(_) => {
+                renamed.push(BatchRenameItem {
+                    old_path: path_str.clone(),
+                    new_path: new_path.to_string_lossy().to_string(),
+                    old_name,
+                    new_name,
+                });
+            }
+            Err(e) => {
+                errors.push(format!("重命名 {} 失败: {}", path_str, e));
+            }
+        }
+    }
+
+    Ok(BatchRenameResult {
+        success: errors.is_empty(),
+        renamed,
+        errors,
+    })
+}
+
+/// 列出目录内容（支持显示隐藏文件）
+#[tauri::command]
+pub fn list_directory_with_hidden(path: &str, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+    let dir_path = Path::new(path);
+    if !dir_path.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+    if !dir_path.is_dir() {
+        return Err(format!("不是目录: {}", path));
+    }
+
+    let entries = fs::read_dir(dir_path).map_err(|e| format!("读取目录失败: {}", e))?;
+
+    let mut result: Vec<FileEntry> = Vec::new();
+
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            // 根据参数决定是否跳过隐藏文件
+            if !show_hidden && file_name.starts_with('.') {
+                continue;
+            }
+
+            let metadata = entry.metadata().map_err(|e| format!("读取元数据失败: {}", e))?;
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            result.push(FileEntry {
+                name: file_name,
+                path: entry.path().to_string_lossy().to_string(),
+                is_dir: metadata.is_dir(),
+                size: metadata.len(),
+                modified,
+            });
+        }
+    }
+
+    // 目录优先，然后按名称排序
+    result.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    Ok(result)
+}
+
+/// 压缩文件/目录为 ZIP
+#[tauri::command]
+pub fn compress_to_zip(paths: Vec<String>, dest_path: String) -> Result<(), String> {
+    let dest = Path::new(&dest_path);
+
+    // 确保目标目录存在
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    }
+
+    let file = fs::File::create(dest).map_err(|e| format!("创建ZIP文件失败: {}", e))?;
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated);
+
+    for path_str in &paths {
+        let src_path = Path::new(path_str);
+        if !src_path.exists() {
+            return Err(format!("路径不存在: {}", path_str));
+        }
+
+        if src_path.is_dir() {
+            add_dir_to_zip(&mut zip, src_path, src_path, &options)
+                .map_err(|e| format!("压缩目录失败: {}", e))?;
+        } else {
+            add_file_to_zip(&mut zip, src_path, src_path, &options)
+                .map_err(|e| format!("压缩文件失败: {}", e))?;
+        }
+    }
+
+    zip.finish().map_err(|e| format!("完成ZIP写入失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 递归添加目录到 ZIP
+fn add_dir_to_zip<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    base: &Path,
+    dir: &Path,
+    options: &SimpleFileOptions,
+) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let relative = path.strip_prefix(base).unwrap_or(&path);
+
+        if path.is_dir() {
+            let dir_name = relative.to_string_lossy().to_string() + "/";
+            zip.add_directory(&dir_name, options.clone())?;
+            add_dir_to_zip(zip, base, &path, options)?;
+        } else {
+            add_file_to_zip(zip, &path, base, options)?;
+        }
+    }
+    Ok(())
+}
+
+/// 添加单个文件到 ZIP
+fn add_file_to_zip<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    file_path: &Path,
+    base: &Path,
+    options: &SimpleFileOptions,
+) -> std::io::Result<()> {
+    let relative = file_path.strip_prefix(base).unwrap_or(file_path);
+    let file_name = relative.to_string_lossy().to_string();
+
+    let mut file = fs::File::open(file_path)?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+
+    zip.start_file(&file_name, options.clone())?;
+    zip.write_all(&buf)?;
+
+    Ok(())
+}
+
+/// 解压 ZIP 文件
+#[tauri::command]
+pub fn extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
+    let src = Path::new(zip_path);
+    if !src.exists() {
+        return Err(format!("ZIP文件不存在: {}", zip_path));
+    }
+
+    let dest = Path::new(dest_dir);
+    fs::create_dir_all(dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
+
+    let file = fs::File::open(src).map_err(|e| format!("打开ZIP文件失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("读取ZIP文件失败: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取ZIP条目失败: {}", e))?;
+
+        let out_path = dest.join(entry.name());
+        // 安全检查：确保解压路径在目标目录内（防止 zip slip）
+        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
+        if let Ok(canonical_out) = out_path.canonicalize() {
+            if !canonical_out.starts_with(&canonical_dest) {
+                return Err(format!("安全错误：解压路径超出目标目录: {}", entry.name()));
+            }
+        } else {
+            // 路径尚不存在，检查父路径
+            if let Some(parent) = out_path.parent() {
+                if let Ok(canonical_parent) = parent.canonicalize() {
+                    if !canonical_parent.starts_with(&canonical_dest) {
+                        return Err(format!("安全错误：解压路径超出目标目录: {}", entry.name()));
+                    }
+                }
+            }
+        }
+
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path).map_err(|e| format!("创建目录失败: {}", e))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
+            }
+            let mut out_file =
+                fs::File::create(&out_path).map_err(|e| format!("创建文件失败: {}", e))?;
+            std::io::copy(&mut entry, &mut out_file)
+                .map_err(|e| format!("写入文件失败: {}", e))?;
+        }
+
+        // 设置文件权限（Unix）
+        #[cfg(unix)]
+        {
+            if let Some(mode) = entry.unix_mode() {
+                fs::set_permissions(&out_path, fs::Permissions::from_mode(mode))
+                    .map_err(|e| format!("设置权限失败: {}", e))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 文件权限信息
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FilePermissions {
+    pub readonly: bool,
+    pub mode: u32,
+    pub readable: bool,
+    pub writable: bool,
+    pub executable: bool,
+}
+
+/// 获取文件权限信息
+#[tauri::command]
+pub fn get_file_permissions(path: &str) -> Result<FilePermissions, String> {
+    let file_path = Path::new(path);
+    if !file_path.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+
+    let metadata = fs::metadata(file_path).map_err(|e| format!("读取元数据失败: {}", e))?;
+    let permissions = metadata.permissions();
+    let mode = permissions.mode();
+
+    Ok(FilePermissions {
+        readonly: permissions.readonly(),
+        mode,
+        readable: mode & 0o400 != 0,
+        writable: mode & 0o200 != 0,
+        executable: mode & 0o100 != 0,
+    })
+}
+
+/// 使用系统默认应用打开文件
+#[tauri::command]
+pub fn open_with_default_app(path: &str) -> Result<(), String> {
+    let file_path = Path::new(path);
+    if !file_path.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+
+    opener::open(path).map_err(|e| format!("打开文件失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 计算目录总大小（递归）
+#[tauri::command]
+pub fn get_directory_size(path: &str) -> Result<u64, String> {
+    let dir_path = Path::new(path);
+    if !dir_path.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+    if !dir_path.is_dir() {
+        return Err(format!("不是目录: {}", path));
+    }
+
+    let mut total_size: u64 = 0;
+
+    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            total_size += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+
+    Ok(total_size)
 }
