@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Typography, theme, Button, Tooltip } from "antd";
+import { Typography, theme, Button } from "antd";
 import { FileOutlined, EditOutlined, SwapOutlined, EyeOutlined, CodeOutlined } from "@ant-design/icons";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useFileStore, getFileType, formatFileSize, formatTime } from "../stores/fileStore";

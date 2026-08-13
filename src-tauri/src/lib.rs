@@ -4,6 +4,9 @@ mod ebook;
 mod pdf_utils;
 mod image_utils;
 mod convert;
+mod watcher;
+
+use watcher::WatcherState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(WatcherState::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_directory,
             commands::read_file_content,
@@ -44,9 +48,13 @@ pub fn run() {
             image_utils::flip_image,
             image_utils::crop_image,
             image_utils::apply_filter,
+            image_utils::get_image_thumbnail,
             convert::text_to_epub,
             convert::text_to_mobi,
             convert::text_to_pdf,
+            watcher::start_watching,
+            watcher::stop_watching,
+            watcher::get_watching_path,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Input, Button, Breadcrumb, Table, Dropdown, message, Modal, theme,
-  Tooltip, Switch, Segmented,
+  Tooltip, Segmented,
 } from "antd";
 import type { MenuProps, BreadcrumbProps } from "antd";
+import type { DragEvent as ReactDragEvent } from "react";
 import {
   FolderOutlined,
   FileOutlined,
@@ -16,7 +17,7 @@ import {
   FolderOpenOutlined,
   CopyOutlined,
   ScissorOutlined,
-  ClipboardOutlined,
+  SnippetsOutlined,
   FileAddOutlined,
   FolderAddOutlined,
   EyeInvisibleOutlined,
@@ -27,11 +28,13 @@ import {
   InfoCircleOutlined,
   FileZipOutlined,
   FormOutlined,
-  StarOutlined,
+  ColumnHeightOutlined,
+  RadarChartOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
-  useFileStore, formatFileSize, formatTime, type FileEntry, type ClipboardItem,
+  useFileStore, formatFileSize, formatTime, type FileEntry,
 } from "./stores/fileStore";
 import FileTree from "./components/FileTree";
 import PreviewPane from "./components/PreviewPane";
@@ -39,6 +42,9 @@ import SearchBar from "./components/SearchBar";
 import Bookmarks from "./components/Bookmarks";
 import BatchRename from "./components/BatchRename";
 import FileProperties from "./components/FileProperties";
+import GridView from "./components/GridView";
+import DualPanelView from "./components/DualPanelView";
+import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell } from "./_shared";
 
 export default function App() {
@@ -59,11 +65,13 @@ export default function App() {
   const [batchRenameOpen, setBatchRenameOpen] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [dualPanelOpen, setDualPanelOpen] = useState(false);
+  const [autoWatch, setAutoWatch] = useState(true);
   const { token } = theme.useToken();
 
   const {
     currentPath, fileList, selectedFile, showHidden, viewMode,
-    clipboard, bookmarks,
+    clipboard,
     setSelectedFile, setCurrentPath, setFileList,
     setShowHidden, setViewMode,
     setClipboard, clearClipboard,
@@ -110,6 +118,56 @@ export default function App() {
   useEffect(() => {
     if (currentPath) loadDirectory(currentPath);
   }, [showHidden, currentPath, loadDirectory]);
+
+  // 文件监听：当 enabled 时自动监听当前目录
+  const watchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!autoWatch || !currentPath) return;
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+
+    const setup = async () => {
+      try {
+        await invoke("start_watching", { path: currentPath });
+      } catch (err) {
+        console.warn("启动监听失败:", err);
+      }
+      if (cancelled) return;
+
+      const un = await listen<{ path: string; kind: string }>(
+        "file-change",
+        (event) => {
+          if (!currentPath) return;
+          const evt = event.payload;
+          // 仅当事件路径在当前目录下时刷新
+          if (!evt.path.startsWith(currentPath + "/") && evt.path !== currentPath) {
+            return;
+          }
+          // 防抖：300ms 内只触发一次
+          if (watchTimerRef.current) clearTimeout(watchTimerRef.current);
+          watchTimerRef.current = setTimeout(() => {
+            loadDirectory(currentPath);
+          }, 300);
+        }
+      );
+      if (cancelled) {
+        un();
+      } else {
+        unlisten = un;
+      }
+    };
+
+    setup();
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+      if (watchTimerRef.current) {
+        clearTimeout(watchTimerRef.current);
+        watchTimerRef.current = null;
+      }
+    };
+  }, [autoWatch, currentPath, loadDirectory]);
 
   // 后退
   const goBack = () => {
@@ -212,6 +270,22 @@ export default function App() {
     } catch (err) {
       message.error("粘贴失败: " + err);
     }
+  };
+
+  // 拖拽源（行级别）：从表格行拖出
+  const handleRowDragStart = (e: ReactDragEvent, record: FileEntry) => {
+    // 如果该行被选中，拖拽所有选中的；否则只拖这一个
+    const items = selectedRowKeys.includes(record.path) && selectedRowKeys.length > 0
+      ? selectedRowKeys.map(String)
+      : [record.path];
+    e.dataTransfer.setData("application/x-z-tool-paths", JSON.stringify(items));
+    // 把拖拽来源信息也存一下（用于剪贴板兼容）
+    e.dataTransfer.setData("application/x-z-tool-operation", "cut");
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleRowDragEnd = () => {
+    // dragend - 浏览器内部会清理 dataTransfer
   };
 
   // 新建文件/文件夹
@@ -372,8 +446,17 @@ export default function App() {
       sorter: (a: FileEntry, b: FileEntry) => a.name.localeCompare(b.name),
       render: (text: string, record: FileEntry) => (
         <div
-          style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+          draggable
+          onDragStart={(e) => handleRowDragStart(e, record)}
+          onDragEnd={handleRowDragEnd}
           onClick={() => handleFileClick(record)}
+          style={{
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+          title="拖拽以移动到其他目录"
         >
           {record.is_dir ? (
             <FolderOutlined style={{ color: "#faad14" }} />
@@ -544,7 +627,7 @@ export default function App() {
             <Tooltip title="粘贴">
               <Button
                 size="small"
-                icon={<ClipboardOutlined />}
+                icon={<SnippetsOutlined />}
                 onClick={handlePaste}
                 disabled={clipboard.length === 0}
               />
@@ -573,6 +656,21 @@ export default function App() {
                 disabled={!selectedFile}
               />
             </Tooltip>
+            <Tooltip title="双面板模式">
+              <Button
+                size="small"
+                icon={<ColumnHeightOutlined />}
+                onClick={() => setDualPanelOpen(true)}
+              />
+            </Tooltip>
+            <Tooltip title={autoWatch ? "文件监听已开启，点此关闭" : "文件监听已关闭，点此开启"}>
+              <Button
+                size="small"
+                icon={<RadarChartOutlined />}
+                onClick={() => setAutoWatch(!autoWatch)}
+                type={autoWatch ? "primary" : "text"}
+              />
+            </Tooltip>
             <div style={{ flex: 1 }} />
             <Segmented
               size="small"
@@ -588,35 +686,69 @@ export default function App() {
 
           {/* 文件列表 + 预览区 */}
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            <div style={{ flex: 1, overflow: "auto" }}>
-              <Dropdown
-                trigger={["contextMenu"]}
-                menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}
-              >
-                <div style={{ height: "100%" }}>
-                  <Table
-                    columns={columns}
-                    dataSource={fileList}
-                    rowKey="path"
-                    size="small"
-                    pagination={false}
-                    scroll={{ y: "calc(100vh - 240px)" }}
-                    rowSelection={{
-                      selectedRowKeys,
-                      onChange: setSelectedRowKeys,
-                    }}
-                    onRow={(record) => ({
-                      onClick: () => {
-                        setSelectedFile(record);
-                        if (!record.is_dir) {
-                          setSelectedRowKeys([record.path]);
-                        }
-                      },
-                    })}
-                  />
-                </div>
-              </Dropdown>
-            </div>
+            <DragDropTarget
+              targetPath={currentPath}
+              targetLabel={currentPath}
+              onDrop={() => loadDirectory(currentPath)}
+              style={{ flex: 1, overflow: "hidden" }}
+            >
+              <div style={{ height: "100%", overflow: "auto" }}>
+                {viewMode === "table" ? (
+                  <Dropdown
+                    trigger={["contextMenu"]}
+                    menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}
+                  >
+                    <div style={{ height: "100%" }}>
+                      <Table
+                        columns={columns}
+                        dataSource={fileList}
+                        rowKey="path"
+                        size="small"
+                        pagination={false}
+                        scroll={{ y: "calc(100vh - 240px)" }}
+                        rowSelection={{
+                          selectedRowKeys,
+                          onChange: setSelectedRowKeys,
+                        }}
+                        onRow={(record) => ({
+                          onClick: () => {
+                            setSelectedFile(record);
+                            if (!record.is_dir) {
+                              setSelectedRowKeys([record.path]);
+                            }
+                          },
+                        })}
+                      />
+                    </div>
+                  </Dropdown>
+                ) : (
+                  <Dropdown
+                    trigger={["contextMenu"]}
+                    menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}
+                  >
+                    <div style={{ height: "100%" }}>
+                      <GridView
+                        mode={viewMode}
+                        files={fileList}
+                        selectedFile={selectedFile}
+                        selectedRowKeys={selectedRowKeys}
+                        onClick={(entry) => {
+                          setSelectedFile(entry);
+                          if (!entry.is_dir) {
+                            setSelectedRowKeys([entry.path]);
+                          }
+                        }}
+                        onDoubleClick={(entry) => {
+                          if (entry.is_dir) navigateTo(entry.path);
+                        }}
+                        onDragStart={(entry, e) => handleRowDragStart(e, entry)}
+                        onDragEnd={handleRowDragEnd}
+                      />
+                    </div>
+                  </Dropdown>
+                )}
+              </div>
+            </DragDropTarget>
             <div
               style={{
                 width: 420,
@@ -678,6 +810,18 @@ export default function App() {
           onClose={() => setPropertiesOpen(false)}
           filePath={selectedFile?.path || null}
         />
+
+        {/* 双面板视图 */}
+        {dualPanelOpen && (
+          <DualPanelView
+            onClose={() => setDualPanelOpen(false)}
+            onOpenFile={(path) => {
+              invoke("open_with_default_app", { path }).catch((err) =>
+                message.error("打开失败: " + err)
+              );
+            }}
+          />
+        )}
       </AppShell>
     </ThemeProvider>
   );

@@ -5,6 +5,7 @@ import { FolderOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/
 import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, type FileEntry } from "../stores/fileStore";
 import { EmptyState, LoadingState } from "../_shared";
+import { DragDropTarget } from "./DragDropMove";
 
 interface FileTreeProps {
   rootPath: string;
@@ -41,7 +42,17 @@ export default function FileTree({ rootPath }: FileTreeProps) {
           .filter((e) => e.is_dir)
           .map((entry) => ({
             key: entry.path,
-            title: entry.name,
+            title: (
+              <DragDropTarget
+                targetPath={entry.path}
+                targetLabel={entry.name}
+                onDrop={() => loadDirectory(rootPath).then(setTreeData)}
+              >
+                <span style={{ display: "inline-block", padding: "2px 4px" }}>
+                  {entry.name}
+                </span>
+              </DragDropTarget>
+            ),
             icon: expandedKeys.includes(entry.path) ? <FolderOpenOutlined /> : <FolderOutlined />,
             isLeaf: false,
             children: undefined,

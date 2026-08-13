@@ -36,6 +36,43 @@ pub fn get_image_info(path: &str) -> Result<ImageInfo, String> {
     })
 }
 
+/// 缩略图结果（base64 编码的 PNG）
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImageThumbnail {
+    pub data: String,    // base64 编码的 PNG
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 生成图片缩略图，返回 base64 编码的 PNG
+#[tauri::command]
+pub fn get_image_thumbnail(path: &str, max_size: u32) -> Result<ImageThumbnail, String> {
+    let file_path = Path::new(path);
+    if !file_path.exists() {
+        return Err(format!("文件不存在: {}", path));
+    }
+
+    let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
+
+    // 缩放图片以适应 max_size
+    let size = if max_size == 0 { 200 } else { max_size };
+    let thumb = img.thumbnail(size, size);
+
+    let (width, height) = thumb.dimensions();
+
+    // 编码为 PNG 到内存
+    let mut buf: Vec<u8> = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buf);
+    thumb
+        .write_to(&mut cursor, ImageFormat::Png)
+        .map_err(|e| format!("编码缩略图失败: {}", e))?;
+
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(&buf);
+
+    Ok(ImageThumbnail { data, width, height })
+}
+
 /// 导出图片为指定格式
 #[tauri::command]
 pub fn export_image(

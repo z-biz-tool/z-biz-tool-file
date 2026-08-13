@@ -1,6 +1,7 @@
 import { List, Button, message, theme } from "antd";
 import { FolderOutlined, DeleteOutlined, StarOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
+import { DragDropTarget } from "./DragDropMove";
 
 interface Props {
   onNavigate: (path: string) => void;
@@ -47,48 +48,50 @@ export default function Bookmarks({ onNavigate }: Props) {
         dataSource={bookmarks}
         locale={{ emptyText: "暂无收藏" }}
         renderItem={(item) => (
-          <List.Item
-            style={{
-              padding: "6px 8px",
-              cursor: "pointer",
-              borderRadius: token.borderRadiusSM,
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.backgroundColor =
-                token.colorBgTextHover;
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
-            }}
-            onClick={() => onNavigate(item.path)}
-            actions={[
-              <Button
-                key="delete"
-                type="text"
-                size="small"
-                icon={<DeleteOutlined />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeBookmark(item.path);
-                }}
-                style={{ opacity: 0.4, transition: "opacity 0.2s" }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.opacity = "1";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.opacity = "0.4";
-                }}
-              />,
-            ]}
-          >
-            <List.Item.Meta
-              avatar={<FolderOutlined style={{ color: token.colorTextSecondary }} />}
-              title={
-                <span style={{ fontSize: 13, color: token.colorText }}>{item.name}</span>
-              }
-              style={{ margin: 0 }}
-            />
-          </List.Item>
+          <DragDropTarget targetPath={item.path} targetLabel={item.name}>
+            <List.Item
+              style={{
+                padding: "6px 8px",
+                cursor: "pointer",
+                borderRadius: token.borderRadiusSM,
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLDivElement).style.backgroundColor =
+                  token.colorBgTextHover;
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
+              }}
+              onClick={() => onNavigate(item.path)}
+              actions={[
+                <Button
+                  key="delete"
+                  type="text"
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeBookmark(item.path);
+                  }}
+                  style={{ opacity: 0.4, transition: "opacity 0.2s" }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.opacity = "1";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.opacity = "0.4";
+                  }}
+                />,
+              ]}
+            >
+              <List.Item.Meta
+                avatar={<FolderOutlined style={{ color: token.colorTextSecondary }} />}
+                title={
+                  <span style={{ fontSize: 13, color: token.colorText }}>{item.name}</span>
+                }
+                style={{ margin: 0 }}
+              />
+            </List.Item>
+          </DragDropTarget>
         )}
       />
 
