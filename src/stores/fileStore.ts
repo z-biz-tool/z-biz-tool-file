@@ -59,7 +59,7 @@ interface FileStore {
   // 书签
   bookmarks: BookmarkItem[];
   // 文件列表显示模式
-  viewMode: "table" | "grid" | "list";
+  viewMode: "table" | "grid" | "list" | "column";
   // 设置当前路径
   setCurrentPath: (path: string) => void;
   // 设置文件列表
@@ -87,7 +87,7 @@ interface FileStore {
   // 移除书签
   removeBookmark: (path: string) => void;
   // 设置文件列表显示模式
-  setViewMode: (mode: "table" | "grid" | "list") => void;
+  setViewMode: (mode: "table" | "grid" | "list" | "column") => void;
 }
 
 export const useFileStore = create<FileStore>((set) => ({

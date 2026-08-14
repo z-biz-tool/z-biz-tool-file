@@ -89,7 +89,7 @@ const getIcon = (entry: FileEntry) => {
   }
 };
 
-type ViewMode = "table" | "grid" | "list";
+type ViewMode = "table" | "grid" | "list" | "column";
 
 interface GridViewProps {
   mode: ViewMode;

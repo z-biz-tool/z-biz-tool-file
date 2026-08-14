@@ -1190,6 +1190,28 @@ pub struct ZipEntry {
     pub modified: f64,
 }
 
+/// 解压 ZIP 中的单个文件
+#[tauri::command]
+pub fn extract_zip_file(zip_path: &str, entry_name: &str, dest_dir: &str) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开ZIP失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("读取ZIP失败: {}", e))?;
+
+    let mut entry = archive.by_name(entry_name).map_err(|e| format!("查找条目失败: {}", e))?;
+
+    if entry.is_dir() {
+        let dir_path = std::path::Path::new(dest_dir).join(entry_name);
+        std::fs::create_dir_all(&dir_path).map_err(|e| format!("创建目录失败: {}", e))?;
+    } else {
+        let file_path = std::path::Path::new(dest_dir).join(entry_name);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
+        }
+        let mut outfile = std::fs::File::create(&file_path).map_err(|e| format!("创建文件失败: {}", e))?;
+        std::io::copy(&mut entry, &mut outfile).map_err(|e| format!("写入文件失败: {}", e))?;
+    }
+    Ok(())
+}
+
 /// 列出 ZIP 文件内容
 #[tauri::command]
 pub fn list_zip_contents(zip_path: &str) -> Result<Vec<ZipEntry>, String> {

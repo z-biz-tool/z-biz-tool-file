@@ -34,6 +34,8 @@ import {
   CopyFilled,
   SwapOutlined,
   SafetyCertificateOutlined,
+  TagOutlined,
+  FileTextOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -55,6 +57,11 @@ import HashCalculator from "./components/HashCalculator";
 import DirectorySync from "./components/DirectorySync";
 import WorkspaceManager, { type Workspace } from "./components/WorkspaceManager";
 import GitStatus from "./components/GitStatus";
+import ColumnView from "./components/ColumnView";
+import FileTagsPanel from "./components/FileTagsPanel";
+import NewFileTemplate from "./components/NewFileTemplate";
+import ZipBrowser from "./components/ZipBrowser";
+import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell } from "./_shared";
 
@@ -82,6 +89,9 @@ export default function App() {
   const [duplicateFinderOpen, setDuplicateFinderOpen] = useState(false);
   const [hashCalcOpen, setHashCalcOpen] = useState(false);
   const [dirSyncOpen, setDirSyncOpen] = useState(false);
+  const [zipBrowserOpen, setZipBrowserOpen] = useState(false);
+  const [zipBrowserPath, setZipBrowserPath] = useState<string | null>(null);
+  const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const { token } = theme.useToken();
 
   const {
@@ -398,6 +408,16 @@ export default function App() {
           );
         },
       },
+      {
+        key: "quicklook",
+        label: "Quick Look 预览",
+        icon: <EyeOutlined />,
+        onClick: () => {
+          invoke("quick_look_preview", { path: record.path }).catch((err) =>
+            message.error("Quick Look 失败: " + err)
+          );
+        },
+      },
       { type: "divider" },
       {
         key: "copy",
@@ -438,6 +458,14 @@ export default function App() {
         },
       },
       {
+        key: "tags",
+        label: "标签",
+        icon: <TagOutlined />,
+        onClick: () => {
+          setSelectedFile(record);
+        },
+      },
+      {
         key: "properties",
         label: "属性",
         icon: <InfoCircleOutlined />,
@@ -448,9 +476,17 @@ export default function App() {
       },
     ];
 
-    // ZIP文件增加解压选项
+    // ZIP文件增加解压和浏览选项
     if (record.name.endsWith(".zip")) {
       items.splice(5, 0, {
+        key: "browse-zip",
+        label: "浏览压缩包",
+        icon: <FileZipOutlined />,
+        onClick: () => {
+          setZipBrowserPath(record.path);
+          setZipBrowserOpen(true);
+        },
+      }, {
         key: "extract",
         label: "解压缩",
         icon: <FileZipOutlined />,
@@ -626,6 +662,13 @@ export default function App() {
                 新建文件
               </Button>
             </Tooltip>
+            <Tooltip title="新建文件（模板）">
+              <Button
+                size="small"
+                icon={<FileTextOutlined />}
+                onClick={() => setNewFileTemplateOpen(true)}
+              />
+            </Tooltip>
             <Tooltip title="新建文件夹">
               <Button
                 size="small"
@@ -683,6 +726,7 @@ export default function App() {
                 disabled={!selectedFile}
               />
             </Tooltip>
+            <FileTagsPanel filePath={selectedFile?.path || null} />
             <Tooltip title="双面板模式">
               <Button
                 size="small"
@@ -726,7 +770,7 @@ export default function App() {
               showHidden={showHidden}
               onRestore={(ws: Workspace) => {
                 navigateTo(ws.path);
-                setViewMode(ws.viewMode as "table" | "grid" | "list");
+                setViewMode(ws.viewMode as "table" | "grid" | "list" | "column");
                 setShowHidden(ws.showHidden);
               }}
             />
@@ -735,11 +779,12 @@ export default function App() {
             <Segmented
               size="small"
               value={viewMode}
-              onChange={(v) => setViewMode(v as "table" | "grid" | "list")}
+              onChange={(v) => setViewMode(v as "table" | "grid" | "list" | "column")}
               options={[
                 { value: "table", icon: <TableOutlined /> },
                 { value: "list", icon: <UnorderedListOutlined /> },
                 { value: "grid", icon: <AppstoreOutlined /> },
+                { value: "column", label: "分栏" },
               ]}
             />
           </div>
@@ -781,6 +826,17 @@ export default function App() {
                       />
                     </div>
                   </Dropdown>
+                ) : viewMode === "column" ? (
+                  <ColumnView
+                    currentPath={currentPath}
+                    onNavigate={(path) => navigateTo(path)}
+                    onFileSelect={(entry) => {
+                      setSelectedFile(entry);
+                      setSelectedRowKeys([entry.path]);
+                    }}
+                    selectedFile={selectedFile}
+                    showHidden={showHidden}
+                  />
                 ) : (
                   <Dropdown
                     trigger={["contextMenu"]}
@@ -912,6 +968,26 @@ export default function App() {
           onClose={() => setDirSyncOpen(false)}
           currentPath={currentPath}
         />
+
+        {/* ZIP 浏览器 */}
+        <ZipBrowser
+          open={zipBrowserOpen}
+          onClose={() => { setZipBrowserOpen(false); setZipBrowserPath(null); }}
+          zipPath={zipBrowserPath}
+          currentPath={currentPath}
+          onRefresh={() => loadDirectory(currentPath)}
+        />
+
+        {/* 新建文件模板 */}
+        <NewFileTemplate
+          open={newFileTemplateOpen}
+          onClose={() => setNewFileTemplateOpen(false)}
+          currentPath={currentPath}
+          onRefresh={() => loadDirectory(currentPath)}
+        />
+
+        {/* 传输队列 */}
+        <TransferQueue />
       </AppShell>
     </ThemeProvider>
   );

@@ -44,6 +44,7 @@ pub fn run() {
             commands::get_file_tags,
             commands::set_file_tags,
             commands::list_zip_contents,
+            commands::extract_zip_file,
             search::full_disk_search,
             search::search_file_content,
             ebook::parse_epub,
