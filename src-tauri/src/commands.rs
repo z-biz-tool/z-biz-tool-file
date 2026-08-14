@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as IoRead, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -6,6 +7,9 @@ use std::path::Path;
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use md5::Digest as Md5Digest;
+use sha1::Sha1;
+use sha2::Sha256;
 
 /// 文件条目
 #[derive(Debug, Serialize, Deserialize)]
@@ -743,4 +747,310 @@ pub fn get_directory_size(path: &str) -> Result<u64, String> {
     }
 
     Ok(total_size)
+}
+
+/// 计算文件哈希值（支持 MD5、SHA1、SHA256、CRC32）
+#[tauri::command]
+pub fn calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String> {
+    let file_path = Path::new(path);
+    if !file_path.exists() {
+        return Err(format!("文件不存在: {}", path));
+    }
+    if file_path.is_dir() {
+        return Err(format!("是目录，不是文件: {}", path));
+    }
+
+    let mut file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
+
+    match algorithm.to_lowercase().as_str() {
+        "md5" => {
+            let mut hasher = md5::Md5::new();
+            std::io::copy(&mut file, &mut hasher).map_err(|e| format!("读取文件失败: {}", e))?;
+            let result = hasher.finalize();
+            Ok(format!("{:x}", result))
+        }
+        "sha1" => {
+            let mut hasher = Sha1::new();
+            std::io::copy(&mut file, &mut hasher).map_err(|e| format!("读取文件失败: {}", e))?;
+            let result = hasher.finalize();
+            Ok(format!("{:x}", result))
+        }
+        "sha256" => {
+            let mut hasher = Sha256::new();
+            std::io::copy(&mut file, &mut hasher).map_err(|e| format!("读取文件失败: {}", e))?;
+            let result = hasher.finalize();
+            Ok(format!("{:x}", result))
+        }
+        "crc32" => {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf).map_err(|e| format!("读取文件失败: {}", e))?;
+            let crc = crc32(&buf);
+            Ok(format!("{:08x}", crc))
+        }
+        _ => Err(format!("不支持的哈希算法: {}，支持: md5, sha1, sha256, crc32", algorithm)),
+    }
+}
+
+/// 简单的 CRC32 实现
+fn crc32(data: &[u8]) -> u32 {
+    let mut table = [0u32; 256];
+    for i in 0..256 {
+        let mut crc = i as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc >>= 1;
+            }
+        }
+        table[i] = crc;
+    }
+    let mut crc = 0xFFFFFFFFu32;
+    for &byte in data {
+        let index = ((crc ^ byte as u32) & 0xFF) as usize;
+        crc = (crc >> 8) ^ table[index];
+    }
+    crc ^ 0xFFFFFFFF
+}
+
+/// 安全删除文件（覆写后删除）
+#[tauri::command]
+pub fn secure_delete_file(path: &str, passes: Option<u32>) -> Result<(), String> {
+    let file_path = Path::new(path);
+    if !file_path.exists() {
+        return Err(format!("文件不存在: {}", path));
+    }
+    if file_path.is_dir() {
+        return Err(format!("是目录，不是文件: {}", path));
+    }
+
+    let num_passes = passes.unwrap_or(3);
+    let file_size = fs::metadata(file_path).map_err(|e| format!("读取文件元数据失败: {}", e))?.len();
+
+    // 多次覆写随机数据
+    for _ in 0..num_passes {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .open(file_path)
+            .map_err(|e| format!("打开文件失败: {}", e))?;
+
+        let mut random_data = vec![0u8; file_size as usize];
+        getrandom::getrandom(&mut random_data)
+            .map_err(|e| format!("生成随机数据失败: {}", e))?;
+        file.write_all(&random_data)
+            .map_err(|e| format!("覆写文件失败: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("同步文件失败: {}", e))?;
+    }
+
+    // 删除文件
+    fs::remove_file(file_path).map_err(|e| format!("删除文件失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 重复文件组
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub hash: String,
+    pub size: u64,
+    pub paths: Vec<String>,
+}
+
+/// 查找重复文件
+#[tauri::command]
+pub fn find_duplicate_files(directory: &str) -> Result<Vec<DuplicateGroup>, String> {
+    let dir_path = Path::new(directory);
+    if !dir_path.exists() {
+        return Err(format!("目录不存在: {}", directory));
+    }
+    if !dir_path.is_dir() {
+        return Err(format!("不是目录: {}", directory));
+    }
+
+    // 第一步：按文件大小分组
+    let mut size_groups: HashMap<u64, Vec<String>> = HashMap::new();
+
+    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let path = entry.path().to_string_lossy().to_string();
+            size_groups.entry(size).or_default().push(path);
+        }
+    }
+
+    // 第二步：对大小相同的文件计算哈希，再按哈希分组
+    let mut hash_groups: HashMap<String, Vec<String>> = HashMap::new();
+    let mut hash_size_map: HashMap<String, u64> = HashMap::new();
+
+    for (_size, paths) in size_groups {
+        if paths.len() < 2 {
+            continue; // 只有一个文件，不可能重复
+        }
+
+        for path_str in paths {
+            let file_path = Path::new(&path_str);
+            let mut file = match fs::File::open(file_path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            let mut hasher = md5::Md5::new();
+            if std::io::copy(&mut file, &mut hasher).is_err() {
+                continue;
+            }
+            let hash = format!("{:x}", hasher.finalize());
+            let size = fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
+
+            hash_size_map.insert(hash.clone(), size);
+            hash_groups.entry(hash).or_default().push(path_str);
+        }
+    }
+
+    // 第三步：返回有多个路径的组
+    let mut result: Vec<DuplicateGroup> = Vec::new();
+    for (hash, paths) in hash_groups {
+        if paths.len() >= 2 {
+            result.push(DuplicateGroup {
+                size: *hash_size_map.get(&hash).unwrap_or(&0),
+                hash,
+                paths,
+            });
+        }
+    }
+
+    // 按大小降序排序
+    result.sort_by(|a, b| b.size.cmp(&a.size));
+
+    Ok(result)
+}
+
+/// 设置文件权限（Unix）
+#[tauri::command]
+pub fn set_file_permissions(path: &str, mode: u32) -> Result<(), String> {
+    let file_path = Path::new(path);
+    if !file_path.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+
+    let permissions = fs::Permissions::from_mode(mode);
+    fs::set_permissions(file_path, permissions)
+        .map_err(|e| format!("设置权限失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 命令执行结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+}
+
+/// 执行 shell 命令
+#[tauri::command]
+pub fn execute_command(command: &str, working_dir: &str) -> Result<CommandResult, String> {
+    use std::process::Command;
+
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(working_dir)
+        .output()
+        .map_err(|e| format!("执行命令失败: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    Ok(CommandResult {
+        stdout,
+        stderr,
+        success: output.status.success(),
+    })
+}
+
+/// 目录比较差异结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DirectoryDiff {
+    pub only_in_left: Vec<String>,
+    pub only_in_right: Vec<String>,
+    pub modified: Vec<String>,
+}
+
+/// 比较两个目录
+#[tauri::command]
+pub fn compare_directories(left_dir: &str, right_dir: &str) -> Result<DirectoryDiff, String> {
+    let left_path = Path::new(left_dir);
+    let right_path = Path::new(right_dir);
+
+    if !left_path.exists() || !left_path.is_dir() {
+        return Err(format!("左目录不存在或不是目录: {}", left_dir));
+    }
+    if !right_path.exists() || !right_path.is_dir() {
+        return Err(format!("右目录不存在或不是目录: {}", right_dir));
+    }
+
+    // 收集两个目录中的文件（相对路径 -> 修改时间）
+    let mut left_files: HashMap<String, u64> = HashMap::new();
+    let mut right_files: HashMap<String, u64> = HashMap::new();
+
+    for entry in WalkDir::new(left_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Ok(relative) = entry.path().strip_prefix(left_path) {
+                let rel_str = relative.to_string_lossy().to_string();
+                let modified = entry.metadata().ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                left_files.insert(rel_str, modified);
+            }
+        }
+    }
+
+    for entry in WalkDir::new(right_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Ok(relative) = entry.path().strip_prefix(right_path) {
+                let rel_str = relative.to_string_lossy().to_string();
+                let modified = entry.metadata().ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                right_files.insert(rel_str, modified);
+            }
+        }
+    }
+
+    let mut only_in_left: Vec<String> = Vec::new();
+    let mut only_in_right: Vec<String> = Vec::new();
+    let mut modified: Vec<String> = Vec::new();
+
+    // 在左侧但不在右侧的文件
+    for (rel_path, left_mod) in &left_files {
+        match right_files.get(rel_path) {
+            None => only_in_left.push(rel_path.clone()),
+            Some(right_mod) if left_mod != right_mod => modified.push(rel_path.clone()),
+            _ => {}
+        }
+    }
+
+    // 在右侧但不在左侧的文件
+    for rel_path in right_files.keys() {
+        if !left_files.contains_key(rel_path) {
+            only_in_right.push(rel_path.clone());
+        }
+    }
+
+    // 排序
+    only_in_left.sort();
+    only_in_right.sort();
+    modified.sort();
+
+    Ok(DirectoryDiff {
+        only_in_left,
+        only_in_right,
+        modified,
+    })
 }

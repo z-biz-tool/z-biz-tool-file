@@ -30,6 +30,10 @@ import {
   FormOutlined,
   ColumnHeightOutlined,
   RadarChartOutlined,
+  CodeOutlined,
+  CopyFilled,
+  SwapOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -44,6 +48,13 @@ import BatchRename from "./components/BatchRename";
 import FileProperties from "./components/FileProperties";
 import GridView from "./components/GridView";
 import DualPanelView from "./components/DualPanelView";
+import BuiltInTerminal from "./components/BuiltInTerminal";
+import DropStack from "./components/DropStack";
+import DuplicateFinder from "./components/DuplicateFinder";
+import HashCalculator from "./components/HashCalculator";
+import DirectorySync from "./components/DirectorySync";
+import WorkspaceManager, { type Workspace } from "./components/WorkspaceManager";
+import GitStatus from "./components/GitStatus";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell } from "./_shared";
 
@@ -67,6 +78,10 @@ export default function App() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [dualPanelOpen, setDualPanelOpen] = useState(false);
   const [autoWatch, setAutoWatch] = useState(true);
+  const [terminalVisible, setTerminalVisible] = useState(false);
+  const [duplicateFinderOpen, setDuplicateFinderOpen] = useState(false);
+  const [hashCalcOpen, setHashCalcOpen] = useState(false);
+  const [dirSyncOpen, setDirSyncOpen] = useState(false);
   const { token } = theme.useToken();
 
   const {
@@ -414,6 +429,15 @@ export default function App() {
       },
       { type: "divider" },
       {
+        key: "hash",
+        label: "计算哈希",
+        icon: <SafetyCertificateOutlined />,
+        onClick: () => {
+          setSelectedFile(record);
+          setHashCalcOpen(true);
+        },
+      },
+      {
         key: "properties",
         label: "属性",
         icon: <InfoCircleOutlined />,
@@ -492,7 +516,7 @@ export default function App() {
     },
   ];
 
-  // 侧栏：搜索栏 + 收藏夹 + 文件树
+  // 侧栏：搜索栏 + 收藏夹 + 暂存栈 + 文件树
   const sidebar = (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ flexShrink: 0 }}>
@@ -500,6 +524,9 @@ export default function App() {
       </div>
       <div style={{ flexShrink: 0, maxHeight: 180, overflow: "auto" }}>
         <Bookmarks onNavigate={(path) => navigateTo(path)} />
+      </div>
+      <div style={{ flexShrink: 0, maxHeight: 200, overflow: "auto" }}>
+        <DropStack currentPath={currentPath} onRefresh={() => loadDirectory(currentPath)} />
       </div>
       <div style={{ flex: 1, overflow: "auto" }}>
         <FileTree rootPath={rootPath} />
@@ -671,6 +698,39 @@ export default function App() {
                 type={autoWatch ? "primary" : "text"}
               />
             </Tooltip>
+            <Tooltip title="内置终端">
+              <Button
+                size="small"
+                icon={<CodeOutlined />}
+                onClick={() => setTerminalVisible(!terminalVisible)}
+                type={terminalVisible ? "primary" : "text"}
+              />
+            </Tooltip>
+            <Tooltip title="重复文件查找">
+              <Button
+                size="small"
+                icon={<CopyFilled />}
+                onClick={() => setDuplicateFinderOpen(true)}
+              />
+            </Tooltip>
+            <Tooltip title="目录同步">
+              <Button
+                size="small"
+                icon={<SwapOutlined />}
+                onClick={() => setDirSyncOpen(true)}
+              />
+            </Tooltip>
+            <WorkspaceManager
+              currentPath={currentPath}
+              viewMode={viewMode}
+              showHidden={showHidden}
+              onRestore={(ws: Workspace) => {
+                navigateTo(ws.path);
+                setViewMode(ws.viewMode as "table" | "grid" | "list");
+                setShowHidden(ws.showHidden);
+              }}
+            />
+            <GitStatus currentPath={currentPath} />
             <div style={{ flex: 1 }} />
             <Segmented
               size="small"
@@ -760,6 +820,14 @@ export default function App() {
               <PreviewPane />
             </div>
           </div>
+
+          {/* 内置终端 */}
+          <BuiltInTerminal
+            currentPath={currentPath}
+            onPathChange={(path) => navigateTo(path)}
+            visible={terminalVisible}
+            onClose={() => setTerminalVisible(false)}
+          />
         </div>
 
         {/* 重命名弹窗 */}
@@ -822,6 +890,28 @@ export default function App() {
             }}
           />
         )}
+
+        {/* 重复文件查找 */}
+        <DuplicateFinder
+          open={duplicateFinderOpen}
+          onClose={() => setDuplicateFinderOpen(false)}
+          currentPath={currentPath}
+          onRefresh={() => loadDirectory(currentPath)}
+        />
+
+        {/* 哈希计算 */}
+        <HashCalculator
+          open={hashCalcOpen}
+          onClose={() => setHashCalcOpen(false)}
+          filePath={selectedFile?.path || null}
+        />
+
+        {/* 目录同步 */}
+        <DirectorySync
+          open={dirSyncOpen}
+          onClose={() => setDirSyncOpen(false)}
+          currentPath={currentPath}
+        />
       </AppShell>
     </ThemeProvider>
   );
