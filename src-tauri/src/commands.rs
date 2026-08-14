@@ -1054,3 +1054,165 @@ pub fn compare_directories(left_dir: &str, right_dir: &str) -> Result<DirectoryD
         modified,
     })
 }
+
+/// macOS Quick Look 预览
+#[tauri::command]
+pub fn quick_look_preview(path: &str) -> Result<(), String> {
+    std::process::Command::new("qlmanage")
+        .args(["-p", path])
+        .spawn()
+        .map_err(|e| format!("Quick Look 打开失败: {}", e))?;
+    Ok(())
+}
+
+/// macOS Finder 标签
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileTags {
+    pub color_tags: Vec<String>,  // "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"
+    pub custom_tags: Vec<String>, // User-defined tag names
+}
+
+/// 获取 macOS Finder 标签
+#[tauri::command]
+pub fn get_file_tags(path: &str) -> Result<FileTags, String> {
+    // Read the com.apple.FinderInfo extended attribute for color tags
+    // Use mdls to get kMDItemUserTags
+    let output = std::process::Command::new("mdls")
+        .args(["-name", "kMDItemUserTags", "-raw", path])
+        .output()
+        .map_err(|e| format!("获取标签失败: {}", e))?;
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let mut color_tags = Vec::new();
+    let mut custom_tags = Vec::new();
+
+    if raw != "(null)" && !raw.is_empty() {
+        // Parse the output: tags are separated by commas, color tags end with \n<number>
+        // Format: "Tag1\n5,Tag2\n1" or just "Tag1,Tag2"
+        for tag in raw.split(',') {
+            let tag = tag.trim();
+            if tag.is_empty() { continue; }
+            // Check if it has a color index (format: "TagName\n<color_index>")
+            if let Some(pos) = tag.rfind('\n') {
+                let name = tag[..pos].trim();
+                let color_str = &tag[pos+1..];
+                if let Ok(color_idx) = color_str.parse::<u8>() {
+                    // Map color index to name
+                    let color_name = match color_idx {
+                        0 => "Gray",
+                        1 => "Green",
+                        2 => "Purple",
+                        3 => "Blue",
+                        4 => "Yellow",
+                        5 => "Red",
+                        6 => "Orange",
+                        _ => "Gray",
+                    };
+                    color_tags.push(color_name.to_string());
+                    if !name.is_empty() {
+                        custom_tags.push(name.to_string());
+                    }
+                } else {
+                    custom_tags.push(tag.to_string());
+                }
+            } else {
+                // Check if it's a known color name
+                let known_colors = ["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"];
+                if known_colors.contains(&tag) {
+                    color_tags.push(tag.to_string());
+                } else {
+                    custom_tags.push(tag.to_string());
+                }
+            }
+        }
+    }
+
+    Ok(FileTags { color_tags, custom_tags })
+}
+
+/// 设置 macOS Finder 标签
+#[tauri::command]
+pub fn set_file_tags(path: &str, color_tags: Vec<String>, custom_tags: Vec<String>) -> Result<(), String> {
+    // Combine all tags
+    let mut all_tags: Vec<String> = color_tags.iter().map(|t| {
+        let color_idx = match t.as_str() {
+            "Gray" => 0,
+            "Green" => 1,
+            "Purple" => 2,
+            "Blue" => 3,
+            "Yellow" => 4,
+            "Red" => 5,
+            "Orange" => 6,
+            _ => 0,
+        };
+        format!("{}\n{}", t, color_idx)
+    }).collect();
+    all_tags.extend(custom_tags);
+
+    if all_tags.is_empty() {
+        // Remove all tags
+        let _ = std::process::Command::new("xattr")
+            .args(["-d", "com.apple.metadata:_kMDItemUserTags", path])
+            .output();
+        return Ok(());
+    }
+
+    // Write tags using plist format via python3 (most reliable on macOS)
+    let tags_plist: Vec<String> = all_tags;
+    let tags_json = serde_json::to_string(&tags_plist)
+        .map_err(|e| format!("序列化标签失败: {}", e))?;
+
+    // Use python3 to create a binary plist and set it via xattr
+    let script = format!(
+        r#"
+import plistlib, subprocess, sys
+tags = {}
+pl = plistlib.dumps(tags, fmt=plistlib.FMT_BINARY)
+subprocess.run(['xattr', '-wx', 'com.apple.metadata:_kMDItemUserTags', pl.hex(), sys.argv[1]], check=True)
+"#,
+        tags_json
+    );
+
+    std::process::Command::new("python3")
+        .args(["-c", &script, path])
+        .output()
+        .map_err(|e| format!("设置标签失败: {}", e))?;
+
+    Ok(())
+}
+
+/// ZIP 条目信息
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ZipEntry {
+    pub name: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub modified: f64,
+}
+
+/// 列出 ZIP 文件内容
+#[tauri::command]
+pub fn list_zip_contents(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开ZIP失败: {}", e))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取ZIP失败: {}", e))?;
+
+    let mut entries = Vec::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| format!("读取条目失败: {}", e))?;
+        entries.push(ZipEntry {
+            name: entry.name().to_string(),
+            size: entry.size(),
+            is_dir: entry.is_dir(),
+            modified: entry.last_modified()
+                .map(|t| {
+                    let dt = chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32).unwrap_or_default(),
+                        chrono::NaiveTime::from_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32).unwrap_or_default(),
+                    );
+                    dt.and_utc().timestamp() as f64
+                })
+                .unwrap_or(0.0),
+        });
+    }
+    Ok(entries)
+}
