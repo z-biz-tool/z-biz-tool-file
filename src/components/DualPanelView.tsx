@@ -11,6 +11,7 @@ import {
   EyeOutlined,
   ColumnHeightOutlined,
   CloseOutlined,
+  SwapOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
@@ -30,8 +31,33 @@ const Panel: React.FC<{
   onFileOpen: (path: string, isDir: boolean) => void;
   showHidden: boolean;
   onToggleHidden: () => void;
-}> = ({ panelId, state, setState, onFileOpen, showHidden, onToggleHidden }) => {
+  syncNavigate?: (path: string) => void;
+}> = ({ panelId, state, setState, onFileOpen, showHidden, onToggleHidden, syncNavigate }) => {
   const { token } = theme.useToken();
+
+  // 同步浏览：左面板导航时，右面板跟随
+  const syncLeftToRight = useCallback((path: string) => {
+    if (!syncBrowsing) return;
+    setRightPanel((prev) => ({
+      ...prev,
+      currentPath: path,
+      history: [...prev.history, path],
+      historyIndex: prev.history.length,
+      selectedFile: null,
+    }));
+  }, [syncBrowsing]);
+
+  // 同步浏览：右面板导航时，左面板跟随
+  const syncRightToLeft = useCallback((path: string) => {
+    if (!syncBrowsing) return;
+    setLeftPanel((prev) => ({
+      ...prev,
+      currentPath: path,
+      history: [...prev.history, path],
+      historyIndex: prev.history.length,
+      selectedFile: null,
+    }));
+  }, [syncBrowsing]);
 
   const loadDirectory = useCallback(
     (path: string) => {
@@ -76,6 +102,8 @@ const Panel: React.FC<{
       });
     }
     loadDirectory(path);
+    // 同步浏览：通知另一个面板跟随导航
+    syncNavigate?.(path);
   };
 
   const goBack = () => {
@@ -305,6 +333,7 @@ interface DualPanelViewProps {
 
 export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProps) {
   const [showHidden, setShowHidden] = useState(false);
+  const [syncBrowsing, setSyncBrowsing] = useState(false);
   const [leftPanel, setLeftPanel] = useState<PanelState>({
     currentPath: "/Users/zifang",
     history: ["/Users/zifang"],
@@ -350,6 +379,16 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
         <span style={{ color: token.colorTextSecondary, fontSize: 12, marginLeft: 8 }}>
           双击文件夹进入 · 单击文件可触发右侧
         </span>
+        <Tooltip title={syncBrowsing ? "同步浏览已开启，点此关闭" : "开启同步浏览（两侧面板联动导航）"}>
+          <Button
+            size="small"
+            icon={<SwapOutlined />}
+            onClick={() => setSyncBrowsing(!syncBrowsing)}
+            type={syncBrowsing ? "primary" : "text"}
+          >
+            {syncBrowsing ? "同步" : "同步"}
+          </Button>
+        </Tooltip>
         <div style={{ flex: 1 }} />
         <Button
           size="small"
@@ -368,6 +407,7 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
             onFileOpen={onOpenFile}
             showHidden={showHidden}
             onToggleHidden={() => setShowHidden(!showHidden)}
+            syncNavigate={syncLeftToRight}
           />
         </div>
         <div style={{ flex: 1 }}>
