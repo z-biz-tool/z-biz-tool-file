@@ -35,30 +35,6 @@ const Panel: React.FC<{
 }> = ({ panelId, state, setState, onFileOpen, showHidden, onToggleHidden, syncNavigate }) => {
   const { token } = theme.useToken();
 
-  // 同步浏览：左面板导航时，右面板跟随
-  const syncLeftToRight = useCallback((path: string) => {
-    if (!syncBrowsing) return;
-    setRightPanel((prev) => ({
-      ...prev,
-      currentPath: path,
-      history: [...prev.history, path],
-      historyIndex: prev.history.length,
-      selectedFile: null,
-    }));
-  }, [syncBrowsing]);
-
-  // 同步浏览：右面板导航时，左面板跟随
-  const syncRightToLeft = useCallback((path: string) => {
-    if (!syncBrowsing) return;
-    setLeftPanel((prev) => ({
-      ...prev,
-      currentPath: path,
-      history: [...prev.history, path],
-      historyIndex: prev.history.length,
-      selectedFile: null,
-    }));
-  }, [syncBrowsing]);
-
   const loadDirectory = useCallback(
     (path: string) => {
       const cmd = showHidden ? "list_directory_with_hidden" : "list_directory";
@@ -407,7 +383,7 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
             onFileOpen={onOpenFile}
             showHidden={showHidden}
             onToggleHidden={() => setShowHidden(!showHidden)}
-            syncNavigate={syncLeftToRight}
+            syncNavigate={undefined}
           />
         </div>
         <div style={{ flex: 1 }}>
