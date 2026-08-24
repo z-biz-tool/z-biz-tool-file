@@ -60,6 +60,9 @@ interface FileStore {
   bookmarks: BookmarkItem[];
   // 文件列表显示模式
   viewMode: "table" | "grid" | "list" | "column";
+  // 多标签页
+  tabs: Array<{ id: string; path: string }>;
+  activeTabId: string | null;
   // 设置当前路径
   setCurrentPath: (path: string) => void;
   // 设置文件列表
@@ -88,9 +91,14 @@ interface FileStore {
   removeBookmark: (path: string) => void;
   // 设置文件列表显示模式
   setViewMode: (mode: "table" | "grid" | "list" | "column") => void;
+  // 多标签操作
+  openTab: (path: string) => string; // 返回 tab id
+  closeTab: (id: string) => void;
+  switchTab: (id: string) => void;
+  updateActiveTabPath: (path: string) => void;
 }
 
-export const useFileStore = create<FileStore>((set) => ({
+export const useFileStore = create<FileStore>((set, get) => ({
   currentPath: "",
   fileList: [],
   selectedFile: null,
@@ -103,6 +111,8 @@ export const useFileStore = create<FileStore>((set) => ({
   clipboard: [],
   bookmarks: JSON.parse(localStorage.getItem("z-tool-bookmarks") || "[]") as BookmarkItem[],
   viewMode: "table" as const,
+  tabs: [] as Array<{ id: string; path: string }>,
+  activeTabId: null,
 
   setCurrentPath: (path) => set({ currentPath: path }),
   setFileList: (list) => set({ fileList: list }),
@@ -131,6 +141,66 @@ export const useFileStore = create<FileStore>((set) => ({
       return { bookmarks };
     }),
   setViewMode: (mode) => set({ viewMode: mode }),
+  openTab: (path) => {
+    // 已有同路径 tab 就激活它
+    const existing = get().tabs.find((t) => t.path === path);
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return existing.id;
+    }
+    const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    set((s) => ({
+      tabs: [...s.tabs, { id, path }],
+      activeTabId: id,
+    }));
+    return id;
+  },
+  closeTab: (id) => {
+    set((s) => {
+      const idx = s.tabs.findIndex((t) => t.id === id);
+      if (idx < 0) return s;
+      const newTabs = s.tabs.filter((t) => t.id !== id);
+      let newActive = s.activeTabId;
+      if (s.activeTabId === id) {
+        // 切到邻居
+        if (newTabs.length === 0) {
+          newActive = null;
+        } else if (idx < newTabs.length) {
+          newActive = newTabs[idx].id;
+        } else {
+          newActive = newTabs[newTabs.length - 1].id;
+        }
+      }
+      // 防止 tabs 数组变空（至少保留一个"主"tab）
+      if (newTabs.length === 0) {
+        const home = s.currentPath || "/";
+        const homeId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        return {
+          tabs: [{ id: homeId, path: home }],
+          activeTabId: homeId,
+        };
+      }
+      return { tabs: newTabs, activeTabId: newActive };
+    });
+  },
+  switchTab: (id) => {
+    set((s) => {
+      if (!s.tabs.find((t) => t.id === id)) return s;
+      const tab = s.tabs.find((t) => t.id === id);
+      return {
+        activeTabId: id,
+        currentPath: tab?.path ?? s.currentPath,
+      };
+    });
+  },
+  updateActiveTabPath: (path) => {
+    set((s) => {
+      if (!s.activeTabId) return s;
+      return {
+        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, path } : t)),
+      };
+    });
+  },
 }));
 
 /// 根据文件扩展名判断文件类型

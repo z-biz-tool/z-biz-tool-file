@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
-import { Empty, Tooltip, Button } from "antd";
+import { Empty, Tooltip, Button, Modal, Spin, App as AntdApp } from "antd";
 import {
   CopyOutlined,
   SwapOutlined,
   EyeOutlined,
   CodeOutlined,
   CloseOutlined,
+  RobotOutlined,
 } from "@ant-design/icons";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getFileType, formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
@@ -56,6 +57,7 @@ export default function FileContentPreview({
   enableMdToggle = false,
   onCollapse,
 }: FileContentPreviewProps) {
+  const { message: antdMessage } = AntdApp.useApp();
   const fileType = getFileType(file.name);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -65,6 +67,11 @@ export default function FileContentPreview({
   const [showConverter, setShowConverter] = useState(false);
   const [mdPreviewMode, setMdPreviewMode] = useState(true);
   const [mdCopied, setMdCopied] = useState(false);
+  // AI 摘要
+  const [aiSummaryOpen, setAiSummaryOpen] = useState(false);
+  const [aiSummary, setAiSummary] = useState("");
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryElapsed, setAiSummaryElapsed] = useState(0);
 
   // 加载文本内容 + 文件信息
   useEffect(() => {
@@ -105,6 +112,29 @@ export default function FileContentPreview({
       /* clipboard 偶发被拒；可从源码模式手动复制 */
     }
   }, [textContent]);
+
+  const handleAiSummary = useCallback(async () => {
+    if (file.is_dir) {
+      antdMessage.warning("目录不支持 AI 摘要");
+      return;
+    }
+    setAiSummaryOpen(true);
+    setAiSummary("");
+    setAiSummaryLoading(true);
+    setAiSummaryElapsed(0);
+    try {
+      const result = await invoke<{ summary: string; elapsed_ms: number }>(
+        "ai_summarize_file",
+        { path: file.path, customPrompt: null },
+      );
+      setAiSummary(result.summary);
+      setAiSummaryElapsed(result.elapsed_ms);
+    } catch (err) {
+      setAiSummary(`❌ 摘要失败：${err}\n\n提示：到 设置 → AI/LLM 配置 填入 API Key。`);
+    } finally {
+      setAiSummaryLoading(false);
+    }
+  }, [file.path, file.is_dir, antdMessage]);
 
   // ——— 渲染分支 ———
   let body: React.ReactNode;
@@ -296,6 +326,18 @@ export default function FileContentPreview({
           />
         </Tooltip>
       )}
+      {/* AI 摘要（仅非目录文件） */}
+      {!file.is_dir && (
+        <Tooltip title="AI 摘要（用 LLM 设置里的模型）">
+          <Button
+            size="small"
+            type="text"
+            icon={<RobotOutlined />}
+            onClick={handleAiSummary}
+            aria-label="AI 摘要"
+          />
+        </Tooltip>
+      )}
     </div>
   );
 
@@ -312,6 +354,49 @@ export default function FileContentPreview({
         content={textContent}
         onClose={() => setShowConverter(false)}
       />
+      <Modal
+        open={aiSummaryOpen}
+        onCancel={() => setAiSummaryOpen(false)}
+        footer={null}
+        width={600}
+        title={
+          <span>
+            <RobotOutlined style={{ marginRight: 8 }} />
+            AI 摘要 — {file.name}
+          </span>
+        }
+      >
+        {aiSummaryLoading ? (
+          <div style={{ padding: "40px 0", textAlign: "center" }}>
+            <Spin tip="正在调用 LLM..." />
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.8,
+                fontSize: 14,
+                padding: "8px 0",
+              }}
+            >
+              {aiSummary}
+            </div>
+            {aiSummaryElapsed > 0 && (
+              <div
+                style={{
+                  marginTop: 12,
+                  fontSize: 11,
+                  color: "#888",
+                  textAlign: "right",
+                }}
+              >
+                耗时 {(aiSummaryElapsed / 1000).toFixed(1)}s
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

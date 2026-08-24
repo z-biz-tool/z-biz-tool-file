@@ -7,6 +7,7 @@ mod convert;
 mod watcher;
 mod llm_config;
 mod trash;
+mod ai;
 
 use watcher::WatcherState;
 
@@ -68,6 +69,8 @@ pub fn run() {
             trash::get_trash_size,
             trash::get_trash_path,
             commands::delete_to_trash,
+            ai::ai_summarize_file,
+            ai::ai_chat,
             image_utils::export_image,
             image_utils::resize_image,
             image_utils::rotate_image,

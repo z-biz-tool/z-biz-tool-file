@@ -5,6 +5,7 @@ import {
 import type { MenuProps, BreadcrumbProps } from "antd";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
+  SearchOutlined,
   HomeOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
@@ -39,6 +40,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
+import { fuzzyFilter } from "./utils/fuzzyMatch";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
 } from "./stores/fileStore";
@@ -57,6 +59,7 @@ import DirectorySync from "./components/DirectorySync";
 import WorkspaceManager, { type Workspace } from "./components/WorkspaceManager";
 import SettingsModal from "./components/SettingsModal";
 import TrashModal from "./components/TrashModal";
+import TabsBar from "./components/TabsBar";
 import GitStatus from "./components/GitStatus";
 import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
@@ -173,6 +176,8 @@ function AppShellInner() {
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  // 当前目录的快速过滤（subsequence 模糊匹配）
+  const [quickFilter, setQuickFilter] = useState("");
   const [siderCollapsed, setSiderCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("z-tool-sider-collapsed") === "1";
@@ -229,12 +234,55 @@ function AppShellInner() {
   // 预览分隔条拖拽
   const previewDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
+  // 持 currentPath / loadDirectory 的 ref，避免 useEffect 闭包陈旧
+  const currentPathRef = useRef<string>("");
+  const loadDirectoryRef = useRef<((path: string) => void) | null>(null);
+
+  // ——— 实时文件监听 ———
+  // 切换目录时自动启动监听；监听期间文件改动 → 防抖 300ms 后刷新列表
+  const fileChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unlistenFileChangeRef = useRef<(() => void) | null>(null);
+
+  // 订阅后端 file-change 事件（仅订阅一次，组件 mount 时）
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+    listen<{ path: string; kind: string }>("file-change", (evt) => {
+      const { path } = evt.payload;
+      // 只刷新当前目录（或当前目录的子项）
+      const dir = currentPathRef.current;
+      if (!dir) return;
+      if (path === dir || path.startsWith(dir + "/")) {
+        // 防抖：300ms 内多次事件合并
+        if (fileChangeTimerRef.current) clearTimeout(fileChangeTimerRef.current);
+        fileChangeTimerRef.current = setTimeout(() => {
+          loadDirectoryRef.current?.(dir);
+        }, 300);
+      }
+    })
+      .then((u) => {
+        unlistenFn = u;
+        unlistenFileChangeRef.current = u;
+      })
+      .catch((err) => console.error("订阅 file-change 失败:", err));
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  // 组件 unmount 时停止监听
+  useEffect(() => {
+    return () => {
+      invoke("stop_watching").catch(() => {});
+    };
+  }, []);
   const {
     currentPath, fileList, selectedFile, showHidden, viewMode,
     clipboard,
     setSelectedFile, setCurrentPath, setFileList,
     setShowHidden, setViewMode,
     setClipboard, clearClipboard,
+    tabs, activeTabId,
+    openTab, closeTab, updateActiveTabPath,
   } = useFileStore();
 
   // 记忆侧栏折叠状态
@@ -288,10 +336,30 @@ function AppShellInner() {
       });
   }, [showHidden, setFileList, message]);
 
+  // 同步 ref 让 file-change 监听能用最新值
+  useEffect(() => {
+    currentPathRef.current = currentPath;
+  }, [currentPath]);
+  useEffect(() => {
+    loadDirectoryRef.current = loadDirectory;
+  }, [loadDirectory]);
+
+  // 切换目录时重新启动监听
+  useEffect(() => {
+    if (!currentPath) return;
+    invoke("start_watching", { path: currentPath })
+      .catch((err) => console.error("启动监听失败:", err));
+    return () => {
+      // 卸载监听由下次 start_watching 自动覆盖；显式 stop 留给组件 unmount
+    };
+  }, [currentPath]);
+
   // 导航到路径
   const navigateTo = useCallback((path: string, isRoot: boolean = false) => {
     setCurrentPath(path);
     loadDirectory(path);
+    // 同步更新 active tab 的 path
+    if (activeTabId) updateActiveTabPath(path);
 
     setHistory((prev) => {
       if (isRoot) return [path];
@@ -300,13 +368,15 @@ function AppShellInner() {
       setHistoryIndex(newHistory.length - 1);
       return newHistory;
     });
-  }, [historyIndex, setCurrentPath, loadDirectory]);
+  }, [historyIndex, setCurrentPath, loadDirectory, activeTabId, updateActiveTabPath]);
 
   // 初始化：macOS默认用户目录
   useEffect(() => {
     const defaultPath = "/Users/zifang";
     setRootPath(defaultPath);
     navigateTo(defaultPath, true);
+    // 初始化第一个 tab
+    if (tabs.length === 0) openTab(defaultPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -780,6 +850,12 @@ function AppShellInner() {
     },
   ], [selectedFile, handleRowDragStart, handleRowDragEnd, handleFileClick, navigateTo, columnWidths]);
 
+  // 快速过滤后的 fileList（用于表格）
+  const filteredFileList = useMemo(
+    () => (quickFilter ? fuzzyFilter(quickFilter, fileList) : fileList),
+    [quickFilter, fileList],
+  );
+
   // 批量操作选中的文件
   const selectedFiles = selectedRowKeys.length > 0
     ? fileList.filter((f) => selectedRowKeys.includes(f.path))
@@ -795,6 +871,8 @@ function AppShellInner() {
     { key: "ArrowRight", alt: true, handler: goForward, description: "前进" },
     { key: "ArrowUp", alt: true, handler: goUp, description: "返回上级" },
     { key: "r", meta: true, handler: () => currentPath && loadDirectory(currentPath), description: "刷新当前目录" },
+    { key: "t", meta: true, handler: () => { openTab(currentPath || "/Users/zifang"); }, description: "新建标签页" },
+    { key: "w", meta: true, handler: () => { activeTabId && closeTab(activeTabId); }, description: "关闭当前标签页" },
     { key: "h", meta: true, shift: true, handler: () => setShowHidden(!showHidden), description: "显示/隐藏隐藏文件" },
     { key: "1", meta: true, handler: () => setViewMode("table"), description: "表格视图" },
     { key: "2", meta: true, handler: () => setViewMode("list"), description: "列表视图" },
@@ -913,6 +991,18 @@ function AppShellInner() {
       onToggleSider={() => setSiderCollapsed((v) => !v)}
     >
       <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        {/* 多标签页 */}
+        <TabsBar
+          onOpenNewTab={() => {
+            const id = openTab(currentPath || "/Users/zifang");
+            // 新 tab 默认显示当前路径
+            setTimeout(() => {
+              const tab = useFileStore.getState().tabs.find((t) => t.id === id);
+              if (tab) navigateTo(tab.path);
+            }, 0);
+          }}
+          onSwitchTo={(path) => navigateTo(path)}
+        />
         {/* 面包屑 + 路径输入 + 操作按钮 */}
         <div
           style={{
@@ -953,6 +1043,17 @@ function AppShellInner() {
             flexWrap: "wrap",
           }}
         >
+          {/* 快速过滤（当前目录的模糊搜索） */}
+          <Input
+            size="small"
+            allowClear
+            prefix={<SearchOutlined style={{ color: "#999" }} />}
+            placeholder="过滤…"
+            value={quickFilter}
+            onChange={(e) => setQuickFilter(e.target.value)}
+            style={{ width: 180 }}
+            aria-label="快速过滤当前目录"
+          />
           <Tooltip title="新建文件 (⌘+Shift+N)">
             <Button
               size="small"
@@ -1159,7 +1260,7 @@ function AppShellInner() {
                   <div style={{ height: "100%" }}>
                     <Table
                       columns={columns}
-                      dataSource={fileList}
+                      dataSource={filteredFileList}
                       rowKey="path"
                       size="small"
                       pagination={false}
