@@ -1,12 +1,16 @@
-import { useState, useEffect, useRef } from "react";
-import { theme } from "antd";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Tabs, theme } from "antd";
 import {
   FolderOutlined,
   FileOutlined,
   FileImageOutlined,
+  InfoCircleOutlined,
+  EyeOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
+import { getFileTypeVisual } from "../utils/fileTypeIcon";
+import FileContentPreview from "./FileContentPreview";
 
 interface ColumnViewProps {
   currentPath: string;
@@ -56,6 +60,87 @@ export default function ColumnView({
   const { token } = theme.useToken();
   const containerRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState<ColumnData[]>([]);
+
+  // ——— 列宽：每列独立可调，默认 200，记忆到 localStorage ———
+  const [colWidths, setColWidths] = useState<number[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem("z-tool-colview-col-widths");
+      return raw ? (JSON.parse(raw) as number[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [previewWidth, setPreviewWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return 320;
+    const v = Number(localStorage.getItem("z-tool-colview-preview-width"));
+    return Number.isFinite(v) && v >= 240 && v <= 800 ? v : 320;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("z-tool-colview-col-widths", JSON.stringify(colWidths));
+    } catch { /* ignore */ }
+  }, [colWidths]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("z-tool-colview-preview-width", String(previewWidth));
+    } catch { /* ignore */ }
+  }, [previewWidth]);
+
+  // ——— 列宽拖动：拖动条拖到左侧列上，调该列宽 ———
+  // 用 ref 记录 baseline 防止 React 重渲染中断拖拽
+  const widthBaselineRef = useRef<{ index: number; startWidth: number; startX: number; isPreview: boolean } | null>(null);
+  const setColWidth = useCallback((index: number, delta: number) => {
+    if (delta === 0) return;
+    setColWidths((prev) => {
+      const next = [...prev];
+      const baseline = widthBaselineRef.current?.startWidth ?? prev[index] ?? 200;
+      const newVal = Math.max(120, baseline + delta);
+      widthBaselineRef.current && (widthBaselineRef.current.startWidth = newVal);
+      next[index] = newVal;
+      return next;
+    });
+  }, []);
+
+  const onResizeStart = (
+    e: React.MouseEvent,
+    target: { index?: number; isPreview: boolean },
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startWidth = target.isPreview
+      ? previewWidth
+      : colWidths[target.index!] ?? 200;
+    widthBaselineRef.current = {
+      index: target.index ?? -1,
+      isPreview: target.isPreview,
+      startWidth,
+      startX: e.clientX,
+    };
+    const startX = e.clientX;
+    const onMove = (ev: MouseEvent) => {
+      if (!widthBaselineRef.current) return;
+      const delta = ev.clientX - startX;
+      if (target.isPreview) {
+        setPreviewWidth((prev) => {
+          const base = widthBaselineRef.current?.startWidth ?? prev;
+          const nv = Math.max(240, Math.min(800, base + delta));
+          if (widthBaselineRef.current) widthBaselineRef.current.startWidth = nv;
+          return nv;
+        });
+      } else {
+        setColWidth(target.index!, delta);
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      widthBaselineRef.current = null;
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
 
   const segments = splitPathToSegments(currentPath);
 
@@ -141,12 +226,15 @@ export default function ColumnView({
         background: token.colorBgLayout,
       }}
     >
-      {columns.map((col, colIndex) => (
+      {columns.map((col, colIndex) => {
+        const colWidth = colWidths[colIndex] ?? 200;
+        return (
         <div
           key={col.path + "-" + colIndex}
           style={{
-            width: 200,
-            minWidth: 200,
+            width: colWidth,
+            minWidth: 120,
+            position: "relative",
             borderRight: `1px solid ${token.colorBorderSecondary}`,
             display: "flex",
             flexDirection: "column",
@@ -242,109 +330,179 @@ export default function ColumnView({
               );
             })}
           </div>
+          {/* 列宽拖动条（右边缘） */}
+          <span
+            onMouseDown={(e) => onResizeStart(e, { index: colIndex, isPreview: false })}
+            style={{
+              position: "absolute",
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: 6,
+              cursor: "col-resize",
+              userSelect: "none",
+              touchAction: "none",
+              zIndex: 5,
+            }}
+            aria-label={`调整 ${col.name} 列宽度`}
+            title="拖动调整列宽"
+          />
         </div>
-      ))}
+        );
+      })}
 
-      {/* 预览列 */}
+      {/* 预览列：两个 tab — 基本信息 / 内容详情 */}
       <div
         style={{
-          width: 280,
-          minWidth: 280,
+          width: previewWidth,
+          minWidth: 240,
+          position: "relative",
           display: "flex",
           flexDirection: "column",
           background: token.colorBgContainer,
           borderLeft: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
+        {selectedFile ? (
+          <Tabs
+            defaultActiveKey="info"
+            size="small"
+            style={{ height: "100%", display: "flex", flexDirection: "column" }}
+            tabBarStyle={{ margin: 0, padding: "0 12px" }}
+            items={[
+              {
+                key: "info",
+                label: (
+                  <span>
+                    <InfoCircleOutlined /> 基本信息
+                  </span>
+                ),
+                children: <FileMetaInfo file={selectedFile} />,
+              },
+              {
+                key: "content",
+                label: (
+                  <span>
+                    <EyeOutlined /> 内容详情
+                  </span>
+                ),
+                children: (
+                  <div style={{ height: "100%" }}>
+                    <FileContentPreview file={selectedFile} showTopbar={false} />
+                  </div>
+                ),
+              },
+            ]}
+          />
+        ) : (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: token.colorTextSecondary,
+              fontSize: 13,
+            }}
+          >
+            选择文件以预览
+          </div>
+        )}
+        {/* 预览列宽拖动条（左边缘） */}
+        <span
+          onMouseDown={(e) => onResizeStart(e, { isPreview: true })}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 6,
+            cursor: "col-resize",
+            userSelect: "none",
+            touchAction: "none",
+            zIndex: 5,
+          }}
+          aria-label="调整预览列宽度"
+          title="拖动调整列宽"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "基本信息" tab 的内容：图标 + 文件名 + 大小/修改/类型/路径
+ */
+function FileMetaInfo({ file }: { file: FileEntry }) {
+  const { token } = theme.useToken();
+  const visual = getFileTypeVisual(file.name, file.is_dir);
+  return (
+    <div style={{ padding: 16, overflowY: "auto", height: "100%" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {/* 图标 */}
         <div
           style={{
-            padding: "6px 12px",
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            fontWeight: 600,
-            fontSize: 12,
-            color: token.colorTextSecondary,
-            background: token.colorBgContainer,
-            flexShrink: 0,
+            display: "flex",
+            justifyContent: "center",
+            padding: 16,
+            color: visual.color,
+            fontSize: 64,
           }}
         >
-          预览
+          {visual.icon}
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-          {selectedFile ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {/* 图标 */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  padding: 16,
-                }}
-              >
-                {selectedFile.is_dir ? (
-                  <FolderOutlined style={{ fontSize: 64, color: "#faad14" }} />
-                ) : isImageFile(selectedFile.name) ? (
-                  <FileImageOutlined style={{ fontSize: 64, color: token.colorPrimary }} />
-                ) : (
-                  <FileOutlined style={{ fontSize: 64, color: "#8c8c8c" }} />
-                )}
-              </div>
-              {/* 文件名 */}
-              <div
-                style={{
-                  textAlign: "center",
-                  fontWeight: 600,
-                  fontSize: 14,
-                  wordBreak: "break-all",
-                }}
-              >
-                {selectedFile.name}
-              </div>
-              {/* 详细信息 */}
-              <div
-                style={{
-                  fontSize: 12,
-                  color: token.colorTextSecondary,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
-                  borderTop: `1px solid ${token.colorBorderSecondary}`,
-                  paddingTop: 12,
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span>大小</span>
-                  <span>{selectedFile.is_dir ? "-" : formatFileSize(selectedFile.size)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span>修改时间</span>
-                  <span>{formatTime(selectedFile.modified)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span>类型</span>
-                  <span>{selectedFile.is_dir ? "文件夹" : "文件"}</span>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                  <span>路径</span>
-                  <span style={{ wordBreak: "break-all", color: token.colorText }}>
-                    {selectedFile.path}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: token.colorTextSecondary,
-                fontSize: 13,
-              }}
-            >
-              选择文件以预览
-            </div>
-          )}
+        {/* 文件名 */}
+        <div
+          style={{
+            textAlign: "center",
+            fontWeight: 600,
+            fontSize: 14,
+            wordBreak: "break-all",
+          }}
+        >
+          {file.name}
+        </div>
+        {/* 类型标签 */}
+        <div
+          style={{
+            textAlign: "center",
+            color: visual.color,
+            fontSize: 11,
+            fontWeight: 500,
+          }}
+        >
+          {visual.label}
+        </div>
+        {/* 详细信息 */}
+        <div
+          style={{
+            fontSize: 12,
+            color: token.colorTextSecondary,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            paddingTop: 12,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span>大小</span>
+            <span>{file.is_dir ? "-" : formatFileSize(file.size)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span>修改时间</span>
+            <span>{formatTime(file.modified)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span>类型</span>
+            <span>{file.is_dir ? "文件夹" : "文件"}</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span>路径</span>
+            <span style={{ wordBreak: "break-all", color: token.colorText }}>
+              {file.path}
+            </span>
+          </div>
         </div>
       </div>
     </div>

@@ -1,13 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Spin, theme } from "antd";
-import {
-  FolderOutlined, FileOutlined,
-  FileImageOutlined, FilePdfOutlined,
-  FileZipOutlined, FileTextOutlined,
-  VideoCameraOutlined, SoundOutlined,
-} from "@ant-design/icons";
+import { FileImageOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { getFileType, type FileEntry } from "../stores/fileStore";
+import { getFileTypeVisual } from "../utils/fileTypeIcon";
 
 interface ThumbnailCache {
   [path: string]: string; // base64 data URL
@@ -66,27 +62,13 @@ const ThumbnailImg: React.FC<{ path: string; cache: ThumbnailCache; setCache: (p
 };
 
 const getIcon = (entry: FileEntry) => {
-  if (entry.is_dir) return <FolderOutlined style={{ fontSize: 38, color: "#faad14" }} />;
-  const type = getFileType(entry.name);
-  switch (type) {
-    case "image":
-      return <FileImageOutlined style={{ fontSize: 38, color: "#1677ff" }} />;
-    case "video":
-      return <VideoCameraOutlined style={{ fontSize: 38, color: "#722ed1" }} />;
-    case "audio":
-      return <SoundOutlined style={{ fontSize: 38, color: "#13c2c2" }} />;
-    case "pdf":
-      return <FilePdfOutlined style={{ fontSize: 38, color: "#f5222d" }} />;
-    case "doc":
-    case "markdown":
-    case "text":
-      return <FileTextOutlined style={{ fontSize: 38, color: "#52c41a" }} />;
-    default:
-      if (entry.name.endsWith(".zip")) {
-        return <FileZipOutlined style={{ fontSize: 38, color: "#fa8c16" }} />;
-      }
-      return <FileOutlined style={{ fontSize: 38, color: "#8c8c8c" }} />;
-  }
+  // 用统一的 fileTypeIcon 工具拿到"颜色 + 图标"，和表格/列表视图保持一致
+  const visual = getFileTypeVisual(entry.name, entry.is_dir);
+  return (
+    <span style={{ color: visual.color, fontSize: 38, lineHeight: 1 }}>
+      {visual.icon}
+    </span>
+  );
 };
 
 type ViewMode = "table" | "grid" | "list" | "column";

@@ -5,6 +5,12 @@ import { useTheme } from "../_shared";
 
 interface MarkdownPreviewProps {
   content: string;
+  /**
+   * 是否渲染内置的"复制源码"按钮。
+   * - true (默认)：MarkdownPreview 自己画这个浮动按钮
+   * - false：由外层（一般是 PreviewPane）统一把复制按钮放到顶栏里，避免位置冲突
+   */
+  showCopyButton?: boolean;
 }
 
 /** 将原始 Markdown 文本转换为 HTML 字符串（简易实现，无外部依赖） */
@@ -183,7 +189,7 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
+export default function MarkdownPreview({ content, showCopyButton = true }: MarkdownPreviewProps) {
   const { mode } = useTheme();
   const { token } = theme.useToken();
   const isDark = mode === "dark";
@@ -267,16 +273,18 @@ export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
   return (
     <div style={containerStyle}>
       <style>{css}</style>
-      <div style={copyBtnStyle}>
-        <Tooltip title={copied ? "已复制" : "复制源码"}>
-          <Button
-            size="small"
-            icon={<CopyOutlined />}
-            onClick={handleCopy}
-            type={copied ? "primary" : "default"}
-          />
-        </Tooltip>
-      </div>
+      {showCopyButton && (
+        <div style={copyBtnStyle}>
+          <Tooltip title={copied ? "已复制" : "复制源码"}>
+            <Button
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={handleCopy}
+              type={copied ? "primary" : "default"}
+            />
+          </Tooltip>
+        </div>
+      )}
       <div
         className="markdown-body"
         dangerouslySetInnerHTML={{ __html: html }}

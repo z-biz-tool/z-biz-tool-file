@@ -351,8 +351,15 @@ pub fn copy_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
 }
 
 /// 创建新文件
+///
+/// - `path`: 目标文件完整路径
+/// - `content`: 可选；为 None 或空字符串时创建空文件，否则写入该字符串
+///
+/// 一次性完成"创建 + 写内容"，避免前端分两步调用（plugin-fs 的 writeFile
+/// 在 Tauri 2 的 fs:default capability 下会被 ACL 拒，且分两步还有
+/// "文件先被创建为空文件后写失败"的竞态）。
 #[tauri::command]
-pub fn create_file(path: &str) -> Result<(), String> {
+pub fn create_file(path: &str, content: Option<String>) -> Result<(), String> {
     let file_path = Path::new(path);
     if file_path.exists() {
         return Err(format!("文件已存在: {}", path));
@@ -363,7 +370,14 @@ pub fn create_file(path: &str) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
     }
 
-    fs::File::create(file_path).map_err(|e| format!("创建文件失败: {}", e))?;
+    match content {
+        Some(c) if !c.is_empty() => {
+            fs::write(file_path, c).map_err(|e| format!("创建文件失败: {}", e))?;
+        }
+        _ => {
+            fs::File::create(file_path).map_err(|e| format!("创建文件失败: {}", e))?;
+        }
+    }
 
     Ok(())
 }
@@ -379,6 +393,75 @@ pub fn create_directory(path: &str) -> Result<(), String> {
     fs::create_dir_all(dir_path).map_err(|e| format!("创建目录失败: {}", e))?;
 
     Ok(())
+}
+
+/// 删除文件 — 移到回收站（可恢复）
+#[tauri::command]
+pub fn delete_to_trash(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<String, String> {
+    crate::trash::move_to_trash(app, path)
+}
+
+/// 永久删除文件（不进回收站）
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EpubTempCleanupResult {
+    /// 清理掉的目录数
+    pub dirs: usize,
+    /// 释放的字节数
+    pub bytes_freed: u64,
+}
+
+/// 清理所有 /tmp/z-tool-epub-* 临时目录（EPUB 解压出来的资源文件）
+///
+/// 用户手动触发或 app 启动时调用都可。每次打开同一本书会复用同名临时目录
+/// （基于 epub 路径 hash 命名），所以理论上不会无限增长，但用户可能：
+///   1. 移动/删除了原 epub 文件但临时目录还在 → 浪费磁盘
+///   2. 想强制重新解压（例如 epub 文件改了内容但路径没变）
+///
+/// 删 /tmp 下所有以 `z-tool-epub-` 开头的目录。
+#[tauri::command]
+pub fn cleanup_epub_temp() -> Result<EpubTempCleanupResult, String> {
+    let temp_dir = std::env::temp_dir();
+    let entries = fs::read_dir(&temp_dir).map_err(|e| format!("读取临时目录失败: {}", e))?;
+    let mut dirs = 0usize;
+    let mut bytes_freed = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("z-tool-epub-") {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // 计算目录大小再删
+        let size = dir_size(&path);
+        if fs::remove_dir_all(&path).is_ok() {
+            dirs += 1;
+            bytes_freed += size;
+        }
+    }
+    Ok(EpubTempCleanupResult { dirs, bytes_freed })
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Ok(meta) = fs::metadata(&p) {
+                    total += meta.len();
+                }
+            } else if p.is_dir() {
+                total += dir_size(&p);
+            }
+        }
+    }
+    total
 }
 
 /// 批量重命名项

@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Modal, Input, Select, Button, message, theme } from "antd";
 import { invoke } from "@tauri-apps/api/core";
-import { writeFile } from "@tauri-apps/plugin-fs";
 
 interface Props {
   open: boolean;
@@ -139,12 +138,16 @@ export default function NewFileTemplate({
 
     setCreating(true);
     try {
-      await invoke("create_file", { path: fullPath });
-      const content = templateKey === "custom" ? customContent : selectedTemplate.content;
-      if (content) {
-        const encoder = new TextEncoder();
-        await writeFile(fullPath, encoder.encode(content));
-      }
+      // 一次性创建 + 写内容：避免分两步（plugin-fs 的 writeFile 在默认
+      // fs capability 下会被 ACL 拒，且分两步有"先建空文件后写失败"的竞态）
+      const content =
+        templateKey === "custom"
+          ? customContent
+          : selectedTemplate.content;
+      await invoke("create_file", {
+        path: fullPath,
+        content: content ?? "",
+      });
       message.success(`文件 ${finalName} 创建成功`);
       onRefresh();
       onClose();

@@ -5,6 +5,8 @@ mod pdf_utils;
 mod image_utils;
 mod convert;
 mod watcher;
+mod llm_config;
+mod trash;
 
 use watcher::WatcherState;
 
@@ -28,6 +30,7 @@ pub fn run() {
             commands::create_file,
             commands::create_directory,
             commands::batch_rename,
+            commands::cleanup_epub_temp,
             commands::list_directory_with_hidden,
             commands::compress_to_zip,
             commands::extract_zip,
@@ -53,6 +56,18 @@ pub fn run() {
             pdf_utils::extract_pdf_text,
             pdf_utils::get_pdf_metadata,
             image_utils::get_image_info,
+            llm_config::load_llm_config,
+            llm_config::save_llm_config,
+            llm_config::get_llm_config_path,
+            llm_config::test_llm_config,
+            trash::move_to_trash,
+            trash::list_trash,
+            trash::restore_from_trash,
+            trash::permanent_delete,
+            trash::empty_trash,
+            trash::get_trash_size,
+            trash::get_trash_path,
+            commands::delete_to_trash,
             image_utils::export_image,
             image_utils::resize_image,
             image_utils::rotate_image,

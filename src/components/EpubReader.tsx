@@ -9,47 +9,19 @@ const { Text } = Typography;
 interface Chapter {
   title: string;
   content: string;
+  index: number;
+}
+
+interface EpubBook {
+  title: string;
+  author: string;
+  chapters: Chapter[];
+  cover_path: string;
 }
 
 interface EpubReaderProps {
   filePath: string;
   fileName: string;
-}
-
-interface ReadResult {
-  is_binary: boolean;
-  content: string;
-}
-
-/// 解析章节：优先识别中英文标题，回退按段落分割
-function parseChapters(text: string): Chapter[] {
-  // 中文章节标题：第X章/回/节/篇
-  const cnRegex = /^[ \t]*(第[\d一二三四五六七八九十百千两]+[章回节篇][^\n]*)$/gm;
-  // 英文章节标题：Chapter X
-  const enRegex = /^[ \t]*(Chapter\s+\d+[^\n]*)$/gim;
-
-  const cnMatches = [...text.matchAll(cnRegex)];
-  const enMatches = [...text.matchAll(enRegex)];
-  const matches = cnMatches.length >= enMatches.length ? cnMatches : enMatches;
-
-  if (matches.length > 0) {
-    const chapters: Chapter[] = [];
-    for (let i = 0; i < matches.length; i++) {
-      const start = matches[i].index ?? 0;
-      const end = i + 1 < matches.length ? (matches[i + 1].index ?? text.length) : text.length;
-      const content = text.slice(start, end).trim();
-      chapters.push({ title: matches[i][1].trim(), content });
-    }
-    return chapters;
-  }
-
-  // 回退：按段落分割
-  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim());
-  if (paragraphs.length === 0) return [{ title: "全文", content: text }];
-  return paragraphs.map((p, i) => ({
-    title: `段落 ${i + 1}`,
-    content: p.trim(),
-  }));
 }
 
 export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
@@ -60,26 +32,30 @@ export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
   const [currentChapter, setCurrentChapter] = useState(0);
   const [error, setError] = useState("");
   const [showSidebar, setShowSidebar] = useState(true);
+  const [bookTitle, setBookTitle] = useState("");
+  const [bookAuthor, setBookAuthor] = useState("");
 
   useEffect(() => {
     setLoading(true);
     setError("");
     setChapters([]);
     setCurrentChapter(0);
+    setBookTitle("");
+    setBookAuthor("");
 
-    invoke("read_file_content", { path: filePath })
-      .then((result: unknown) => {
-        const r = result as ReadResult;
-        if (r.is_binary) {
-          setError(
-            "EPUB是二进制格式（ZIP压缩包），当前版本仅支持简单文本提取。完整EPUB阅读器需要额外的解压库支持。"
-          );
-        } else {
-          setChapters(parseChapters(r.content));
-        }
+    invoke<EpubBook>("parse_epub", { path: filePath })
+      .then((book) => {
+        // Rust 端已按 spine 顺序给出章节，content 是改写后的 XHTML：
+        //   - <img src="相对"> → <img src="file:///tmp/z-tool-epub-{hash}/相对">
+        //   - <image href> 同理
+        // 配合 tauri 的 asset:// 协议让 webview 能直接加载图片
+        // 不再走 xhtmlToText（会丢失图片），改用 dangerouslySetInnerHTML
+        setChapters(book.chapters);
+        setBookTitle(book.title || fileName.replace(/\.epub$/i, ""));
+        setBookAuthor(book.author || "未知作者");
       })
       .catch((err) => {
-        setError("读取EPUB文件失败: " + err);
+        setError("解析EPUB文件失败: " + (typeof err === "string" ? err : JSON.stringify(err)));
       })
       .finally(() => setLoading(false));
   }, [filePath]);
@@ -125,6 +101,20 @@ export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* epub 内容样式：限制图片宽度、段落间距。EPUB 自身的 <style> 不渲染，
+          这里给所有渲染的 XHTML 一个统一的"舒适阅读"样式。 */}
+      <style>{`
+        .epub-content { line-height: 1.8; }
+        .epub-content p { margin: 0.8em 0; }
+        .epub-content h1, .epub-content h2, .epub-content h3,
+        .epub-content h4, .epub-content h5, .epub-content h6 {
+          margin-top: 1.2em; margin-bottom: 0.6em; font-weight: 600;
+        }
+        .epub-content img, .epub-content svg, .epub-content image {
+          max-width: 100%; height: auto; display: block; margin: 0.5em auto;
+        }
+        .epub-content a { color: #1677ff; }
+      `}</style>
       {/* 顶部标题栏 */}
       <div
         style={{
@@ -135,8 +125,13 @@ export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
       >
         <Text strong style={{ fontSize: 14 }}>
           <BookOutlined style={{ marginRight: 6 }} />
-          {fileName}
+          {bookTitle || fileName}
         </Text>
+        {bookAuthor && (
+          <div style={{ fontSize: 11, color: token.colorTextSecondary, marginTop: 2 }}>
+            {bookAuthor}
+          </div>
+        )}
       </div>
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -212,7 +207,13 @@ export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
             >
               {chapters[currentChapter].title}
             </div>
-            {chapters[currentChapter].content}
+            {/* 渲染 Rust 端改写过的 XHTML（含图片 file:// 引用）。
+                用 dangerouslySetInnerHTML 而不是 textContent，是因为内容里
+                可能有 <img>/<svg>/<p> 等结构。EPUB 文件由用户自选，可信。 */}
+            <div
+              className="epub-content"
+              dangerouslySetInnerHTML={{ __html: chapters[currentChapter].content }}
+            />
           </div>
 
           {/* 底部进度 + 翻页 */}

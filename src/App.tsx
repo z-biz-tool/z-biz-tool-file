@@ -5,8 +5,6 @@ import {
 import type { MenuProps, BreadcrumbProps } from "antd";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
-  FolderOutlined,
-  FileOutlined,
   HomeOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
@@ -35,13 +33,15 @@ import {
   SafetyCertificateOutlined,
   TagOutlined,
   FileTextOutlined,
+  ClearOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
 } from "./stores/fileStore";
-import FileTree from "./components/FileTree";
 import PreviewPane from "./components/PreviewPane";
 import SearchBar from "./components/SearchBar";
 import Bookmarks from "./components/Bookmarks";
@@ -55,6 +55,8 @@ import DuplicateFinder from "./components/DuplicateFinder";
 import HashCalculator from "./components/HashCalculator";
 import DirectorySync from "./components/DirectorySync";
 import WorkspaceManager, { type Workspace } from "./components/WorkspaceManager";
+import SettingsModal from "./components/SettingsModal";
+import TrashModal from "./components/TrashModal";
 import GitStatus from "./components/GitStatus";
 import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
@@ -63,6 +65,82 @@ import ZipBrowser from "./components/ZipBrowser";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
+
+/**
+ * 可拖拽列宽的表头单元格。
+ * - 通过 components.header.cell 注入 antd Table
+ * - 鼠标拖拽右边缘 6px 热区即可调整列宽
+ * - 最小宽度 50px（可按需调整）
+ * - 通过 onWidthChange 把新宽度冒泡到上层 state
+ */
+interface ResizableHeaderCellProps {
+  children?: React.ReactNode;
+  onWidthChange?: (delta: number) => void;
+  minWidth?: number;
+  style?: React.CSSProperties;
+  className?: string;
+  // antd 注入的其它 props（如 colSpan / rowSpan）
+  [key: string]: unknown;
+}
+function ResizableHeaderCell({
+  children,
+  onWidthChange,
+  minWidth = 50,
+  style,
+  className,
+  ...rest
+}: ResizableHeaderCellProps) {
+  // ref 记录拖拽起始状态，避免在 React 渲染里来回算
+  const dragRef = useRef<{
+    startX: number;
+    startWidth: number;
+    onMove: (e: MouseEvent) => void;
+    onUp: () => void;
+  } | null>(null);
+
+  const onMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => {
+    const th = (e.currentTarget as HTMLElement).closest("th");
+    if (!th) return;
+    const startX = e.clientX;
+    const startWidth = th.offsetWidth;
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX;
+      const next = Math.max(minWidth, startWidth + delta);
+      onWidthChange?.(next - startWidth);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      dragRef.current = null;
+    };
+    dragRef.current = { startX, startWidth, onMove, onUp };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  return (
+    <th {...rest} className={className} style={{ position: "relative", ...style }}>
+      {children}
+      <span
+        onMouseDown={onMouseDown}
+        className="z-tool-col-resizer"
+        style={{
+          position: "absolute",
+          right: 0,
+          top: 0,
+          bottom: 0,
+          width: 6,
+          cursor: "col-resize",
+          userSelect: "none",
+          touchAction: "none",
+        }}
+        aria-label="拖拽调整列宽"
+      />
+    </th>
+  );
+}
 
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
@@ -93,6 +171,8 @@ function AppShellInner() {
   const [zipBrowserOpen, setZipBrowserOpen] = useState(false);
   const [zipBrowserPath, setZipBrowserPath] = useState<string | null>(null);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const [siderCollapsed, setSiderCollapsed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("z-tool-sider-collapsed") === "1";
@@ -107,6 +187,44 @@ function AppShellInner() {
     const v = localStorage.getItem("z-tool-preview-visible");
     return v === null ? true : v === "1";
   });
+  // 表格列宽：键为 column.key，值为 px 宽度；持久化到 localStorage
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = localStorage.getItem("z-tool-table-col-widths");
+      return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("z-tool-table-col-widths", JSON.stringify(columnWidths));
+    } catch {
+      /* 容量满或隐私模式，忽略 */
+    }
+  }, [columnWidths]);
+
+  /**
+   * 调整指定列的列宽。由 ResizableHeaderCell 在 onMouseMove 时反复调用，
+   * 传入 delta（px）。最小宽度 50 在 ResizableHeaderCell 内部保证。
+   * 注意：拖拽过程中 React 重新 render 会让 header.cell 组件 unmount/remount，
+   * 因此通过"累加"而不是"重设 startWidth"来保持连续 — 用 ref 记录 baseline。
+   */
+  const columnWidthBaselineRef = useRef<Record<string, number>>({});
+  const updateColumnWidth = useCallback(
+    (key: string, delta: number) => {
+      if (delta === 0) return;
+      setColumnWidths((prev) => {
+        const baseline = columnWidthBaselineRef.current[key];
+        const cur = baseline ?? prev[key] ?? (key === "modified" ? 180 : 100);
+        const nextVal = Math.max(50, cur + delta);
+        columnWidthBaselineRef.current[key] = nextVal;
+        return { ...prev, [key]: nextVal };
+      });
+    },
+    [],
+  );
 
   // 预览分隔条拖拽
   const previewDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -438,24 +556,34 @@ function AppShellInner() {
   }, [currentPath, loadDirectory, message]);
 
   // 删除文件
-  const handleDelete = useCallback((entry: FileEntry) => {
-    modal.confirm({
-      title: "确认删除",
-      content: `确定要删除「${entry.name}」吗？此操作不可恢复。`,
-      okText: "删除",
-      okType: "danger",
-      cancelText: "取消",
-      onOk: async () => {
-        try {
-          await invoke("delete_file", { path: entry.path });
-          message.success("删除成功");
-          loadDirectory(currentPath);
-        } catch (err) {
-          message.error("删除失败: " + err);
-        }
-      },
-    });
-  }, [currentPath, loadDirectory, message, modal]);
+  const handleDelete = useCallback(
+    (entry: FileEntry, permanent = false) => {
+      modal.confirm({
+        title: permanent ? "永久删除" : "移到回收站？",
+        content: permanent
+          ? `「${entry.name}」将永久删除，无法恢复。`
+          : `「${entry.name}」将移到回收站，可以在「设置」旁的回收站按钮中恢复。`,
+        okText: permanent ? "永久删除" : "移到回收站",
+        okType: "danger",
+        cancelText: "取消",
+        onOk: async () => {
+          try {
+            if (permanent) {
+              await invoke("delete_file", { path: entry.path });
+              message.success("已永久删除");
+            } else {
+              await invoke("delete_to_trash", { path: entry.path });
+              message.success("已移到回收站");
+            }
+            loadDirectory(currentPath);
+          } catch (err) {
+            message.error("删除失败: " + err);
+          }
+        },
+      });
+    },
+    [currentPath, loadDirectory, message, modal],
+  );
 
   // 重命名
   const handleRename = useCallback(async () => {
@@ -517,10 +645,15 @@ function AppShellInner() {
       },
       {
         key: "delete",
-        label: "删除 (⌘+Shift+⌫)",
+        label: "移到回收站 (⌘+Shift+⌫)",
         icon: <DeleteOutlined />,
+        onClick: () => handleDelete(record, false),
+      },
+      {
+        key: "delete_permanent",
+        label: "永久删除 (Shift+Option+⌫)",
         danger: true,
-        onClick: () => handleDelete(record),
+        onClick: () => handleDelete(record, true),
       },
       { type: "divider" },
       {
@@ -578,55 +711,74 @@ function AppShellInner() {
       title: "名称",
       dataIndex: "name",
       key: "name",
-      sorter: (a: FileEntry, b: FileEntry) => a.name.localeCompare(b.name),
-      render: (text: string, record: FileEntry) => (
-        <div
-          draggable
-          onDragStart={(e) => handleRowDragStart(e, record)}
-          onDragEnd={handleRowDragEnd}
-          onClick={() => handleFileClick(record)}
-          onDoubleClick={() => record.is_dir && navigateTo(record.path)}
-          style={{
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-          title="拖拽以移动到其他目录；双击打开文件夹"
-        >
-          {record.is_dir ? (
-            <FolderOutlined style={{ color: "#faad14" }} />
-          ) : (
-            <FileOutlined style={{ color: "#8c8c8c" }} />
-          )}
-          <span
+      // 组合排序：先按文件类型分组（同 kind 相邻），组内按字母
+      sorter: (a: FileEntry, b: FileEntry) => compareByKindThenName(a, b),
+      defaultSortOrder: "ascend" as const,
+      onHeaderCell: () => ({ "data-column-key": "name" } as React.ThHTMLAttributes<HTMLTableHeaderCellElement>),
+      render: (text: string, record: FileEntry) => {
+        const visual = getFileTypeVisual(record.name, record.is_dir);
+        return (
+          <div
+            draggable
+            onDragStart={(e) => handleRowDragStart(e, record)}
+            onDragEnd={handleRowDragEnd}
+            onClick={() => handleFileClick(record)}
+            onDoubleClick={() => record.is_dir && navigateTo(record.path)}
             style={{
-              color: selectedFile?.path === record.path ? "#1677ff" : "inherit",
-              fontWeight: selectedFile?.path === record.path ? 600 : 400,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
             }}
+            title={`${visual.label} · 拖拽以移动到其他目录；双击打开文件夹`}
           >
-            {text}
-          </span>
-        </div>
-      ),
+            {/* 左侧类型色条（macOS Finder 风格） */}
+            <span
+              aria-hidden
+              style={{
+                display: "inline-block",
+                width: 3,
+                height: 16,
+                borderRadius: 2,
+                background: visual.color,
+                marginRight: 2,
+                flexShrink: 0,
+              }}
+            />
+            <span style={{ color: visual.color, display: "inline-flex", fontSize: 14 }}>
+              {visual.icon}
+            </span>
+            <span
+              style={{
+                color: selectedFile?.path === record.path ? "#1677ff" : "inherit",
+                fontWeight: selectedFile?.path === record.path ? 600 : 400,
+              }}
+            >
+              {text}
+            </span>
+          </div>
+        );
+      },
     },
     {
       title: "大小",
       dataIndex: "size",
       key: "size",
-      width: 100,
+      width: columnWidths["size"] ?? 100,
       sorter: (a: FileEntry, b: FileEntry) => a.size - b.size,
+      onHeaderCell: () => ({ "data-column-key": "size" } as React.ThHTMLAttributes<HTMLTableHeaderCellElement>),
       render: (size: number, record: FileEntry) => (record.is_dir ? "-" : formatFileSize(size)),
     },
     {
       title: "修改时间",
       dataIndex: "modified",
       key: "modified",
-      width: 180,
+      width: columnWidths["modified"] ?? 180,
       sorter: (a: FileEntry, b: FileEntry) => a.modified - b.modified,
+      onHeaderCell: () => ({ "data-column-key": "modified" } as React.ThHTMLAttributes<HTMLTableHeaderCellElement>),
       render: (modified: number) => formatTime(modified),
     },
-  ], [selectedFile, handleRowDragStart, handleRowDragEnd, handleFileClick, navigateTo]);
+  ], [selectedFile, handleRowDragStart, handleRowDragEnd, handleFileClick, navigateTo, columnWidths]);
 
   // 批量操作选中的文件
   const selectedFiles = selectedRowKeys.length > 0
@@ -701,11 +853,6 @@ function AppShellInner() {
           <DropStack currentPath={currentPath} onRefresh={() => loadDirectory(currentPath)} />
         </div>
       </CollapsiblePanel>
-      <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        <CollapsiblePanel title="文件树" defaultExpanded={true}>
-          <FileTree rootPath={rootPath} />
-        </CollapsiblePanel>
-      </div>
     </div>
   );
 
@@ -831,6 +978,42 @@ function AppShellInner() {
             >
               新建文件夹
             </Button>
+          </Tooltip>
+          <Tooltip title="清理 EPUB 临时缓存（/tmp/z-tool-epub-*）">
+            <Button
+              size="small"
+              icon={<ClearOutlined />}
+              onClick={async () => {
+                try {
+                  const r = await invoke<{ dirs: number; bytes_freed: number }>("cleanup_epub_temp");
+                  const mb = (r.bytes_freed / 1024 / 1024).toFixed(1);
+                  if (r.dirs === 0) {
+                    message.info("没有可清理的 EPUB 临时缓存");
+                  } else {
+                    message.success(`已清理 ${r.dirs} 个临时目录，释放 ${mb} MB`);
+                  }
+                } catch (err) {
+                  message.error("清理失败: " + err);
+                }
+              }}
+              aria-label="清理 EPUB 临时缓存"
+            />
+          </Tooltip>
+          <Tooltip title="设置 (AI / LLM / 通用)">
+            <Button
+              size="small"
+              icon={<SettingOutlined />}
+              onClick={() => setSettingsOpen(true)}
+              aria-label="打开设置"
+            />
+          </Tooltip>
+          <Tooltip title="回收站（已删除的文件）">
+            <Button
+              size="small"
+              icon={<DeleteOutlined />}
+              onClick={() => setTrashOpen(true)}
+              aria-label="打开回收站"
+            />
           </Tooltip>
           <Tooltip title="复制 (⌘+C)">
             <Button
@@ -998,6 +1181,35 @@ function AppShellInner() {
                       })}
                       locale={{
                         emptyText: "该文件夹为空",
+                      }}
+                      components={{
+                        header: {
+                          cell: (cellProps: {
+                            children?: React.ReactNode;
+                            style?: React.CSSProperties;
+                            className?: string;
+                            "data-column-key"?: string;
+                            [key: string]: unknown;
+                          }) => {
+                            // 通过 onHeaderCell 注入的 data-column-key 拿到当前列标识
+                            const colKey = cellProps["data-column-key"];
+                            if (!colKey) {
+                              return (
+                                <ResizableHeaderCell {...cellProps}>
+                                  {cellProps.children}
+                                </ResizableHeaderCell>
+                              );
+                            }
+                            return (
+                              <ResizableHeaderCell
+                                {...cellProps}
+                                onWidthChange={(delta) => updateColumnWidth(colKey, delta)}
+                              >
+                                {cellProps.children}
+                              </ResizableHeaderCell>
+                            );
+                          },
+                        },
                       }}
                     />
                   </div>
@@ -1203,6 +1415,15 @@ function AppShellInner() {
         onClose={() => setNewFileTemplateOpen(false)}
         currentPath={currentPath}
         onRefresh={() => loadDirectory(currentPath)}
+      />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+      <TrashModal
+        open={trashOpen}
+        onClose={() => setTrashOpen(false)}
+        onRestored={() => loadDirectory(currentPath)}
       />
 
       {/* 传输队列 */}

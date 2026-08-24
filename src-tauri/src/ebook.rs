@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::collections::HashSet;
 
 /// EPUB/MOBI 章节结构
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,7 +131,14 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
         }
     }
 
-    // 3. 按spine顺序读取章节
+    // 3. 把 zip 里所有"资源文件"（图片/字体/CSS 等非 XHTML/HTML 文本）解到临时目录，
+    //    这样章节 XHTML 里的 <img src="相对路径"> 可以被改写成绝对路径，
+    //    配合 tauri 的 asset:// 协议让 webview 能直接加载。
+    //    临时目录基于源 epub 路径的 hash 命名，重复打开同一本书不重复解压。
+    let temp_root = extract_epub_assets(&mut archive, &file_path)
+        .unwrap_or_else(|_| std::env::temp_dir());
+
+    // 4. 按spine顺序读取章节
     let mut chapters = Vec::new();
     let mut index = 0;
 
@@ -140,11 +148,17 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
                 Ok(mut zf) => {
                     let mut content = String::new();
                     if zf.read_to_string(&mut content).is_ok() && !content.trim().is_empty() {
+                        // 把 XHTML 里所有 <img src> / <image href> 改写为绝对路径
+                        let rewritten = rewrite_image_paths(
+                            &content,
+                            href,
+                            &temp_root,
+                        );
                         let ch_title = extract_html_title(&content)
                             .unwrap_or_else(|| format!("章节 {}", index + 1));
                         chapters.push(Chapter {
                             title: ch_title,
-                            content,
+                            content: rewritten,
                             index,
                         });
                         index += 1;
@@ -229,6 +243,249 @@ fn extract_html_title(html: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 把 epub 内的非内容文件（图片/字体/媒体）解到临时目录。
+/// 临时目录按源 epub 路径的 hash 命名：
+/// - 同本书多次打开：复用已解压的文件，不重复 IO
+/// - 不同书：互不污染
+/// 临时目录路径会回传，用于把 XHTML 里的 <img src="相对"> 改写为绝对路径。
+fn extract_epub_assets<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    source_epub: &Path,
+) -> Result<std::path::PathBuf, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    // 临时目录名：z-tool-epub-{hash16}
+    let mut hasher = DefaultHasher::new();
+    source_epub.to_string_lossy().hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let temp_root = std::env::temp_dir().join(format!("z-tool-epub-{}", hash));
+
+    // 已解压过：直接复用
+    if temp_root.exists() {
+        return Ok(temp_root);
+    }
+    fs::create_dir_all(&temp_root).map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    // 文本/容器类文件不需要解压（webview 不直接渲染它们）
+    let skip_exts: HashSet<&str> = [
+        "opf", "ncx", "xml", "xhtml", "html", "htm", "css", "js", "ttxt",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    for i in 0..archive.len() {
+        let mut zf = archive
+            .by_index(i)
+            .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
+        let name = zf.name().to_string();
+        // 跳过目录
+        if name.ends_with('/') {
+            continue;
+        }
+        // 按扩展名判断是否需要解压
+        let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+        if skip_exts.contains(ext.as_str()) {
+            continue;
+        }
+        // 解到 temp_root 下（保持 zip 内相对路径）
+        let out_path = temp_root.join(&name);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        let mut out = match fs::File::create(&out_path) {
+            Ok(f) => f,
+            Err(_) => continue, // 单个资源失败不阻塞整本书
+        };
+        let _ = std::io::copy(&mut zf, &mut out);
+    }
+
+    Ok(temp_root)
+}
+
+/// 把 XHTML 里的 <img src="..."> / <image href="..."> 改写为本地绝对路径。
+/// - 入参 `chapter_href` 是这个章节文件在 zip 里的相对路径（用于推算图片相对基准）
+/// - `temp_root` 是 `extract_epub_assets` 返回的临时根目录
+/// 处理：找到 src/href，resolve 到 temp_root 下的绝对路径，替换为 file:// URL
+fn rewrite_image_paths(xhtml: &str, chapter_href: &str, temp_root: &Path) -> String {
+    use std::path::PathBuf;
+
+    let chapter_dir = chapter_href
+        .rsplit_once('/')
+        .map(|(d, _)| d)
+        .unwrap_or("");
+
+    // 用极简状态机：扫描每个标签，找到 src="..." 或 href="..." 替换
+    let lower = xhtml.to_ascii_lowercase();
+    // 检查是否包含 <img 或 <image（否则直接返回原文）
+    if !lower.contains("<img") && !lower.contains("<image") {
+        return xhtml.to_string();
+    }
+
+    // 简单的属性替换：扫描 <img ...> 和 <image ...>，替换 src=/href=
+    let bytes = xhtml.as_bytes();
+    let mut out = String::with_capacity(bytes.len() + 256);
+    let mut i = 0;
+    while i < bytes.len() {
+        // 找下一个 <img 或 <image
+        let rest = &xhtml[i..];
+        let rest_lower = &lower[i..];
+        let img_pos = rest_lower.find("<img");
+        let image_pos = rest_lower.find("<image");
+        let next_tag = match (img_pos, image_pos) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        match next_tag {
+            None => {
+                out.push_str(rest);
+                break;
+            }
+            Some(p) => {
+                // 复制 <img / <image 之前的所有内容
+                out.push_str(&rest[..p]);
+                // 找该标签的结束 > （注意属性值里可能含 >，但属性都用引号包所以简单找首个 >）
+                let after_tag = &rest[p..];
+                let tag_end = after_tag.find('>').unwrap_or(after_tag.len());
+                let tag_str = &after_tag[..tag_end];
+                let tag_end_abs = i + p + tag_end + 1;
+                // 替换 src="..." 和 href="..."（xlink:href 走 href 同一处理）
+                let rewritten = rewrite_tag_attributes(tag_str, chapter_dir, temp_root);
+                out.push_str(&rewritten);
+                out.push('>');
+                i = tag_end_abs;
+            }
+        }
+    }
+    out
+}
+
+/// 在一个 <img / <image 标签字符串里替换 src="..." 和 href="..." 路径
+fn rewrite_tag_attributes(tag: &str, chapter_dir: &str, temp_root: &Path) -> String {
+    let mut out = String::with_capacity(tag.len() + 64);
+    // 切分出 <img 后的属性段
+    let attr_start = tag.find(' ').map(|i| i + 1).unwrap_or(tag.len());
+    out.push_str(&tag[..attr_start]);
+    let attrs = &tag[attr_start..];
+    let mut j = 0;
+    let attr_names = ["src", "href"];
+    while j < attrs.len() {
+        // 跳过空白
+        if attrs.as_bytes()[j].is_ascii_whitespace() {
+            out.push(attrs.as_bytes()[j] as char);
+            j += 1;
+            continue;
+        }
+        // 读取属性名
+        let name_start = j;
+        while j < attrs.len()
+            && !attrs.as_bytes()[j].is_ascii_whitespace()
+            && attrs.as_bytes()[j] != b'='
+        {
+            j += 1;
+        }
+        let name = &attrs[name_start..j];
+        // 跳过空白
+        while j < attrs.len() && attrs.as_bytes()[j].is_ascii_whitespace() {
+            out.push(attrs.as_bytes()[j] as char);
+            j += 1;
+        }
+        if j >= attrs.len() || attrs.as_bytes()[j] != b'=' {
+            // 布尔属性，直接写
+            out.push_str(name);
+            continue;
+        }
+        out.push('=');
+        j += 1;
+        // 跳过 = 后的空白
+        while j < attrs.len() && attrs.as_bytes()[j].is_ascii_whitespace() {
+            out.push(attrs.as_bytes()[j] as char);
+            j += 1;
+        }
+        if j >= attrs.len() {
+            break;
+        }
+        // 解析值：引号包裹 or 裸值
+        let q = attrs.as_bytes()[j];
+        if q == b'"' || q == b'\'' {
+            j += 1;
+            let val_start = j;
+            while j < attrs.len() && attrs.as_bytes()[j] != q {
+                j += 1;
+            }
+            let val = &attrs[val_start..j];
+            if j < attrs.len() {
+                j += 1; // 跳闭合引号
+            }
+            // 决定是否替换
+            let lower_name = name.to_ascii_lowercase();
+            // 真正关心的：img 的 src；image（svg:image）的 href 或 xlink:href
+            let is_target = (attr_names.contains(&lower_name.as_str())
+                || lower_name == "xlink:href")
+                && !val.is_empty()
+                && !val.starts_with("http")
+                && !val.starts_with("data:");
+            if is_target {
+                let abs = resolve_resource_path(chapter_dir, val, temp_root);
+                // Tauri 2 资源协议：macOS 用 asset://localhost/<path> 形式
+                // (Tauri 文档：https://tauri.app/v1/guides/features/resources#protocol)
+                // WKWebView 默认拦截 file://，所以走 Tauri 内置的 asset 协议，
+                // 配合 tauri.conf.json 里 assetProtocol.scope: ["**"] 让 webview 放行
+                let abs_str = abs.to_string_lossy();
+                let url = format!("asset://localhost{}", abs_str);
+                out.push(q as char);
+                out.push_str(&url);
+                out.push(q as char);
+            } else {
+                out.push(q as char);
+                out.push_str(val);
+                out.push(q as char);
+            }
+        } else {
+            // 裸属性值（不合法，但兼容）
+            let val_start = j;
+            while j < attrs.len() && !attrs.as_bytes()[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            out.push_str(&attrs[val_start..j]);
+        }
+    }
+    out
+}
+
+/// 把 XHTML 里的相对路径 resolve 到 temp_root 下的绝对路径
+fn resolve_resource_path(chapter_dir: &str, rel: &str, temp_root: &Path) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    // 处理 .. 和 . ，相对章节所在目录
+    let base = if chapter_dir.is_empty() {
+        PathBuf::from("")
+    } else {
+        PathBuf::from(chapter_dir)
+    };
+    let combined = base.join(rel);
+    // 标准化（去 .. 和 .）
+    let normalized = normalize_path(&combined);
+    temp_root.join(normalized)
+}
+
+/// 简易 path 标准化：处理 "." 和 ".."
+fn normalize_path(p: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 fn strip_html_tags(html: &str) -> String {

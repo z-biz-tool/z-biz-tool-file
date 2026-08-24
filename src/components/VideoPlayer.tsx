@@ -178,6 +178,23 @@ export default function VideoPlayer({ filePath, fileName }: Props) {
           onEnded={playNext}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
+          onError={(e) => {
+            const v = e.currentTarget;
+            const code = v.error?.code;
+            const message = v.error?.message || "未知错误";
+            // 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED
+            // eslint-disable-next-line no-console
+            console.error("[VideoPlayer] 视频加载失败", {
+              code,
+              message,
+              src: fileUrl,
+              filePath,
+            });
+          }}
+          onLoadedMetadata={() => {
+            // eslint-disable-next-line no-console
+            console.info("[VideoPlayer] 元数据已加载", { duration: videoRef.current?.duration });
+          }}
         />
         {/* 播放/暂停大按钮 */}
         {!playing && (
