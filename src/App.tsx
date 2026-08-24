@@ -3,7 +3,7 @@ import {
   Input, Button, Breadcrumb, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal,
 } from "antd";
 import type { MenuProps, BreadcrumbProps } from "antd";
-import type { DragEvent as ReactDragEvent } from "react";
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   FolderOutlined,
   FileOutlined,
@@ -97,6 +97,19 @@ function AppShellInner() {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("z-tool-sider-collapsed") === "1";
   });
+  const [previewWidth, setPreviewWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return 420;
+    const stored = Number(localStorage.getItem("z-tool-preview-width"));
+    return Number.isFinite(stored) && stored >= 240 && stored <= 800 ? stored : 420;
+  });
+  const [previewVisible, setPreviewVisible] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const v = localStorage.getItem("z-tool-preview-visible");
+    return v === null ? true : v === "1";
+  });
+
+  // 预览分隔条拖拽
+  const previewDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const {
     currentPath, fileList, selectedFile, showHidden, viewMode,
@@ -110,6 +123,39 @@ function AppShellInner() {
   useEffect(() => {
     localStorage.setItem("z-tool-sider-collapsed", siderCollapsed ? "1" : "0");
   }, [siderCollapsed]);
+
+  // 记忆预览区状态
+  useEffect(() => {
+    localStorage.setItem("z-tool-preview-visible", previewVisible ? "1" : "0");
+  }, [previewVisible]);
+  useEffect(() => {
+    localStorage.setItem("z-tool-preview-width", String(previewWidth));
+  }, [previewWidth]);
+
+  // 预览分隔条：横向拖拽改变预览宽度
+  const handlePreviewDragStart = useCallback((e: ReactMouseEvent) => {
+    if (!previewVisible) return;
+    e.preventDefault();
+    previewDragRef.current = { startX: e.clientX, startWidth: previewWidth };
+
+    const handleMove = (ev: MouseEvent) => {
+      if (!previewDragRef.current) return;
+      const delta = previewDragRef.current.startX - ev.clientX;
+      const next = Math.min(800, Math.max(240, previewDragRef.current.startWidth + delta));
+      setPreviewWidth(next);
+    };
+    const handleUp = () => {
+      previewDragRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+  }, [previewWidth, previewVisible]);
 
   // 加载目录
   const loadDirectory = useCallback((path: string) => {
@@ -592,6 +638,7 @@ function AppShellInner() {
   // 键盘快捷键
   useKeyboardShortcuts(useMemo(() => ([
     { key: "b", meta: true, handler: () => setSiderCollapsed((v) => !v), description: "折叠/展开侧栏" },
+    { key: "\\", meta: true, handler: () => setPreviewVisible((v) => !v), description: "显示/隐藏预览区" },
     { key: "ArrowLeft", alt: true, handler: goBack, description: "后退" },
     { key: "ArrowRight", alt: true, handler: goForward, description: "前进" },
     { key: "ArrowUp", alt: true, handler: goUp, description: "返回上级" },
@@ -994,18 +1041,58 @@ function AppShellInner() {
               )}
             </div>
           </DragDropTarget>
-          <div
-            style={{
-              width: 420,
-              background: "var(--ant-color-bg-container)",
-              borderLeft: `1px solid var(--ant-color-border-secondary, rgba(0,0,0,0.06))`,
-              overflow: "hidden",
-            }}
-            role="region"
-            aria-label="预览区"
-          >
-            <PreviewPane />
-          </div>
+          {previewVisible && (
+            <>
+              {/* 预览区分隔条：拖拽改变预览宽度 */}
+              <div
+                onMouseDown={handlePreviewDragStart}
+                onDoubleClick={() => setPreviewVisible(false)}
+                title="拖拽调整宽度 · 双击收起"
+                style={{
+                  width: 6,
+                  cursor: "col-resize",
+                  background: "transparent",
+                  borderLeft: `1px solid var(--ant-color-border-secondary, rgba(0,0,0,0.06))`,
+                  borderRight: `1px solid var(--ant-color-border-secondary, rgba(0,0,0,0.06))`,
+                  flexShrink: 0,
+                  position: "relative",
+                  transition: "background 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLDivElement).style.background = "var(--ant-color-primary-bg, rgba(22,119,255,0.12))";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLDivElement).style.background = "transparent";
+                }}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="预览区分隔条"
+              />
+              <div
+                style={{
+                  width: previewWidth,
+                  background: "var(--ant-color-bg-container)",
+                  overflow: "hidden",
+                }}
+                role="region"
+                aria-label="预览区"
+              >
+                <PreviewPane onCollapse={() => setPreviewVisible(false)} />
+              </div>
+            </>
+          )}
+          {!previewVisible && (
+            <Tooltip title="展开预览 (⌘+\\)" placement="left">
+              <Button
+                size="small"
+                type="text"
+                icon={<EyeInvisibleOutlined />}
+                onClick={() => setPreviewVisible(true)}
+                style={{ alignSelf: "flex-start", margin: "8px 4px" }}
+                aria-label="展开预览区"
+              />
+            </Tooltip>
+          )}
         </div>
 
         {/* 内置终端 */}

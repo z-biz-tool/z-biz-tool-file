@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { Typography, theme, Button } from "antd";
-import { FileOutlined, EditOutlined, SwapOutlined, EyeOutlined, CodeOutlined } from "@ant-design/icons";
+import { Typography, theme, Button, Tooltip } from "antd";
+import { FileOutlined, EditOutlined, SwapOutlined, EyeOutlined, CodeOutlined, CloseOutlined } from "@ant-design/icons";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useFileStore, getFileType, formatFileSize, formatTime } from "../stores/fileStore";
 import EpubReader from "./EpubReader";
@@ -26,7 +26,7 @@ interface ReadResult {
   content: string;
 }
 
-export default function PreviewPane() {
+export default function PreviewPane({ onCollapse }: { onCollapse?: () => void } = {}) {
   const { selectedFile } = useFileStore();
   const { token } = theme.useToken();
   const [loading, setLoading] = useState(false);
@@ -140,6 +140,18 @@ export default function PreviewPane() {
           </>
         )}
         <div style={{ flex: 1 }} />
+        {/* 收起预览面板 */}
+        {onCollapse && (
+          <Tooltip title="收起预览 (⌘+\\)">
+            <Button
+              size="small"
+              type="text"
+              icon={<CloseOutlined />}
+              onClick={onCollapse}
+              aria-label="收起预览面板"
+            />
+          </Tooltip>
+        )}
         {/* Markdown 预览/源码切换 */}
         {fileType === "markdown" && (
           <Button

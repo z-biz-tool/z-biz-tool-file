@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Tree, Dropdown, message, Modal, Input } from "antd";
 import type { MenuProps, TreeDataNode } from "antd";
-import { FolderOutlined, FolderOpenOutlined, ReloadOutlined } from "@ant-design/icons";
+import { FolderOutlined, ReloadOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, type FileEntry } from "../stores/fileStore";
 import { EmptyState, LoadingState } from "../_shared";
@@ -53,16 +53,16 @@ export default function FileTree({ rootPath }: FileTreeProps) {
                 </span>
               </DragDropTarget>
             ),
-            icon: expandedKeys.includes(entry.path) ? <FolderOpenOutlined /> : <FolderOutlined />,
+            // 不显式设置 icon：让 Antd 根据展开/收起状态自动用 FolderOpenOutlined / FolderOutlined
             isLeaf: false,
-            children: undefined,
+            children: [], // 显式空数组：避免 undefined 导致的占位空行
           }));
       } catch (err) {
         console.error("加载目录失败:", err);
         return [];
       }
     },
-    [rootPath, expandedKeys, setFileList]
+    [rootPath, setFileList]
   );
 
   // 初始加载
