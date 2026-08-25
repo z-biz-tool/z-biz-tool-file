@@ -40,6 +40,8 @@ pub fn run() {
             commands::list_directory_with_hidden,
             commands::compress_to_zip,
             commands::extract_zip,
+            commands::extract_archive,
+            commands::is_archive_supported,
             commands::get_file_permissions,
             commands::open_with_default_app,
             commands::get_directory_size,

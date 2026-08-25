@@ -1,13 +1,10 @@
 import { useState, useCallback } from "react";
-import { Button, List, Badge, Tooltip, message, theme } from "antd";
+import { Button, List, Tooltip, message, theme } from "antd";
 import {
-  InboxOutlined,
   DeleteOutlined,
   CopyOutlined,
   SwapOutlined,
   ClearOutlined,
-  DownOutlined,
-  RightOutlined,
   FileOutlined,
   FolderOutlined,
 } from "@ant-design/icons";
@@ -25,7 +22,6 @@ interface DropStackProps {
 
 export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
   const [stack, setStack] = useState<StackItem[]>([]);
-  const [collapsed, setCollapsed] = useState(false);
   const [isOver, setIsOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const { token } = theme.useToken();
@@ -148,173 +144,166 @@ export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
 
   return (
     <div style={{ padding: "8px" }}>
-      {/* 标题栏 */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          fontWeight: 600,
-          fontSize: 13,
-          color: token.colorText,
-          cursor: "pointer",
-          userSelect: "none",
-        }}
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        {collapsed ? <RightOutlined /> : <DownOutlined />}
-        <InboxOutlined />
-        <span>暂存栈</span>
-        {stack.length > 0 && (
-          <Badge
-            count={stack.length}
+      {/* 标题由外层 CollapsiblePanel 渲染；这里只显示操作行（数量 + 清空） */}
+      {stack.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 6,
+            fontSize: 12,
+            color: token.colorTextSecondary,
+          }}
+        >
+          <span>共 {stack.length} 项</span>
+          <Button
             size="small"
-            style={{ marginLeft: 4 }}
+            type="text"
+            icon={<ClearOutlined />}
+            onClick={() => setStack([])}
+            aria-label="清空暂存栈"
+          >
+            清空
+          </Button>
+        </div>
+      )}
+
+      {/* 拖放区域 */}
+      <div
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        style={{
+          marginTop: 8,
+          minHeight: stack.length === 0 ? 60 : 0,
+          border: `1px dashed ${isOver ? token.colorPrimary : token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusSM,
+          background: isOver ? "rgba(22, 119, 255, 0.06)" : token.colorBgContainer,
+          transition: "all 0.15s",
+          display: "flex",
+          alignItems: stack.length === 0 ? "center" : "stretch",
+          justifyContent: "center",
+        }}
+      >
+        {stack.length === 0 ? (
+          <span
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: 12,
+              padding: "12px 0",
+            }}
+          >
+            拖拽文件到此处暂存
+          </span>
+        ) : (
+          <List
+            size="small"
+            split={false}
+            dataSource={stack}
+            style={{ width: "100%" }}
+            renderItem={(item) => (
+              <List.Item
+                style={{
+                  padding: "4px 8px",
+                  fontSize: 12,
+                }}
+                actions={[
+                  <Tooltip key="remove" title="移除">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      onClick={() => removeItem(item.path)}
+                      style={{ opacity: 0.4, transition: "opacity 0.2s" }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.opacity = "1";
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.opacity = "0.4";
+                      }}
+                    />
+                  </Tooltip>,
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={
+                    item.is_dir ? (
+                      <FolderOutlined style={{ color: "#faad14", fontSize: 13 }} />
+                    ) : (
+                      <FileOutlined style={{ color: "#8c8c8c", fontSize: 13 }} />
+                    )
+                  }
+                  title={
+                    <Tooltip title={item.path}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color: token.colorText,
+                          maxWidth: 160,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          display: "inline-block",
+                        }}
+                      >
+                        {item.name}
+                      </span>
+                    </Tooltip>
+                  }
+                  style={{ margin: 0 }}
+                />
+              </List.Item>
+            )}
           />
         )}
       </div>
 
-      {!collapsed && (
-        <>
-          {/* 拖放区域 */}
-          <div
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            style={{
-              marginTop: 8,
-              minHeight: stack.length === 0 ? 60 : 0,
-              border: `1px dashed ${isOver ? token.colorPrimary : token.colorBorderSecondary}`,
-              borderRadius: token.borderRadiusSM,
-              background: isOver
-                ? "rgba(22, 119, 255, 0.06)"
-                : token.colorBgContainer,
-              transition: "all 0.15s",
-              display: "flex",
-              alignItems: stack.length === 0 ? "center" : "stretch",
-              justifyContent: "center",
-            }}
-          >
-            {stack.length === 0 ? (
-              <span
-                style={{
-                  color: token.colorTextSecondary,
-                  fontSize: 12,
-                  padding: "12px 0",
-                }}
-              >
-                拖拽文件到此处暂存
-              </span>
-            ) : (
-              <List
-                size="small"
-                split={false}
-                dataSource={stack}
-                style={{ width: "100%" }}
-                renderItem={(item) => (
-                  <List.Item
-                    style={{
-                      padding: "4px 8px",
-                      fontSize: 12,
-                    }}
-                    actions={[
-                      <Tooltip key="remove" title="移除">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<DeleteOutlined />}
-                          onClick={() => removeItem(item.path)}
-                          style={{ opacity: 0.4, transition: "opacity 0.2s" }}
-                          onMouseEnter={(e) => {
-                            (e.currentTarget as HTMLElement).style.opacity = "1";
-                          }}
-                          onMouseLeave={(e) => {
-                            (e.currentTarget as HTMLElement).style.opacity = "0.4";
-                          }}
-                        />
-                      </Tooltip>,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      avatar={
-                        item.is_dir ? (
-                          <FolderOutlined style={{ color: "#faad14", fontSize: 13 }} />
-                        ) : (
-                          <FileOutlined style={{ color: "#8c8c8c", fontSize: 13 }} />
-                        )
-                      }
-                      title={
-                        <Tooltip title={item.path}>
-                          <span
-                            style={{
-                              fontSize: 12,
-                              color: token.colorText,
-                              maxWidth: 160,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              display: "inline-block",
-                            }}
-                          >
-                            {item.name}
-                          </span>
-                        </Tooltip>
-                      }
-                      style={{ margin: 0 }}
-                    />
-                  </List.Item>
-                )}
-              />
-            )}
-          </div>
-
-          {/* 操作按钮 */}
-          {stack.length > 0 && (
-            <div
-              style={{
-                marginTop: 8,
-                display: "flex",
-                gap: 4,
-                flexWrap: "wrap",
-              }}
+      {/* 操作按钮 */}
+      {stack.length > 0 && (
+        <div
+          style={{
+            marginTop: 8,
+            display: "flex",
+            gap: 4,
+            flexWrap: "wrap",
+          }}
+        >
+          <Tooltip title="复制所有暂存文件到当前目录">
+            <Button
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={copyToCurrent}
+              loading={loading}
+              style={{ fontSize: 11 }}
             >
-              <Tooltip title="复制所有暂存文件到当前目录">
-                <Button
-                  size="small"
-                  icon={<CopyOutlined />}
-                  onClick={copyToCurrent}
-                  loading={loading}
-                  style={{ fontSize: 11 }}
-                >
-                  复制到当前
-                </Button>
-              </Tooltip>
-              <Tooltip title="移动所有暂存文件到当前目录">
-                <Button
-                  size="small"
-                  icon={<SwapOutlined />}
-                  onClick={moveToCurrent}
-                  loading={loading}
-                  style={{ fontSize: 11 }}
-                >
-                  移动到当前
-                </Button>
-              </Tooltip>
-              <Tooltip title="清空暂存栈">
-                <Button
-                  size="small"
-                  icon={<ClearOutlined />}
-                  onClick={clearStack}
-                  danger
-                  style={{ fontSize: 11 }}
-                >
-                  清空
-                </Button>
-              </Tooltip>
-            </div>
-          )}
-        </>
+              复制到当前
+            </Button>
+          </Tooltip>
+          <Tooltip title="移动所有暂存文件到当前目录">
+            <Button
+              size="small"
+              icon={<SwapOutlined />}
+              onClick={moveToCurrent}
+              loading={loading}
+              style={{ fontSize: 11 }}
+            >
+              移动到当前
+            </Button>
+          </Tooltip>
+          <Tooltip title="清空暂存栈">
+            <Button
+              size="small"
+              icon={<ClearOutlined />}
+              onClick={clearStack}
+              danger
+              style={{ fontSize: 11 }}
+            >
+              清空
+            </Button>
+          </Tooltip>
+        </div>
       )}
     </div>
   );

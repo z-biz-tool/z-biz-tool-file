@@ -35,7 +35,9 @@ export default function PdfViewer({ filePath }: Props) {
   const [fallbackText, setFallbackText] = useState("");
   const [useIframe, setUseIframe] = useState(true);
 
-  const fileUrl = convertFileSrc(filePath);
+  // PDF.js 浏览器内置 viewer 的 view 参数：FitH = 横向适配 iframe 宽度，
+  // 这样无论预览区多宽，PDF 页面都会自动按比例占满，不再缩在一边。
+  const fileUrl = `${convertFileSrc(filePath)}#view=FitH`;
 
   useEffect(() => {
     setLoading(true);

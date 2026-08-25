@@ -172,6 +172,8 @@ function AppShellInner() {
   const [batchRenameOpen, setBatchRenameOpen] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  // 多选锚点：用于 Shift+Click 区间选择的起点（macOS Finder 行为）
+  const [selectionAnchor, setSelectionAnchor] = useState<React.Key | null>(null);
   const [dualPanelOpen, setDualPanelOpen] = useState(false);
   const [autoWatch, setAutoWatch] = useState(true);
   const [terminalVisible, setTerminalVisible] = useState(false);
@@ -378,6 +380,10 @@ function AppShellInner() {
     loadDirectory(path);
     // 同步更新 active tab 的 path
     if (activeTabId) updateActiveTabPath(path);
+    // 切目录：清掉旧目录的多选状态（macOS Finder 行为）
+    setSelectedRowKeys([]);
+    setSelectedFile(null);
+    setSelectionAnchor(null);
 
     setHistory((prev) => {
       if (isRoot) return [path];
@@ -484,14 +490,6 @@ function AppShellInner() {
       navigateTo(parentPath || "/");
     }
   }, [currentPath, navigateTo]);
-
-  // 文件/文件夹点击
-  const handleFileClick = useCallback((entry: FileEntry) => {
-    setSelectedFile(entry);
-    if (entry.is_dir) {
-      navigateTo(entry.path);
-    }
-  }, [setSelectedFile, navigateTo]);
 
   // 面包屑导航
   const buildBreadcrumbItems = useCallback((): BreadcrumbProps["items"] => {
@@ -630,12 +628,23 @@ function AppShellInner() {
     }
   }, [selectedRowKeys, selectedFile, currentPath, loadDirectory, message]);
 
-  // 解压
+  // 解压：按后缀自动选格式
   const handleExtract = useCallback(async (entry: FileEntry) => {
-    if (!entry.name.endsWith(".zip")) return;
-    const dirName = entry.name.replace(/\.zip$/i, "");
+    const lower = entry.name.toLowerCase();
+    let dirName = entry.name;
+    if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) dirName = entry.name.replace(/\.(tar\.gz|tgz)$/i, "");
+    else if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) dirName = entry.name.replace(/\.(tar\.bz2|tbz2)$/i, "");
+    else if (lower.endsWith(".tar.xz") || lower.endsWith(".txz")) dirName = entry.name.replace(/\.(tar\.xz|txz)$/i, "");
+    else if (lower.endsWith(".zip")) dirName = entry.name.replace(/\.zip$/i, "");
+    else if (lower.endsWith(".tar")) dirName = entry.name.replace(/\.tar$/i, "");
+    else if (lower.endsWith(".7z")) dirName = entry.name.replace(/\.7z$/i, "");
+    else if (lower.endsWith(".gz")) dirName = entry.name.replace(/\.gz$/i, "");
+    else {
+      message.error("暂不支持该压缩格式: " + entry.name);
+      return;
+    }
     try {
-      await invoke("extract_zip", { zipPath: entry.path, destDir: currentPath + "/" + dirName });
+      await invoke("extract_archive", { archivePath: entry.path, destDir: currentPath + "/" + dirName });
       message.success("解压成功: " + dirName);
       loadDirectory(currentPath);
     } catch (err) {
@@ -773,17 +782,30 @@ function AppShellInner() {
       },
     ];
 
-    // ZIP文件增加解压和浏览选项
-    if (record.name.endsWith(".zip")) {
-      items.splice(5, 0, {
-        key: "browse-zip",
-        label: "浏览压缩包",
-        icon: <FileZipOutlined />,
-        onClick: () => {
-          setZipBrowserPath(record.path);
-          setZipBrowserOpen(true);
-        },
-      }, {
+    // 压缩包：ZIP 提供浏览 + 解压；其他格式（tar/7z 等）只提供解压
+    const lowerName = record.name.toLowerCase();
+    const isZip = lowerName.endsWith(".zip");
+    const isArchive =
+      isZip ||
+      lowerName.endsWith(".tar") ||
+      lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz") ||
+      lowerName.endsWith(".tar.bz2") || lowerName.endsWith(".tbz2") ||
+      lowerName.endsWith(".tar.xz") || lowerName.endsWith(".txz") ||
+      lowerName.endsWith(".7z") ||
+      lowerName.endsWith(".gz");
+    if (isArchive) {
+      if (isZip) {
+        items.splice(5, 0, {
+          key: "browse-zip",
+          label: "浏览压缩包",
+          icon: <FileZipOutlined />,
+          onClick: () => {
+            setZipBrowserPath(record.path);
+            setZipBrowserOpen(true);
+          },
+        });
+      }
+      items.splice(isZip ? 6 : 5, 0, {
         key: "extract",
         label: "解压缩",
         icon: <FileZipOutlined />,
@@ -813,7 +835,8 @@ function AppShellInner() {
             draggable
             onDragStart={(e) => handleRowDragStart(e, record)}
             onDragEnd={handleRowDragEnd}
-            onClick={() => handleFileClick(record)}
+            // 单击选中、双击打开 —— 跟 macOS Finder 一致
+            // cell 上不放 onClick，避免和行级 onClick（handleRowClick）重复触发
             onDoubleClick={() => record.is_dir && navigateTo(record.path)}
             style={{
               cursor: "pointer",
@@ -899,13 +922,66 @@ function AppShellInner() {
       onHeaderCell: () => ({ "data-column-key": "modified" } as React.ThHTMLAttributes<HTMLTableHeaderCellElement>),
       render: (modified: number) => formatTime(modified),
     },
-  ], [selectedFile, handleRowDragStart, handleRowDragEnd, handleFileClick, navigateTo, columnWidths]);
+  ], [selectedFile, handleRowDragStart, handleRowDragEnd, navigateTo, columnWidths]);
 
   // 快速过滤后的 fileList（用于表格）
   const filteredFileList = useMemo(
     () => (quickFilter ? fuzzyFilter(quickFilter, fileList) : fileList),
     [quickFilter, fileList],
   );
+
+  // 行点击：macOS 原生选择行为
+  //   普通点击：清空选择，只选这一行
+  //   ⌘/Ctrl + 点击：toggle 这一行（多选）
+  //   Shift + 点击：从上一次 anchor 到这一行，区间选择
+  //   任何情况都把 selectedFile 更新到当前行（用于预览和单文件操作）
+  const handleRowClick = useCallback((e: React.MouseEvent, record: FileEntry) => {
+    setSelectedFile(record);
+
+    if (e.shiftKey && selectionAnchor) {
+      // 区间选择：anchor → current 之间的所有行
+      const startIdx = filteredFileList.findIndex((f) => f.path === selectionAnchor);
+      const endIdx = filteredFileList.findIndex((f) => f.path === record.path);
+      if (startIdx >= 0 && endIdx >= 0) {
+        const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        const range = filteredFileList.slice(from, to + 1).map((f) => f.path);
+        setSelectedRowKeys(range);
+      } else {
+        // anchor 不在当前列表里（切过目录 / 搜索过滤掉了），退化到单选
+        setSelectedRowKeys([record.path]);
+      }
+    } else if (e.metaKey || e.ctrlKey) {
+      // toggle
+      setSelectedRowKeys((prev) =>
+        prev.includes(record.path)
+          ? prev.filter((k) => k !== record.path)
+          : [...prev, record.path]
+      );
+    } else {
+      // 单选
+      setSelectedRowKeys([record.path]);
+    }
+    setSelectionAnchor(record.path);
+  }, [filteredFileList, selectionAnchor]);
+
+  // Virtual Table 要求 scroll.x 必须是数字（"max-content" 会被当作 1px → 行选择列脱位）。
+  // 用所有列宽之和 + 安全余量做兜底，让 body 容器有足够空间放下三列数据（行选择列已去掉）。
+  const tableScrollX = useMemo(() => {
+    const nameCol = 400; // "名称"列没显式 width，按 flex 处理，给个合理下限
+    const sizeCol = columnWidths["size"] ?? 100;
+    const modCol = columnWidths["modified"] ?? 180;
+    return nameCol + sizeCol + modCol;
+  }, [columnWidths]);
+
+  // Virtual Table 也要求 scroll.y 是数字。监听 window 高度变化，给一个合理高度。
+  const [tableScrollY, setTableScrollY] = useState(() =>
+    typeof window === "undefined" ? 500 : window.innerHeight - 240,
+  );
+  useEffect(() => {
+    const onResize = () => setTableScrollY(window.innerHeight - 240);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // 批量操作选中的文件
   const selectedFiles = selectedRowKeys.length > 0
@@ -964,7 +1040,7 @@ function AppShellInner() {
     newFileTemplateOpen, terminalVisible,
   ]));
 
-  // 侧栏：搜索栏 + 收藏夹 + 暂存栈 + 文件树
+  // 侧栏：搜索栏 + 收藏夹 + 暂存栈（文件树已移除，路径导航靠面包屑 + 中间列表 + 上级按钮 + 路径输入框）
   const sidebar = (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <CollapsiblePanel title="搜索" defaultExpanded={true}>
@@ -1339,23 +1415,19 @@ function AppShellInner() {
                       rowKey="path"
                       size="small"
                       pagination={false}
-                      scroll={{ y: "calc(100vh - 240px)", x: "max-content" }}
+                      scroll={{ y: tableScrollY, x: tableScrollX }}
                       virtual
-                      rowSelection={{
-                        selectedRowKeys,
-                        onChange: setSelectedRowKeys,
-                      }}
+                      // macOS 原生选择：
+                      //   点击：单选 ｜ ⌘+点击：toggle ｜ Shift+点击：区间
                       onRow={(record) => ({
-                        onClick: () => {
-                          setSelectedFile(record);
-                          if (!record.is_dir) {
-                            setSelectedRowKeys([record.path]);
-                          }
-                        },
+                        onClick: (e) => handleRowClick(e, record),
                         onDoubleClick: () => {
                           if (record.is_dir) navigateTo(record.path);
                         },
                       })}
+                      rowClassName={(record) =>
+                        selectedRowKeys.includes(record.path) ? "z-tool-row-selected" : ""
+                      }
                       locale={{
                         emptyText: "该文件夹为空",
                       }}
@@ -1430,7 +1502,7 @@ function AppShellInner() {
               )}
             </div>
           </DragDropTarget>
-          {previewVisible && (
+          {previewVisible && viewMode !== "column" && (
             <>
               {/* 预览区分隔条：拖拽改变预览宽度 */}
               <div

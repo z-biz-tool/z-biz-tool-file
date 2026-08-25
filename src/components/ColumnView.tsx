@@ -1,11 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Tabs, theme } from "antd";
+import { useState, useEffect, useRef } from "react";
+import { Tabs, theme, Button, Tooltip } from "antd";
 import {
   FolderOutlined,
   FileOutlined,
   FileImageOutlined,
   InfoCircleOutlined,
   EyeOutlined,
+  EditOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
@@ -20,9 +22,7 @@ interface ColumnViewProps {
   showHidden: boolean;
 }
 
-interface ColumnData {
-  path: string;
-  name: string;
+interface CacheEntry {
   entries: FileEntry[];
   loading: boolean;
 }
@@ -50,6 +50,15 @@ function isImageFile(name: string): boolean {
   return ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico", "tiff", "tif"].includes(ext);
 }
 
+/** 排序：文件夹优先 + 中文/英文混合 localeCompare */
+function sortEntries(list: FileEntry[]): FileEntry[] {
+  return list.slice().sort((a, b) => {
+    if (a.is_dir && !b.is_dir) return -1;
+    if (!a.is_dir && b.is_dir) return 1;
+    return a.name.localeCompare(b.name, "zh-CN");
+  });
+}
+
 export default function ColumnView({
   currentPath,
   onNavigate,
@@ -59,7 +68,59 @@ export default function ColumnView({
 }: ColumnViewProps) {
   const { token } = theme.useToken();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [columns, setColumns] = useState<ColumnData[]>([]);
+
+  // 图片编辑状态：提到 ColumnView 是为了把"编辑"按钮放到 tab 栏右侧
+  const [editingImage, setEditingImage] = useState(false);
+  // 当前激活的 tab（"info" / "content"）
+  const [activeTab, setActiveTab] = useState<string>("info");
+  // 选中文件变化时重置编辑态 + 切回基本信息 tab
+  useEffect(() => {
+    setEditingImage(false);
+    setActiveTab("info");
+  }, [selectedFile?.path]);
+
+  // 预览区宽度：可拖动调宽，记忆到 localStorage（跟目录列宽一致的做法）
+  const [previewWidth, setPreviewWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return 320;
+    const v = Number(localStorage.getItem("z-tool-colview-preview-width"));
+    return Number.isFinite(v) && v >= 240 && v <= 1200 ? v : 320;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("z-tool-colview-preview-width", String(previewWidth));
+    } catch { /* ignore */ }
+  }, [previewWidth]);
+
+  // 预览区拖动：mousedown 时记 startWidth + startX，mousemove 算 delta（不存 ref 状态）
+  const previewDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = previewWidth;
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = startX - ev.clientX; // 往左拖 = 预览变宽
+      const newWidth = Math.max(240, Math.min(1200, startWidth + delta));
+      setPreviewWidth(newWidth);
+    };
+    const onUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  // ——— 路径缓存：key = `${path}::${showHidden ? 1 : 0}`
+  // 切到深目录时只发"未缓存"路径的请求；回退/切兄弟时直接复用缓存 ———
+  const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
+  const inFlightRef = useRef<Set<string>>(new Set());
+  const [cacheVersion, setCacheVersion] = useState(0); // 触发重渲染
+  const cacheKey = (p: string, hidden: boolean) => `${p}::${hidden ? 1 : 0}`;
 
   // ——— 列宽：每列独立可调，默认 200，记忆到 localStorage ———
   const [colWidths, setColWidths] = useState<number[]>(() => {
@@ -71,128 +132,102 @@ export default function ColumnView({
       return [];
     }
   });
-  const [previewWidth, setPreviewWidth] = useState<number>(() => {
-    if (typeof window === "undefined") return 320;
-    const v = Number(localStorage.getItem("z-tool-colview-preview-width"));
-    return Number.isFinite(v) && v >= 240 && v <= 800 ? v : 320;
-  });
+  // 预览区现在用 flex: 1 自动填满右侧剩余空间，不再需要手动宽度状态
 
   useEffect(() => {
     try {
       localStorage.setItem("z-tool-colview-col-widths", JSON.stringify(colWidths));
     } catch { /* ignore */ }
   }, [colWidths]);
-  useEffect(() => {
-    try {
-      localStorage.setItem("z-tool-colview-preview-width", String(previewWidth));
-    } catch { /* ignore */ }
-  }, [previewWidth]);
 
-  // ——— 列宽拖动：拖动条拖到左侧列上，调该列宽 ———
-  // 用 ref 记录 baseline 防止 React 重渲染中断拖拽
-  const widthBaselineRef = useRef<{ index: number; startWidth: number; startX: number; isPreview: boolean } | null>(null);
-  const setColWidth = useCallback((index: number, delta: number) => {
-    if (delta === 0) return;
-    setColWidths((prev) => {
-      const next = [...prev];
-      const baseline = widthBaselineRef.current?.startWidth ?? prev[index] ?? 200;
-      const newVal = Math.max(120, baseline + delta);
-      widthBaselineRef.current && (widthBaselineRef.current.startWidth = newVal);
-      next[index] = newVal;
-      return next;
-    });
-  }, []);
-
+  // ——— 列宽拖动：mousedown 时记下 startWidth + startX，每次 mousemove 从头算 ———
+  // 不用 ref 中间态，React 18 批处理时不会读到过期值，列宽始终跟着鼠标。
   const onResizeStart = (
     e: React.MouseEvent,
-    target: { index?: number; isPreview: boolean },
+    index: number,
   ) => {
     e.preventDefault();
     e.stopPropagation();
-    const startWidth = target.isPreview
-      ? previewWidth
-      : colWidths[target.index!] ?? 200;
-    widthBaselineRef.current = {
-      index: target.index ?? -1,
-      isPreview: target.isPreview,
-      startWidth,
-      startX: e.clientX,
-    };
     const startX = e.clientX;
+    const startWidth = colWidths[index] ?? 200;
+
     const onMove = (ev: MouseEvent) => {
-      if (!widthBaselineRef.current) return;
       const delta = ev.clientX - startX;
-      if (target.isPreview) {
-        setPreviewWidth((prev) => {
-          const base = widthBaselineRef.current?.startWidth ?? prev;
-          const nv = Math.max(240, Math.min(800, base + delta));
-          if (widthBaselineRef.current) widthBaselineRef.current.startWidth = nv;
-          return nv;
-        });
-      } else {
-        setColWidth(target.index!, delta);
-      }
+      const newWidth = Math.max(60, startWidth + delta); // 最小 60px，更灵活
+      setColWidths((prev) => {
+        const next = [...prev];
+        next[index] = newWidth;
+        return next;
+      });
     };
     const onUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
-      widthBaselineRef.current = null;
     };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   };
 
   const segments = splitPathToSegments(currentPath);
+  const lastSegmentKey = segments[segments.length - 1]?.path ?? "";
 
-  /** 当路径或 showHidden 变化时，重建列并加载内容 */
+  /** 增量加载：只对缓存缺失的路径发请求 */
   useEffect(() => {
-    const newColumns: ColumnData[] = segments.map((seg) => ({
-      path: seg.path,
-      name: seg.name,
-      entries: [],
-      loading: false,
-    }));
-    setColumns(newColumns);
+    const cache = cacheRef.current;
+    const inflight = inFlightRef.current;
 
-    // 加载每一列
-    segments.forEach((seg, idx) => {
+    // 找出当前路径链上还没缓存的路径（保持顺序：父在前）
+    const toFetch: string[] = [];
+    for (const seg of segments) {
+      const k = cacheKey(seg.path, showHidden);
+      if (!cache.has(k) && !inflight.has(k)) {
+        toFetch.push(seg.path);
+      }
+    }
+    if (toFetch.length === 0) return;
+
+    // 立刻把"加载中"状态写入缓存，避免空白闪烁
+    toFetch.forEach((p) => {
+      const k = cacheKey(p, showHidden);
+      inflight.add(k);
+      cache.set(k, { entries: [], loading: true });
+    });
+    setCacheVersion((v) => v + 1);
+
+    // 并行拉取
+    toFetch.forEach((p) => {
+      const k = cacheKey(p, showHidden);
       const cmd = showHidden ? "list_directory_with_hidden" : "list_directory";
-      const args = showHidden ? { path: seg.path, showHidden: true } : { path: seg.path };
+      const args = showHidden ? { path: p, showHidden: true } : { path: p };
 
       invoke(cmd, args)
         .then((entries: unknown) => {
-          const fileList = entries as FileEntry[];
-          fileList.sort((a, b) => {
-            if (a.is_dir && !b.is_dir) return -1;
-            if (!a.is_dir && b.is_dir) return 1;
-            return a.name.localeCompare(b.name, "zh-CN");
-          });
-          setColumns((prev) => {
-            const next = [...prev];
-            if (next[idx] && next[idx].path === seg.path) {
-              next[idx] = { ...next[idx], entries: fileList, loading: false };
-            }
-            return next;
+          cache.set(k, {
+            entries: sortEntries(entries as FileEntry[]),
+            loading: false,
           });
         })
         .catch(() => {
-          setColumns((prev) => {
-            const next = [...prev];
-            if (next[idx] && next[idx].path === seg.path) {
-              next[idx] = { ...next[idx], loading: false };
-            }
-            return next;
-          });
+          cache.set(k, { entries: [], loading: false });
+        })
+        .finally(() => {
+          inflight.delete(k);
+          setCacheVersion((v) => v + 1);
         });
     });
-  }, [currentPath, showHidden]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPath, showHidden, lastSegmentKey]);
 
   /** 自动滚动到最右侧列 */
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollLeft = containerRef.current.scrollWidth;
     }
-  }, [columns.length]);
+  }, [segments.length]);
 
   /** 点击文件夹：导航到该目录 */
   const handleFolderClick = (entry: FileEntry) => {
@@ -208,29 +243,38 @@ export default function ColumnView({
   const isSelected = (entry: FileEntry, colIndex: number): boolean => {
     if (entry.is_dir) {
       // 文件夹选中：下一列的路径是否匹配
-      const nextCol = columns[colIndex + 1];
-      return nextCol?.path === entry.path;
+      const nextSeg = segments[colIndex + 1];
+      return nextSeg?.path === entry.path;
     }
     // 文件选中：是否为当前选中的文件
     return selectedFile?.path === entry.path;
   };
 
+  // 引用 cacheVersion 让 TS 知道它参与了渲染（实际读通过 ref）
+  void cacheVersion;
+
   return (
     <div
       ref={containerRef}
+      className="column-view-scroll"
       style={{
         display: "flex",
         height: "100%",
-        overflowX: "auto",
+        overflowX: "scroll",
         overflowY: "hidden",
         background: token.colorBgLayout,
       }}
     >
-      {columns.map((col, colIndex) => {
+      {segments.map((seg, colIndex) => {
         const colWidth = colWidths[colIndex] ?? 200;
+        const cacheEntry = cacheRef.current.get(cacheKey(seg.path, showHidden)) ?? {
+          entries: [],
+          loading: true,
+        };
+        const { entries, loading } = cacheEntry;
         return (
         <div
-          key={col.path + "-" + colIndex}
+          key={seg.path}
           style={{
             width: colWidth,
             minWidth: 120,
@@ -256,7 +300,7 @@ export default function ColumnView({
               flexShrink: 0,
             }}
           >
-            {col.name}
+            {seg.name}
           </div>
           {/* 文件列表 */}
           <div
@@ -266,7 +310,7 @@ export default function ColumnView({
               overflowX: "hidden",
             }}
           >
-            {col.loading && (
+            {loading && entries.length === 0 && (
               <div
                 style={{
                   padding: 12,
@@ -277,7 +321,7 @@ export default function ColumnView({
                 加载中...
               </div>
             )}
-            {!col.loading && col.entries.length === 0 && (
+            {!loading && entries.length === 0 && (
               <div
                 style={{
                   padding: 12,
@@ -288,7 +332,7 @@ export default function ColumnView({
                 空文件夹
               </div>
             )}
-            {col.entries.map((entry) => {
+            {entries.map((entry) => {
               const selected = isSelected(entry, colIndex);
               return (
                 <div
@@ -332,7 +376,7 @@ export default function ColumnView({
           </div>
           {/* 列宽拖动条（右边缘） */}
           <span
-            onMouseDown={(e) => onResizeStart(e, { index: colIndex, isPreview: false })}
+            onMouseDown={(e) => onResizeStart(e, colIndex)}
             style={{
               position: "absolute",
               right: 0,
@@ -344,18 +388,19 @@ export default function ColumnView({
               touchAction: "none",
               zIndex: 5,
             }}
-            aria-label={`调整 ${col.name} 列宽度`}
+            aria-label={`调整 ${seg.name} 列宽度`}
             title="拖动调整列宽"
           />
         </div>
         );
       })}
 
-      {/* 预览列：两个 tab — 基本信息 / 内容详情 */}
+      {/* 预览区：可拖动调宽（拖左边缘分隔条），作为 column 视图下唯一的预览面板 */}
       <div
         style={{
           width: previewWidth,
           minWidth: 240,
+          flexShrink: 0,
           position: "relative",
           display: "flex",
           flexDirection: "column",
@@ -363,12 +408,64 @@ export default function ColumnView({
           borderLeft: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
+        {/* 预览区左边缘拖拽条 */}
+        <span
+          onMouseDown={previewDragStart}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 6,
+            cursor: "col-resize",
+            userSelect: "none",
+            touchAction: "none",
+            zIndex: 5,
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLSpanElement).style.background =
+              "var(--ant-color-primary-bg, rgba(22, 119, 255, 0.12))";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLSpanElement).style.background = "transparent";
+          }}
+          aria-label="调整预览区宽度"
+          title="拖动调整宽度"
+        />
         {selectedFile ? (
           <Tabs
-            defaultActiveKey="info"
+            activeKey={activeTab}
+            onChange={setActiveTab}
             size="small"
             style={{ height: "100%", display: "flex", flexDirection: "column" }}
             tabBarStyle={{ margin: 0, padding: "0 12px" }}
+            tabBarExtraContent={
+              // tab 栏右侧：对当前文件的"小操作"按钮
+              // 图片在「内容详情」tab 时显示 编辑/返回 按钮
+              activeTab === "content" && isImageFile(selectedFile.name)
+                ? editingImage ? (
+                    <Tooltip title="退出编辑">
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<CloseOutlined />}
+                        onClick={() => setEditingImage(false)}
+                        aria-label="退出编辑"
+                      />
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="编辑图片">
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<EditOutlined />}
+                        onClick={() => setEditingImage(true)}
+                        aria-label="编辑图片"
+                      />
+                    </Tooltip>
+                  )
+                : null
+            }
             items={[
               {
                 key: "info",
@@ -388,7 +485,13 @@ export default function ColumnView({
                 ),
                 children: (
                   <div style={{ height: "100%" }}>
-                    <FileContentPreview file={selectedFile} showTopbar={false} />
+                    <FileContentPreview
+                      file={selectedFile}
+                      showTopbar={false}
+                      editingImage={editingImage}
+                      onEditImage={() => setEditingImage(true)}
+                      onExitEditImage={() => setEditingImage(false)}
+                    />
                   </div>
                 ),
               },
@@ -408,23 +511,6 @@ export default function ColumnView({
             选择文件以预览
           </div>
         )}
-        {/* 预览列宽拖动条（左边缘） */}
-        <span
-          onMouseDown={(e) => onResizeStart(e, { isPreview: true })}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 6,
-            cursor: "col-resize",
-            userSelect: "none",
-            touchAction: "none",
-            zIndex: 5,
-          }}
-          aria-label="调整预览列宽度"
-          title="拖动调整列宽"
-        />
       </div>
     </div>
   );

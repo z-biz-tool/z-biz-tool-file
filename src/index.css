@@ -38,6 +38,14 @@ body {
   background: #e6f4ff;
 }
 
+/* 表格多选行高亮（macOS Finder 风格：浅蓝底色） */
+.z-tool-row-selected td {
+  background: var(--ant-color-primary-bg, rgba(22, 119, 255, 0.08)) !important;
+}
+.z-tool-row-selected:hover td {
+  background: var(--ant-color-primary-bg-hover, rgba(22, 119, 255, 0.12)) !important;
+}
+
 /* 预览区 */
 .preview-container {
   display: flex;
@@ -45,6 +53,38 @@ body {
   justify-content: center;
   height: 100%;
   background: #fafafa;
+}
+
+/* 分栏视图横向滚动条：始终可见，thin + 半透明 */
+.column-view-scroll {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(0, 0, 0, 0.25) rgba(0, 0, 0, 0.04);
+}
+.column-view-scroll::-webkit-scrollbar {
+  height: 10px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.column-view-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 5px;
+}
+.column-view-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.column-view-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.45);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+.column-view-scroll::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .preview-image {

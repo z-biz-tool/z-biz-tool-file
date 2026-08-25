@@ -1,5 +1,5 @@
 import { List, Button, message, theme } from "antd";
-import { FolderOutlined, DeleteOutlined, StarOutlined, PlusOutlined } from "@ant-design/icons";
+import { FolderOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 import { DragDropTarget } from "./DragDropMove";
 
@@ -27,21 +27,7 @@ export default function Bookmarks({ onNavigate }: Props) {
 
   return (
     <div style={{ padding: "8px" }}>
-      <div
-        style={{
-          marginBottom: 8,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          fontWeight: 600,
-          fontSize: 13,
-          color: token.colorText,
-        }}
-      >
-        <StarOutlined />
-        <span>收藏夹</span>
-      </div>
-
+      {/* 标题由外层 CollapsiblePanel 渲染 */}
       <List
         size="small"
         split={false}
@@ -56,8 +42,7 @@ export default function Bookmarks({ onNavigate }: Props) {
                 borderRadius: token.borderRadiusSM,
               }}
               onMouseEnter={(e) => {
-                (e.currentTarget as HTMLDivElement).style.backgroundColor =
-                  token.colorBgTextHover;
+                (e.currentTarget as HTMLDivElement).style.backgroundColor = token.colorBgTextHover;
               }}
               onMouseLeave={(e) => {
                 (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent";
@@ -85,9 +70,7 @@ export default function Bookmarks({ onNavigate }: Props) {
             >
               <List.Item.Meta
                 avatar={<FolderOutlined style={{ color: token.colorTextSecondary }} />}
-                title={
-                  <span style={{ fontSize: 13, color: token.colorText }}>{item.name}</span>
-                }
+                title={<span style={{ fontSize: 13, color: token.colorText }}>{item.name}</span>}
                 style={{ margin: 0 }}
               />
             </List.Item>

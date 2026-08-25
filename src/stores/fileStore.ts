@@ -104,7 +104,7 @@ interface FileStore {
   removeTag: (path: string) => Promise<void>;
 }
 
-export const useFileStore = create<FileStore>((set, get) => ({
+export const useFileStore = create<FileStore>((set) => ({
   currentPath: "",
   fileList: [],
   selectedFile: null,
@@ -149,12 +149,8 @@ export const useFileStore = create<FileStore>((set, get) => ({
     }),
   setViewMode: (mode) => set({ viewMode: mode }),
   openTab: (path) => {
-    // 已有同路径 tab 就激活它
-    const existing = get().tabs.find((t) => t.path === path);
-    if (existing) {
-      set({ activeTabId: existing.id });
-      return existing.id;
-    }
+    // 始终创建新 tab，不去重。3 个调用点（挂载初始化 / ⌘+T / +按钮）
+    // 都期望真的新增，重复打开让用户自己决定要不要关。
     const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     set((s) => ({
       tabs: [...s.tabs, { id, path }],

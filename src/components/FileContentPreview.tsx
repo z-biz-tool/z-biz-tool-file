@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type CSSProperties } from "react";
 import { Empty, Tooltip, Button, Modal, Spin, App as AntdApp } from "antd";
 import {
   CopyOutlined,
@@ -35,6 +35,10 @@ interface FileContentPreviewProps {
   /** Markdown 切换"预览/源码"按钮组（只对 md 文件生效） */
   enableMdToggle?: boolean;
   onCollapse?: () => void;
+  /** 外部控制的图片编辑状态（用于把"编辑"按钮挪到 tab 栏） */
+  editingImage?: boolean;
+  onEditImage?: () => void;
+  onExitEditImage?: () => void;
 }
 
 interface ReadResult {
@@ -74,6 +78,9 @@ export default function FileContentPreview({
   showTopbar = true,
   enableMdToggle = false,
   onCollapse,
+  editingImage: editingImageProp,
+  onEditImage,
+  onExitEditImage,
 }: FileContentPreviewProps) {
   const { message: antdMessage } = AntdApp.useApp();
   const fileType = getFileType(file.name);
@@ -81,7 +88,17 @@ export default function FileContentPreview({
   const [error, setError] = useState("");
   const [textContent, setTextContent] = useState("");
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
-  const [editingImage, setEditingImage] = useState(false);
+  // 内部状态兜底：外部没传 editingImage 时用本地 state
+  const [editingImageLocal, setEditingImageLocal] = useState(false);
+  const editingImage = editingImageProp ?? editingImageLocal;
+  const setEditingImage = (v: boolean) => {
+    if (editingImageProp !== undefined) {
+      if (v) onEditImage?.();
+      else onExitEditImage?.();
+    } else {
+      setEditingImageLocal(v);
+    }
+  };
   const [showConverter, setShowConverter] = useState(false);
   const [mdPreviewMode, setMdPreviewMode] = useState(true);
   const [mdCopied, setMdCopied] = useState(false);
@@ -178,36 +195,6 @@ export default function FileContentPreview({
         invoke<ExifInfo | null>("read_exif", { path: file.path })
           .then(setExif)
           .catch(() => setExif(null));
-        if (editingImage) {
-          body = (
-            <ImageEditor
-              filePath={file.path}
-              fileName={file.name}
-              onBack={() => setEditingImage(false)}
-            />
-          );
-        } else {
-          body = (
-            <div style={{ position: "relative", height: "100%", background: "#000" }}>
-              <img
-                src={convertFileSrc(file.path)}
-                alt={file.name}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                }}
-              />
-              <Button
-                size="small"
-                onClick={() => setEditingImage(true)}
-                style={{ position: "absolute", top: 12, right: 12 }}
-              >
-                编辑
-              </Button>
-            </div>
-          );
-        }
         // 在图片下方显示 EXIF 信息
         const showExif = !!(
           exif &&
@@ -218,6 +205,27 @@ export default function FileContentPreview({
             exif.latitude !== undefined)
         );
         const exifInfo: ExifInfo | null = showExif ? exif : null;
+        // 图片渲染：自然尺寸 + 容器 overflow:auto，超出时出滚动条（不再用 objectFit 缩到看不见）
+        const renderImage = (extraStyle?: CSSProperties) => (
+          <div
+            style={{
+              position: "relative",
+              background: "#000",
+              overflow: "auto",
+              ...extraStyle,
+            }}
+          >
+            <img
+              src={convertFileSrc(file.path)}
+              alt={file.name}
+              style={{
+                display: "block",
+                maxWidth: "100%",
+                // 高度不限制，按原始尺寸显示；超出容器时由父 div 滚动
+              }}
+            />
+          </div>
+        );
         if (editingImage) {
           body = (
             <ImageEditor
@@ -229,48 +237,14 @@ export default function FileContentPreview({
         } else if (exifInfo) {
           body = (
             <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-              <div style={{ position: "relative", flex: 1, background: "#000", minHeight: 0 }}>
-                <img
-                  src={convertFileSrc(file.path)}
-                  alt={file.name}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                  }}
-                />
-                <Button
-                  size="small"
-                  onClick={() => setEditingImage(true)}
-                  style={{ position: "absolute", top: 12, right: 12 }}
-                >
-                  编辑
-                </Button>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                {renderImage({ height: "100%" })}
               </div>
               <ExifPanel exif={exifInfo} />
             </div>
           );
         } else {
-          body = (
-            <div style={{ position: "relative", height: "100%", background: "#000" }}>
-              <img
-                src={convertFileSrc(file.path)}
-                alt={file.name}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                }}
-              />
-              <Button
-                size="small"
-                onClick={() => setEditingImage(true)}
-                style={{ position: "absolute", top: 12, right: 12 }}
-              >
-                编辑
-              </Button>
-            </div>
-          );
+          body = renderImage({ height: "100%" });
         }
         break;
       }

@@ -881,6 +881,173 @@ pub fn extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ============================================================================
+// 多格式解压：zip / tar / tar.gz / tar.bz2 / tar.xz / gz / 7z
+// ============================================================================
+
+/// 检测压缩包格式（按扩展名，简单可靠）
+fn detect_archive_format(path: &Path) -> &'static str {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    // 注意：.tar.gz 等双扩展名要先匹配长后缀
+    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        "tar.gz"
+    } else if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") {
+        "tar.bz2"
+    } else if name.ends_with(".tar.xz") || name.ends_with(".txz") {
+        "tar.xz"
+    } else if name.ends_with(".zip") {
+        "zip"
+    } else if name.ends_with(".tar") {
+        "tar"
+    } else if name.ends_with(".7z") {
+        "7z"
+    } else if name.ends_with(".gz") {
+        "gz" // 单文件 gzip
+    } else {
+        "unknown"
+    }
+}
+
+/// 解压 tar（含 .tar / .tar.gz / .tar.bz2 / .tar.xz）
+fn extract_tar_impl(
+    src: &Path,
+    dest: &Path,
+    decompress: Option<DecompressAlgo>,
+) -> Result<(), String> {
+    let file = fs::File::open(src).map_err(|e| format!("打开文件失败: {}", e))?;
+    let reader: Box<dyn std::io::Read> = match decompress {
+        None => Box::new(file),
+        Some(DecompressAlgo::Gzip) => Box::new(flate2::read::GzDecoder::new(file)),
+        Some(DecompressAlgo::Bzip2) => Box::new(bzip2::read::BzDecoder::new(file)),
+        Some(DecompressAlgo::Xz) => Box::new(xz2::read::XzDecoder::new(file)),
+    };
+    let mut archive = tar::Archive::new(reader);
+    let canonical_dest = dest
+        .canonicalize()
+        .map_err(|e| format!("解析目标目录失败: {}", e))?;
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("读取 tar 条目失败: {}", e))?
+    {
+        let mut entry = entry.map_err(|e| format!("解析 tar 条目失败: {}", e))?;
+        let entry_path = entry
+            .path()
+            .map_err(|e| format!("条目路径无效: {}", e))?
+            .into_owned();
+        let out_path = dest.join(&entry_path);
+        // 安全检查（路径必须落在 dest 内）
+        if let Some(parent) = out_path.parent() {
+            if let Ok(cp) = parent.canonicalize() {
+                if !cp.starts_with(&canonical_dest) {
+                    return Err(format!(
+                        "安全错误：解压路径超出目标目录: {}",
+                        out_path.display()
+                    ));
+                }
+            } else {
+                // 父目录尚未存在，逐级向上检查，直到 dest
+                let mut cur = Some(parent.to_path_buf());
+                while let Some(p) = cur {
+                    if p == dest {
+                        break;
+                    }
+                    if p.exists() {
+                        if let Ok(cp) = p.canonicalize() {
+                            if !cp.starts_with(&canonical_dest) {
+                                return Err(format!(
+                                    "安全错误：解压路径超出目标目录: {}",
+                                    out_path.display()
+                                ));
+                            }
+                        }
+                        break;
+                    }
+                    cur = p.parent().map(|x| x.to_path_buf());
+                }
+            }
+        }
+        if entry_path.to_string_lossy().ends_with('/') || entry.header().entry_type().is_dir() {
+            fs::create_dir_all(&out_path).map_err(|e| format!("创建目录失败: {}", e))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
+            }
+            entry
+                .unpack(&out_path)
+                .map_err(|e| format!("解压文件失败: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum DecompressAlgo {
+    Gzip,
+    Bzip2,
+    Xz,
+}
+
+/// 解压单文件 .gz
+fn extract_gz_impl(src: &Path, dest: &Path) -> Result<(), String> {
+    let file = fs::File::open(src).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut decoder = flate2::read::GzDecoder::new(file);
+    // 输出文件名：去掉 .gz 后缀
+    let file_name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "无法获取文件名".to_string())?;
+    let out_name = file_name.trim_end_matches(".gz");
+    let out_path = dest.join(out_name);
+    let mut out_file = fs::File::create(&out_path).map_err(|e| format!("创建文件失败: {}", e))?;
+    std::io::copy(&mut decoder, &mut out_file).map_err(|e| format!("解压失败: {}", e))?;
+    Ok(())
+}
+
+/// 解压 7z（用 sevenz-rust 0.6 的高层 API：默认 extractor 已含防 zip-slip 等安全处理）
+fn extract_7z_impl(src: &Path, dest: &Path) -> Result<(), String> {
+    let file = fs::File::open(src).map_err(|e| format!("打开 7z 文件失败: {}", e))?;
+    sevenz_rust::decompress(file, dest).map_err(|e| format!("解压 7z 失败: {}", e))
+}
+
+/// 通用解压：按扩展名自动选择格式
+#[tauri::command]
+pub fn extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
+    let src = Path::new(archive_path);
+    if !src.exists() {
+        return Err(format!("压缩包不存在: {}", archive_path));
+    }
+    let dest = Path::new(dest_dir);
+    fs::create_dir_all(dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
+
+    match detect_archive_format(src) {
+        "zip" => extract_zip(archive_path, dest_dir),
+        "tar" => extract_tar_impl(src, dest, None),
+        "tar.gz" => extract_tar_impl(src, dest, Some(DecompressAlgo::Gzip)),
+        "tar.bz2" => extract_tar_impl(src, dest, Some(DecompressAlgo::Bzip2)),
+        "tar.xz" => extract_tar_impl(src, dest, Some(DecompressAlgo::Xz)),
+        "gz" => extract_gz_impl(src, dest),
+        "7z" => extract_7z_impl(src, dest),
+        other => Err(format!(
+            "暂不支持的压缩格式: {}（仅支持 zip / tar / tar.gz / tar.bz2 / tar.xz / gz / 7z）",
+            other
+        )),
+    }
+}
+
+/// 判断文件是否支持解压（前端用来显示"解压"菜单项）
+#[tauri::command]
+pub fn is_archive_supported(archive_path: &str) -> bool {
+    let p = Path::new(archive_path);
+    matches!(
+        detect_archive_format(p),
+        "zip" | "tar" | "tar.gz" | "tar.bz2" | "tar.xz" | "gz" | "7z"
+    )
+}
+
 /// 文件权限信息
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FilePermissions {
