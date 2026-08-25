@@ -63,6 +63,8 @@ interface FileStore {
   // 多标签页
   tabs: Array<{ id: string; path: string }>;
   activeTabId: string | null;
+  // 文件标签/备注（path → tag）
+  tagsByPath: Record<string, { color: string; label: string; note: string }>;
   // 设置当前路径
   setCurrentPath: (path: string) => void;
   // 设置文件列表
@@ -96,6 +98,10 @@ interface FileStore {
   closeTab: (id: string) => void;
   switchTab: (id: string) => void;
   updateActiveTabPath: (path: string) => void;
+  // 标签操作
+  loadAllTags: () => Promise<void>;
+  setTag: (path: string, tag: { color: string; label: string; note: string }) => Promise<void>;
+  removeTag: (path: string) => Promise<void>;
 }
 
 export const useFileStore = create<FileStore>((set, get) => ({
@@ -113,6 +119,7 @@ export const useFileStore = create<FileStore>((set, get) => ({
   viewMode: "table" as const,
   tabs: [] as Array<{ id: string; path: string }>,
   activeTabId: null,
+  tagsByPath: {} as Record<string, { color: string; label: string; note: string }>,
 
   setCurrentPath: (path) => set({ currentPath: path }),
   setFileList: (list) => set({ fileList: list }),
@@ -199,6 +206,36 @@ export const useFileStore = create<FileStore>((set, get) => ({
       return {
         tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, path } : t)),
       };
+    });
+  },
+  loadAllTags: async () => {
+    // 动态 import 避免循环依赖
+    const { invoke } = await import("@tauri-apps/api/core");
+    const all = await invoke<Record<string, { color: string; label: string; note: string }>>(
+      "get_all_tags"
+    );
+    set({ tagsByPath: all });
+  },
+  setTag: async (path, tag) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("set_file_tag", { filePath: path, tag });
+    set((s) => {
+      const next = { ...s.tagsByPath };
+      if (!tag.color && !tag.label && !tag.note) {
+        delete next[path];
+      } else {
+        next[path] = tag;
+      }
+      return { tagsByPath: next };
+    });
+  },
+  removeTag: async (path) => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_file_tag", { filePath: path });
+    set((s) => {
+      const next = { ...s.tagsByPath };
+      delete next[path];
+      return { tagsByPath: next };
     });
   },
 }));

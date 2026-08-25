@@ -8,6 +8,11 @@ mod watcher;
 mod llm_config;
 mod trash;
 mod ai;
+mod office;
+mod sftp;
+mod tags;
+mod image_exif;
+mod video_thumb;
 
 use watcher::WatcherState;
 
@@ -69,8 +74,21 @@ pub fn run() {
             trash::get_trash_size,
             trash::get_trash_path,
             commands::delete_to_trash,
+            commands::analyze_storage,
+            commands::run_shell_command,
             ai::ai_summarize_file,
             ai::ai_chat,
+            office::convert_office_to_pdf,
+            office::cleanup_office_cache,
+            office::get_office_status,
+            sftp::ssh_test_connection,
+            sftp::ssh_list_dir,
+            sftp::ssh_read_file,
+            tags::get_all_tags,
+            tags::set_file_tag,
+            tags::delete_file_tag,
+            image_exif::read_exif,
+            video_thumb::get_video_thumbnail,
             image_utils::export_image,
             image_utils::resize_image,
             image_utils::rotate_image,

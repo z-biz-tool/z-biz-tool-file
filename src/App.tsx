@@ -36,6 +36,9 @@ import {
   FileTextOutlined,
   ClearOutlined,
   SettingOutlined,
+  CloudServerOutlined,
+  ThunderboltOutlined,
+  PieChartOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -60,6 +63,10 @@ import WorkspaceManager, { type Workspace } from "./components/WorkspaceManager"
 import SettingsModal from "./components/SettingsModal";
 import TrashModal from "./components/TrashModal";
 import TabsBar from "./components/TabsBar";
+import SftpModal from "./components/SftpModal";
+import StorageAnalyzerModal from "./components/StorageAnalyzerModal";
+import TagEditModal, { getTagColor } from "./components/TagEditModal";
+import QuickActionsModal from "./components/QuickActionsModal";
 import GitStatus from "./components/GitStatus";
 import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
@@ -176,6 +183,10 @@ function AppShellInner() {
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [sftpOpen, setSftpOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
+  const [tagEditOpen, setTagEditOpen] = useState(false);
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   // 当前目录的快速过滤（subsequence 模糊匹配）
   const [quickFilter, setQuickFilter] = useState("");
   const [siderCollapsed, setSiderCollapsed] = useState<boolean>(() => {
@@ -282,13 +293,20 @@ function AppShellInner() {
     setShowHidden, setViewMode,
     setClipboard, clearClipboard,
     tabs, activeTabId,
+    tagsByPath,
     openTab, closeTab, updateActiveTabPath,
+    loadAllTags,
   } = useFileStore();
 
   // 记忆侧栏折叠状态
   useEffect(() => {
     localStorage.setItem("z-tool-sider-collapsed", siderCollapsed ? "1" : "0");
   }, [siderCollapsed]);
+
+  // 启动时加载所有标签
+  useEffect(() => {
+    loadAllTags().catch((err) => console.error("加载标签失败:", err));
+  }, [loadAllTags]);
 
   // 记忆预览区状态
   useEffect(() => {
@@ -737,10 +755,11 @@ function AppShellInner() {
       },
       {
         key: "tags",
-        label: "标签",
+        label: tagsByPath[record.path] ? "编辑标签/备注" : "加标签/备注",
         icon: <TagOutlined />,
         onClick: () => {
           setSelectedFile(record);
+          setTagEditOpen(true);
         },
       },
       {
@@ -787,6 +806,8 @@ function AppShellInner() {
       onHeaderCell: () => ({ "data-column-key": "name" } as React.ThHTMLAttributes<HTMLTableHeaderCellElement>),
       render: (text: string, record: FileEntry) => {
         const visual = getFileTypeVisual(record.name, record.is_dir);
+        const tag = tagsByPath[record.path];
+        const tagColor = tag?.color ? getTagColor(tag.color) : undefined;
         return (
           <div
             draggable
@@ -800,8 +821,23 @@ function AppShellInner() {
               alignItems: "center",
               gap: 6,
             }}
-            title={`${visual.label} · 拖拽以移动到其他目录；双击打开文件夹`}
+            title={`${visual.label}${tag?.label ? ` · 🏷 ${tag.label}` : ""}${tag?.note ? ` · 📝 ${tag.note}` : ""} · 拖拽以移动到其他目录；双击打开文件夹`}
           >
+            {/* 标签色块（用户自定义的，优先级高于类型色条） */}
+            {tagColor && (
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-block",
+                  width: 4,
+                  height: 16,
+                  borderRadius: 2,
+                  background: tagColor,
+                  marginRight: 2,
+                  flexShrink: 0,
+                }}
+              />
+            )}
             {/* 左侧类型色条（macOS Finder 风格） */}
             <span
               aria-hidden
@@ -826,6 +862,21 @@ function AppShellInner() {
             >
               {text}
             </span>
+            {tag?.label && (
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: "0 6px",
+                  borderRadius: 8,
+                  background: tagColor || "#1677ff",
+                  color: "#fff",
+                  fontWeight: 500,
+                  flexShrink: 0,
+                }}
+              >
+                {tag.label}
+              </span>
+            )}
           </div>
         );
       },
@@ -1108,6 +1159,30 @@ function AppShellInner() {
               aria-label="打开设置"
             />
           </Tooltip>
+          <Tooltip title="SSH / SFTP 远程浏览">
+            <Button
+              size="small"
+              icon={<CloudServerOutlined />}
+              onClick={() => setSftpOpen(true)}
+              aria-label="打开 SSH / SFTP"
+            />
+          </Tooltip>
+          <Tooltip title="存储分析（磁盘占用）">
+            <Button
+              size="small"
+              icon={<PieChartOutlined />}
+              onClick={() => setStorageOpen(true)}
+              aria-label="打开存储分析"
+            />
+          </Tooltip>
+          <Tooltip title="快速操作（脚本/Quick Actions）">
+            <Button
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => setQuickActionsOpen(true)}
+              aria-label="打开快速操作"
+            />
+          </Tooltip>
           <Tooltip title="回收站（已删除的文件）">
             <Button
               size="small"
@@ -1264,7 +1339,8 @@ function AppShellInner() {
                       rowKey="path"
                       size="small"
                       pagination={false}
-                      scroll={{ y: "calc(100vh - 240px)" }}
+                      scroll={{ y: "calc(100vh - 240px)", x: "max-content" }}
+                      virtual
                       rowSelection={{
                         selectedRowKeys,
                         onChange: setSelectedRowKeys,
@@ -1525,6 +1601,25 @@ function AppShellInner() {
         open={trashOpen}
         onClose={() => setTrashOpen(false)}
         onRestored={() => loadDirectory(currentPath)}
+      />
+      <SftpModal
+        open={sftpOpen}
+        onClose={() => setSftpOpen(false)}
+      />
+      <StorageAnalyzerModal
+        open={storageOpen}
+        onClose={() => setStorageOpen(false)}
+        initialPath={currentPath || "/Users/zifang"}
+      />
+      <TagEditModal
+        open={tagEditOpen}
+        onClose={() => setTagEditOpen(false)}
+        filePath={selectedFile?.path ?? ""}
+        fileName={selectedFile?.name ?? ""}
+      />
+      <QuickActionsModal
+        open={quickActionsOpen}
+        onClose={() => setQuickActionsOpen(false)}
       />
 
       {/* 传输队列 */}

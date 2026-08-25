@@ -7,12 +7,14 @@ import {
   CodeOutlined,
   CloseOutlined,
   RobotOutlined,
+  CameraOutlined,
 } from "@ant-design/icons";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getFileType, formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
 import { LoadingState, ErrorState, EmptyState } from "../_shared";
 import EpubReader from "./EpubReader";
 import PdfViewer from "./PdfViewer";
+import OfficePreview from "./OfficePreview";
 import AudioPlayer from "./AudioPlayer";
 import VideoPlayer from "./VideoPlayer";
 import ImageEditor from "./ImageEditor";
@@ -47,6 +49,22 @@ interface FileInfo {
   is_dir: boolean;
 }
 
+interface ExifInfo {
+  make?: string;
+  model?: string;
+  date_time?: string;
+  exposure_time?: string;
+  f_number?: string;
+  iso?: string;
+  focal_length?: string;
+  pixel_x_dimension?: number;
+  pixel_y_dimension?: number;
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
+  lens_model?: string;
+}
+
 /**
  * 文件内容预览的统一入口：按 fileType 分发到对应的专用组件。
  * 原来散落在 PreviewPane.tsx 里的"按类型分支"逻辑全部抽到这里。
@@ -72,12 +90,15 @@ export default function FileContentPreview({
   const [aiSummary, setAiSummary] = useState("");
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [aiSummaryElapsed, setAiSummaryElapsed] = useState(0);
+  // EXIF
+  const [exif, setExif] = useState<ExifInfo | null>(null);
 
   // 加载文本内容 + 文件信息
   useEffect(() => {
     setError("");
     setTextContent("");
     setFileInfo(null);
+    setExif(null);
     if (file.is_dir) {
       setLoading(false);
       return;
@@ -153,6 +174,10 @@ export default function FileContentPreview({
   } else {
     switch (fileType) {
       case "image": {
+        // 异步加载 EXIF（仅 JPEG/TIFF 有意义，HEIC/WebP 等可能没数据）
+        invoke<ExifInfo | null>("read_exif", { path: file.path })
+          .then(setExif)
+          .catch(() => setExif(null));
         if (editingImage) {
           body = (
             <ImageEditor
@@ -160,6 +185,70 @@ export default function FileContentPreview({
               fileName={file.name}
               onBack={() => setEditingImage(false)}
             />
+          );
+        } else {
+          body = (
+            <div style={{ position: "relative", height: "100%", background: "#000" }}>
+              <img
+                src={convertFileSrc(file.path)}
+                alt={file.name}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                }}
+              />
+              <Button
+                size="small"
+                onClick={() => setEditingImage(true)}
+                style={{ position: "absolute", top: 12, right: 12 }}
+              >
+                编辑
+              </Button>
+            </div>
+          );
+        }
+        // 在图片下方显示 EXIF 信息
+        const showExif = !!(
+          exif &&
+          (exif.make ||
+            exif.model ||
+            exif.date_time ||
+            exif.iso ||
+            exif.latitude !== undefined)
+        );
+        const exifInfo: ExifInfo | null = showExif ? exif : null;
+        if (editingImage) {
+          body = (
+            <ImageEditor
+              filePath={file.path}
+              fileName={file.name}
+              onBack={() => setEditingImage(false)}
+            />
+          );
+        } else if (exifInfo) {
+          body = (
+            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div style={{ position: "relative", flex: 1, background: "#000", minHeight: 0 }}>
+                <img
+                  src={convertFileSrc(file.path)}
+                  alt={file.name}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                  }}
+                />
+                <Button
+                  size="small"
+                  onClick={() => setEditingImage(true)}
+                  style={{ position: "absolute", top: 12, right: 12 }}
+                >
+                  编辑
+                </Button>
+              </div>
+              <ExifPanel exif={exifInfo} />
+            </div>
           );
         } else {
           body = (
@@ -253,10 +342,7 @@ export default function FileContentPreview({
         break;
       case "doc":
         body = (
-          <EmptyState
-            title="Office 文档预览"
-            description="需要 LibreOffice 或其他工具转换"
-          />
+          <OfficePreview filePath={file.path} fileName={file.name} />
         );
         break;
       default:
@@ -397,6 +483,57 @@ export default function FileContentPreview({
           </>
         )}
       </Modal>
+    </div>
+  );
+}
+
+function ExifPanel({ exif }: { exif: ExifInfo }) {
+  const items: Array<[string, string]> = [];
+  if (exif.make || exif.model) {
+    items.push(["相机", `${exif.make ?? ""} ${exif.model ?? ""}`.trim()]);
+  }
+  if (exif.lens_model) items.push(["镜头", exif.lens_model]);
+  if (exif.date_time) items.push(["拍摄时间", exif.date_time]);
+  if (exif.focal_length) items.push(["焦距", exif.focal_length]);
+  if (exif.f_number) items.push(["光圈", exif.f_number]);
+  if (exif.exposure_time) items.push(["快门", exif.exposure_time]);
+  if (exif.iso) items.push(["ISO", exif.iso]);
+  if (exif.pixel_x_dimension && exif.pixel_y_dimension) {
+    items.push(["尺寸", `${exif.pixel_x_dimension} × ${exif.pixel_y_dimension}`]);
+  }
+  if (exif.latitude !== undefined && exif.longitude !== undefined) {
+    items.push([
+      "GPS",
+      `${exif.latitude.toFixed(6)}, ${exif.longitude.toFixed(6)}`,
+    ]);
+  }
+  if (exif.altitude !== undefined) {
+    items.push(["海拔", `${exif.altitude.toFixed(1)}m`]);
+  }
+  if (items.length === 0) return null;
+  return (
+    <div
+      style={{
+        background: "var(--ant-color-bg-container)",
+        borderTop: "1px solid var(--ant-color-border-secondary)",
+        padding: "8px 12px",
+        fontSize: 12,
+        maxHeight: 160,
+        overflow: "auto",
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ marginBottom: 4, color: "var(--ant-color-text-tertiary)", fontSize: 11 }}>
+        <CameraOutlined style={{ marginRight: 4 }} />EXIF 元数据
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px" }}>
+        {items.map(([k, v]) => (
+          <div key={k} style={{ display: "contents" }}>
+            <span style={{ color: "var(--ant-color-text-tertiary)" }}>{k}</span>
+            <span style={{ fontFamily: "ui-monospace, monospace" }}>{v}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

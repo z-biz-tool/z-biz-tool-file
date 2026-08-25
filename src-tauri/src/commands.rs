@@ -5,6 +5,9 @@ use std::io::{Read as IoRead, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use walkdir::WalkDir;
+use std::collections::BinaryHeap;
+use std::cmp::Reverse;
+use std::process::Command as StdCommand;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use md5::Digest as Md5Digest;
@@ -402,6 +405,118 @@ pub fn delete_to_trash(
     path: String,
 ) -> Result<String, String> {
     crate::trash::move_to_trash(app, path)
+}
+
+/// 执行 shell 命令（用于"快速操作 / 脚本"功能）
+/// - `program`: 可执行文件（"rm", "chmod", "open" 等）
+/// - `args`: 参数列表（用 {path} 占位符会被替换为传入的 file path）
+/// 返回 stdout / stderr
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellRunResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+#[tauri::command]
+pub fn run_shell_command(
+    program: String,
+    args: Vec<String>,
+    file_path: String,
+) -> Result<ShellRunResult, String> {
+    // 占位符替换：{path} → file_path
+    let resolved_args: Vec<String> = args
+        .into_iter()
+        .map(|a| a.replace("{path}", &file_path))
+        .collect();
+    let output = StdCommand::new(&program)
+        .args(&resolved_args)
+        .output()
+        .map_err(|e| format!("启动 {} 失败: {}", program, e))?;
+    Ok(ShellRunResult {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(-1),
+    })
+}
+
+/// 存储分析：扫描目录，统计大小，返回前 N 大子项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageTopItem {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub children: Vec<StorageTopItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StorageAnalysis {
+    pub total: u64,
+    pub file_count: u64,
+    pub top_items: Vec<StorageTopItem>,
+}
+
+/// 递归统计目录大小 + 收集 top N
+#[tauri::command]
+pub fn analyze_storage(
+    path: String,
+    depth: Option<usize>,
+    top_n: Option<usize>,
+) -> Result<StorageAnalysis, String> {
+    let root = Path::new(&path);
+    if !root.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+    let max_depth = depth.unwrap_or(2);
+    let top_n = top_n.unwrap_or(50);
+
+    // 收集 (size, item) 全部
+    let mut all: Vec<(u64, walkdir::DirEntry)> = Vec::new();
+    let mut total: u64 = 0;
+    let mut file_count: u64 = 0;
+    for entry in WalkDir::new(root)
+        .max_depth(max_depth)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let size = if meta.is_dir() { 0 } else { meta.len() };
+        if !meta.is_dir() {
+            total += size;
+            file_count += 1;
+        }
+        all.push((size, entry));
+    }
+
+    // 排序取前 N（按 size 降序）
+    all.sort_by(|a, b| b.0.cmp(&a.0));
+    let top_raw: Vec<(u64, walkdir::DirEntry)> = all.into_iter().take(top_n).collect();
+
+    fn build_item(entry: &walkdir::DirEntry, size: u64) -> StorageTopItem {
+        StorageTopItem {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: entry.path().to_string_lossy().to_string(),
+            size,
+            is_dir: entry.file_type().is_dir(),
+            children: vec![],
+        }
+    }
+
+    let top_items: Vec<StorageTopItem> = top_raw
+        .iter()
+        .map(|(s, e)| build_item(e, *s))
+        .collect();
+
+    Ok(StorageAnalysis {
+        total,
+        file_count,
+        top_items,
+    })
 }
 
 /// 永久删除文件（不进回收站）

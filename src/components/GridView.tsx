@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Spin, theme } from "antd";
-import { FileImageOutlined } from "@ant-design/icons";
+import { FileImageOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { getFileType, type FileEntry } from "../stores/fileStore";
 import { getFileTypeVisual } from "../utils/fileTypeIcon";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 interface ThumbnailCache {
-  [path: string]: string; // base64 data URL
+  [path: string]: string; // base64 data URL (for images) OR asset URL (for video thumbs)
 }
 
-const ThumbnailImg: React.FC<{ path: string; cache: ThumbnailCache; setCache: (p: string, v: string) => void }> = ({
-  path,
-  cache,
-  setCache,
-}) => {
+const ThumbnailBox: React.FC<{
+  path: string;
+  kind: "image" | "video";
+  cache: ThumbnailCache;
+  setCache: (p: string, v: string) => void;
+}> = ({ path, kind, cache, setCache }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
@@ -21,28 +23,50 @@ const ThumbnailImg: React.FC<{ path: string; cache: ThumbnailCache; setCache: (p
     if (cache[path]) return;
     let cancelled = false;
     setLoading(true);
-    invoke<{ data: string; width: number; height: number }>("get_image_thumbnail", {
-      path,
-      maxSize: 200,
-    })
-      .then((res) => {
-        if (!cancelled) {
-          setCache(path, `data:image/png;base64,${res.data}`);
-        }
+
+    if (kind === "image") {
+      invoke<{ data: string; width: number; height: number }>("get_image_thumbnail", {
+        path,
+        maxSize: 200,
       })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+        .then((res) => {
+          if (!cancelled) {
+            setCache(path, `data:image/png;base64,${res.data}`);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setError(true);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    } else {
+      // 视频缩略图：调 ffmpeg
+      invoke<{ thumb_path: string }>("get_video_thumbnail", { path })
+        .then((res) => {
+          if (!cancelled) {
+            // 用 convertFileSrc 把本地路径转 webview 可访问的 URL
+            setCache(path, convertFileSrc(res.thumb_path));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setError(true);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [path, cache, setCache]);
+  }, [path, kind, cache, setCache]);
 
   if (error) {
-    return <FileImageOutlined style={{ fontSize: 36, color: "#8c8c8c" }} />;
+    return kind === "image" ? (
+      <FileImageOutlined style={{ fontSize: 36, color: "#8c8c8c" }} />
+    ) : (
+      <VideoCameraOutlined style={{ fontSize: 36, color: "#8c8c8c" }} />
+    );
   }
   if (loading || !cache[path]) {
     return <Spin size="small" />;
@@ -116,7 +140,8 @@ export default function GridView({
       <div style={{ padding: 8 }}>
         {files.map((entry) => {
           const isSelected = selectedFile?.path === entry.path || selectedRowKeys.includes(entry.path);
-          const isImage = !entry.is_dir && getFileType(entry.name) === "image";
+          const fileType = !entry.is_dir ? getFileType(entry.name) : null;
+          const isImage = fileType === "image";
           return (
             <div
               key={entry.path}
@@ -155,7 +180,7 @@ export default function GridView({
                 }}
               >
                 {isImage ? (
-                  <ThumbnailImg path={entry.path} cache={thumbCache} setCache={setCache} />
+                  <ThumbnailBox path={entry.path} kind="image" cache={thumbCache} setCache={setCache} />
                 ) : (
                   getIcon(entry)
                 )}
@@ -194,7 +219,9 @@ export default function GridView({
     >
       {files.map((entry) => {
         const isSelected = selectedFile?.path === entry.path || selectedRowKeys.includes(entry.path);
-        const isImage = !entry.is_dir && getFileType(entry.name) === "image";
+        const fileType = !entry.is_dir ? getFileType(entry.name) : null;
+        const isImage = fileType === "image";
+        const isVideo = fileType === "video";
         return (
           <div
             key={entry.path}
@@ -234,8 +261,13 @@ export default function GridView({
                 marginBottom: 6,
               }}
             >
-              {isImage ? (
-                <ThumbnailImg path={entry.path} cache={thumbCache} setCache={setCache} />
+              {isImage || isVideo ? (
+                <ThumbnailBox
+                  path={entry.path}
+                  kind={isVideo ? "video" : "image"}
+                  cache={thumbCache}
+                  setCache={setCache}
+                />
               ) : (
                 getIcon(entry)
               )}
