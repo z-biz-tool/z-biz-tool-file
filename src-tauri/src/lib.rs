@@ -14,6 +14,7 @@ mod tags;
 mod image_exif;
 mod video_thumb;
 mod indexer;
+mod ai_organizer;
 
 use watcher::WatcherState;
 
@@ -95,6 +96,9 @@ pub fn run() {
             indexer::indexer_search_files,
             indexer::indexer_search_content,
             indexer::indexer_get_stats,
+            ai_organizer::organizer_categorize,
+            ai_organizer::organizer_organize_directory,
+            ai_organizer::organizer_get_categories,
             image_exif::read_exif,
             video_thumb::get_video_thumbnail,
             image_utils::export_image,
