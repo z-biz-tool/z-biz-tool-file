@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { Input, Segmented, List, Typography, theme } from "antd";
-import { SearchOutlined, FolderOutlined, FileOutlined } from "@ant-design/icons";
+import { Input, Segmented, List, Typography, theme, Button } from "antd";
+import { SearchOutlined, FolderOutlined, FileOutlined, BuildOutlined } from "@ant-design/icons";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, formatFileSize, type SearchResultItem } from "../stores/fileStore";
 import { EmptyState, LoadingState } from "../_shared";
+import { searchFiles, searchContent, getIndexStats, IndexStats } from "../services/indexService";
+import { message } from "antd";
 
 const { Text } = Typography;
 
@@ -45,6 +47,8 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [indexStats, setIndexStats] = useState<IndexStats | null>(null);
+  const [isIndexing, setIsIndexing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { setSelectedFile, setCurrentPath } = useFileStore();
@@ -62,17 +66,34 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
     try {
       let res: SearchResultItem[];
       if (searchMode === "filename") {
-        res = await invoke("full_disk_search", {
-          rootPath: rootPath,
-          query: searchQuery,
-          maxResults: 200,
-        });
+        // 优先使用索引加速
+        const indexResults = await searchFiles(searchQuery, 200);
+        if (indexResults.length > 0) {
+          res = indexResults.map((item) => ({
+            name: item.name,
+            path: item.path,
+            is_dir: item.is_dir,
+            size: item.size,
+            matched_line: null,
+          }));
+        } else {
+          // 索引为空时使用传统搜索
+          res = await invoke("full_disk_search", {
+            rootPath: rootPath,
+            query: searchQuery,
+            maxResults: 200,
+          });
+        }
       } else {
-        res = await invoke("search_file_content", {
-          rootPath: rootPath,
-          query: searchQuery,
-          maxResults: 100,
-        });
+        // 使用索引进行内容搜索
+        const contentResults = await searchContent(searchQuery, 100);
+        res = contentResults.map((item) => ({
+          name: item.path.split("/").pop() || "",
+          path: item.path,
+          is_dir: false,
+          size: 0,
+          matched_line: item.snippet,
+        }));
       }
       setResults(res);
     } catch (err) {
@@ -82,6 +103,19 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
       setLoading(false);
     }
   };
+
+  // 加载索引统计
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        const stats = await getIndexStats();
+        setIndexStats(stats);
+      } catch (error) {
+        console.error("加载索引统计失败:", error);
+      }
+    };
+    loadStats();
+  }, []);
 
   // 防抖搜索
   useEffect(() => {
@@ -101,6 +135,22 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, mode, rootPath]);
+
+  // 构建索引
+  const buildIndex = async () => {
+    setIsIndexing(true);
+    try {
+      await invoke("indexer_build", { rootPath: rootPath });
+      const stats = await getIndexStats();
+      setIndexStats(stats);
+      message.success("索引构建完成");
+    } catch (error) {
+      console.error("构建索引失败:", error);
+      message.error("索引构建失败");
+    } finally {
+      setIsIndexing(false);
+    }
+  };
 
   const handleResultClick = (item: SearchResultItem) => {
     setSelectedFile({
@@ -138,6 +188,40 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
           size="small"
         />
       </div>
+
+      {/* 索引状态显示 */}
+      {indexStats && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "4px 0",
+            fontSize: 11,
+            color: "var(--ant-color-text-secondary)",
+          }}
+        >
+          <BuildOutlined
+            style={{
+              color: isIndexing ? "var(--ant-color-warning)" : "var(--ant-color-success)",
+            }}
+          />
+          <span>
+            索引已就绪：{indexStats.total_files.toLocaleString()} 个文件
+          </span>
+          {!isIndexing && (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => buildIndex()}
+              style={{ padding: 0, height: "auto" }}
+            >
+              [重新构建]
+            </Button>
+          )}
+          {isIndexing && <span style={{ color: "var(--ant-color-warning)" }}>构建中...</span>}
+        </div>
+      )}
 
       {loading && <LoadingState tip="搜索中..." minHeight={120} />}
 

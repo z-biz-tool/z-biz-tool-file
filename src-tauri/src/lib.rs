@@ -13,6 +13,7 @@ mod sftp;
 mod tags;
 mod image_exif;
 mod video_thumb;
+mod indexer;
 
 use watcher::WatcherState;
 
@@ -89,6 +90,11 @@ pub fn run() {
             tags::get_all_tags,
             tags::set_file_tag,
             tags::delete_file_tag,
+            indexer::indexer_init,
+            indexer::indexer_build,
+            indexer::indexer_search_files,
+            indexer::indexer_search_content,
+            indexer::indexer_get_stats,
             image_exif::read_exif,
             video_thumb::get_video_thumbnail,
             image_utils::export_image,

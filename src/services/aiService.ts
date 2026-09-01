@@ -8,6 +8,12 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import {
+  searchFiles as searchByIndex,
+  searchContent as searchContentByIndex,
+  type FileIndexItem,
+  type ContentIndexItem,
+} from "./indexService";
 
 export interface AISearchResult {
   path: string;
@@ -37,11 +43,39 @@ export interface AIAction {
 /**
  * 智能语义搜索
  * 用户输入自然语言描述，AI 返回相关文件
+ * 结合全文索引进行加速
  */
 export async function semanticSearch(query: string): Promise<AISearchResult[]> {
   try {
-    const results = await invoke<AISearchResult[]>("ai_semantic_search", { query });
-    return results;
+    // 首先使用索引进行快速文件名搜索
+    const indexResults = await searchByIndex(query, 50);
+    
+    // 如果索引未构建或结果不足，使用 AI 语义搜索
+    if (indexResults.length === 0) {
+      const aiResults = await invoke<AISearchResult[]>("ai_semantic_search", { query });
+      return aiResults;
+    }
+    
+    // 合并索引结果和 AI 语义搜索结果
+    const aiResults = await invoke<AISearchResult[]>("ai_semantic_search", { query });
+    
+    // 简单的融合策略：优先索引匹配，然后补充 AI 搜索结果
+    const indexPaths = new Set(indexResults.map((r) => r.path));
+    const mergedResults: AISearchResult[] = [
+      ...indexResults.map((item) => ({
+        path: item.path,
+        name: item.name,
+        score: 0.9, // 索引匹配的高分
+        metadata: {
+          summary: undefined,
+          tags: [],
+          relatedFiles: [],
+        },
+      })),
+      ...aiResults.filter((r) => !indexPaths.has(r.path)), // 避免重复
+    ];
+    
+    return mergedResults;
   } catch (error) {
     console.error("Semantic search failed:", error);
     return [];
