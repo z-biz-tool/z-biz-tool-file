@@ -65,6 +65,15 @@ interface FileStore {
   activeTabId: string | null;
   // 文件标签/备注（path → tag）
   tagsByPath: Record<string, { color: string; label: string; note: string }>;
+  // AI 功能相关状态
+  aiEnabled: boolean;
+  aiModel: string;
+  aiEndpoint: string;
+  aiLastSearch: string;
+  aiSearchResults: Array<{ path: string; score: number; summary?: string }>;
+  // 媒体库状态
+  mediaViewMode: "gallery" | "list";
+  mediaGallerySize: "small" | "medium" | "large";
   // 设置当前路径
   setCurrentPath: (path: string) => void;
   // 设置文件列表
@@ -102,6 +111,15 @@ interface FileStore {
   loadAllTags: () => Promise<void>;
   setTag: (path: string, tag: { color: string; label: string; note: string }) => Promise<void>;
   removeTag: (path: string) => Promise<void>;
+  // AI 功能状态更新
+  setAiEnabled: (enabled: boolean) => void;
+  setAiModel: (model: string) => void;
+  setAiEndpoint: (endpoint: string) => void;
+  setAiLastSearch: (query: string) => void;
+  setAiSearchResults: (results: Array<{ path: string; score: number; summary?: string }>) => void;
+  // 媒体库状态更新
+  setMediaViewMode: (mode: "gallery" | "list") => void;
+  setMediaGallerySize: (size: "small" | "medium" | "large") => void;
 }
 
 export const useFileStore = create<FileStore>((set) => ({
@@ -120,6 +138,15 @@ export const useFileStore = create<FileStore>((set) => ({
   tabs: [] as Array<{ id: string; path: string }>,
   activeTabId: null,
   tagsByPath: {} as Record<string, { color: string; label: string; note: string }>,
+  // AI 功能相关状态
+  aiEnabled: true,
+  aiModel: "default",
+  aiEndpoint: "",
+  aiLastSearch: "",
+  aiSearchResults: [],
+  // 媒体库状态
+  mediaViewMode: "gallery",
+  mediaGallerySize: "medium",
 
   setCurrentPath: (path) => set({ currentPath: path }),
   setFileList: (list) => set({ fileList: list }),
@@ -234,6 +261,15 @@ export const useFileStore = create<FileStore>((set) => ({
       return { tagsByPath: next };
     });
   },
+  // AI 功能状态更新
+  setAiEnabled: (enabled) => set({ aiEnabled: enabled }),
+  setAiModel: (model) => set({ aiModel: model }),
+  setAiEndpoint: (endpoint) => set({ aiEndpoint: endpoint }),
+  setAiLastSearch: (query) => set({ aiLastSearch: query }),
+  setAiSearchResults: (results) => set({ aiSearchResults: results }),
+  // 媒体库状态更新
+  setMediaViewMode: (mode) => set({ mediaViewMode: mode }),
+  setMediaGallerySize: (size) => set({ mediaGallerySize: size }),
 }));
 
 /// 根据文件扩展名判断文件类型

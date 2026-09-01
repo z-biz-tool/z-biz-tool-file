@@ -39,6 +39,10 @@ import {
   CloudServerOutlined,
   ThunderboltOutlined,
   PieChartOutlined,
+  PictureOutlined,
+  VideoCameraOutlined,
+  AudioOutlined,
+  BrainOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -75,6 +79,9 @@ import ZipBrowser from "./components/ZipBrowser";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
+import Omnibar from "./_shared/Omnibar";
+import { MediaGallery, PhotoGallery, VideoGallery, MusicGallery } from "./components/MediaGallery";
+import AISettingPanel from "./components/AISettingPanel";
 
 /**
  * 可拖拽列宽的表头单元格。
@@ -189,6 +196,10 @@ function AppShellInner() {
   const [storageOpen, setStorageOpen] = useState(false);
   const [tagEditOpen, setTagEditOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
+  // 媒体库视图状态
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const [mediaLibraryType, setMediaLibraryType] = useState<"image" | "video" | "audio">("image");
+  const [mediaLibraryPath, setMediaLibraryPath] = useState<string>("");
   // 当前目录的快速过滤（subsequence 模糊匹配）
   const [quickFilter, setQuickFilter] = useState("");
   const [siderCollapsed, setSiderCollapsed] = useState<boolean>(() => {
@@ -298,6 +309,11 @@ function AppShellInner() {
     tagsByPath,
     openTab, closeTab, updateActiveTabPath,
     loadAllTags,
+    // AI 和媒体状态
+    aiEnabled, aiModel, aiEndpoint,
+    setAiEnabled, setAiModel, setAiEndpoint,
+    mediaViewMode, mediaGallerySize,
+    setMediaViewMode, setMediaGallerySize,
   } = useFileStore();
 
   // 记忆侧栏折叠状态
@@ -1131,30 +1147,17 @@ function AppShellInner() {
           onSwitchTo={(path) => navigateTo(path)}
         />
         {/* 面包屑 + 路径输入 + 操作按钮 */}
-        <div
-          style={{
-            padding: "8px 12px",
-            borderBottom: `1px solid var(--ant-color-border-secondary, rgba(0,0,0,0.06))`,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            background: "var(--ant-color-bg-container)",
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Breadcrumb items={buildBreadcrumbItems()} />
-          </div>
-          <Input
-            placeholder="根目录路径"
-            value={rootPath}
-            onChange={(e) => setRootPath(e.target.value)}
-            onPressEnter={() => navigateTo(rootPath, true)}
-            style={{ width: 200 }}
-            size="small"
-            aria-label="根目录路径"
-          />
-        </div>
+        <Omnibar
+          currentPath={currentPath}
+          onNavigate={(path) => navigateTo(path)}
+          rootPath={rootPath}
+          onRootNavigate={(path) => { setRootPath(path); navigateTo(path, true); }}
+          onBack={goBack}
+          onForward={goForward}
+          onUp={goUp}
+          historyIndex={historyIndex}
+          history={history}
+        />
 
         {/* 操作工具栏 */}
         <div
@@ -1233,6 +1236,42 @@ function AppShellInner() {
               icon={<SettingOutlined />}
               onClick={() => setSettingsOpen(true)}
               aria-label="打开设置"
+            />
+          </Tooltip>
+          <Tooltip title="照片馆 (图片媒体库)">
+            <Button
+              size="small"
+              icon={<PictureOutlined />}
+              onClick={() => {
+                setMediaLibraryType("image");
+                setMediaLibraryPath(currentPath);
+                setMediaLibraryOpen(true);
+              }}
+              aria-label="打开照片馆"
+            />
+          </Tooltip>
+          <Tooltip title="视频馆 (视频媒体库)">
+            <Button
+              size="small"
+              icon={<VideoCameraOutlined />}
+              onClick={() => {
+                setMediaLibraryType("video");
+                setMediaLibraryPath(currentPath);
+                setMediaLibraryOpen(true);
+              }}
+              aria-label="打开视频馆"
+            />
+          </Tooltip>
+          <Tooltip title="音乐馆 (音频媒体库)">
+            <Button
+              size="small"
+              icon={<AudioOutlined />}
+              onClick={() => {
+                setMediaLibraryType("audio");
+                setMediaLibraryPath(currentPath);
+                setMediaLibraryOpen(true);
+              }}
+              aria-label="打开音乐馆"
             />
           </Tooltip>
           <Tooltip title="SSH / SFTP 远程浏览">
@@ -1669,6 +1708,54 @@ function AppShellInner() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+      {/* 媒体库视图 */}
+      {mediaLibraryOpen && (
+        <Modal
+          title={
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              {mediaLibraryType === "image" && <PictureOutlined style={{ color: "#1677ff" }} />}
+              {mediaLibraryType === "video" && <VideoCameraOutlined style={{ color: "#1677ff" }} />}
+              {mediaLibraryType === "audio" && <AudioOutlined style={{ color: "#1677ff" }} />}
+              {mediaLibraryType === "image" && "照片馆"}
+              {mediaLibraryType === "video" && "视频馆"}
+              {mediaLibraryType === "audio" && "音乐馆"}
+            </div>
+          }
+          open={mediaLibraryOpen}
+          onClose={() => setMediaLibraryOpen(false)}
+          width="90vw"
+          height="80vh"
+          footer={null}
+          styles={{ body: { padding: "0", overflow: "hidden" } }}
+        >
+          <div style={{ height: "100%", overflow: "hidden" }}>
+            <MediaGallery
+              directory={mediaLibraryPath}
+              mediaType={mediaLibraryType}
+              onItemDoubleClick={(item) => {
+                invoke("open_with_default_app", { path: item.path }).catch((err) =>
+                  message.error("打开失败: " + err)
+                );
+              }}
+              onItemRightClick={(item, e) => {
+                e.preventDefault();
+                const menuItems: MenuProps["items"] = [
+                  { key: "open", label: "打开", onClick: () => invoke("open_with_default_app", { path: item.path }) },
+                  { key: "copy", label: "复制", onClick: () => handleCopy([item]) },
+                  { key: "delete", label: "删除", onClick: () => handleDelete(item) },
+                ];
+                Modal.confirm({
+                  title: "操作确认",
+                  content: `确定要删除「${item.name}」吗？`,
+                  onOk: async () => {
+                    await handleDelete(item, false);
+                  },
+                });
+              }}
+            />
+          </div>
+        </Modal>
+      )}
       <TrashModal
         open={trashOpen}
         onClose={() => setTrashOpen(false)}
