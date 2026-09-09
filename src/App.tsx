@@ -29,6 +29,7 @@ import {
   FilePdfOutlined,
   ScanOutlined,
   CloudDownloadOutlined,
+  BookOutlined,
   FormOutlined,
   ColumnHeightOutlined,
   RadarChartOutlined,
@@ -85,6 +86,7 @@ import PdfTools from "./components/PdfTools";
 import DiffViewer from "./components/DiffViewer";
 import OcrTool from "./components/OcrTool";
 import Aria2Manager from "./components/Aria2Manager";
+import LibraryView from "./components/LibraryView";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
@@ -207,6 +209,7 @@ function AppShellInner() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [ocrOpen, setOcrOpen] = useState(false);
   const [aria2Open, setAria2Open] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -1387,6 +1390,16 @@ function AppShellInner() {
               下载
             </Button>
           </Tooltip>
+          <Tooltip title="图书馆 & 媒体库（Calibre 风格）">
+            <Button
+              size="small"
+              icon={<BookOutlined />}
+              onClick={() => setLibraryOpen(true)}
+              aria-label="打开图书馆"
+            >
+              图书馆
+            </Button>
+          </Tooltip>
           <Tooltip title="回收站（已删除的文件）">
             <Button
               size="small"
@@ -1807,6 +1820,9 @@ function AppShellInner() {
 
       {/* Aria2 离线下载 */}
       <Aria2Manager open={aria2Open} onClose={() => setAria2Open(false)} />
+
+      {/* 图书馆 & 媒体库 */}
+      <LibraryView open={libraryOpen} onClose={() => setLibraryOpen(false)} />
 
       {/* 归档管理器 (压缩/解压) */}
       <ArchiveManager

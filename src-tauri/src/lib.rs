@@ -17,6 +17,7 @@ mod indexer;
 mod ai_organizer;
 mod ocr;
 mod aria2;
+mod library;
 
 use watcher::WatcherState;
 
@@ -88,6 +89,18 @@ pub fn run() {
             aria2::aria2_remove,
             aria2::aria2_global_stat,
             aria2::start_aria2_daemon,
+            library::library_stats,
+            library::library_add_scan_dir,
+            library::library_remove_scan_dir,
+            library::library_scan_media,
+            library::library_scan_books,
+            library::library_query_media,
+            library::library_query_books,
+            library::library_toggle_favorite,
+            library::library_set_rating,
+            library::library_add_tag,
+            library::library_update_read_progress,
+            library::library_clear,
             image_utils::get_image_info,
             image_utils::save_image_data,
             llm_config::load_llm_config,
