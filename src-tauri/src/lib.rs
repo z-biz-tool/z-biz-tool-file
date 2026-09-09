@@ -18,6 +18,7 @@ mod ai_organizer;
 mod ocr;
 mod aria2;
 mod library;
+mod updater;
 
 use watcher::WatcherState;
 
@@ -28,6 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(WatcherState::default())
         .manage(aria2::Aria2State::default())
         .invoke_handler(tauri::generate_handler![
@@ -101,6 +103,12 @@ pub fn run() {
             library::library_add_tag,
             library::library_update_read_progress,
             library::library_clear,
+            updater::updater_current_version,
+            updater::updater_check,
+            updater::updater_download,
+            updater::updater_download_latest,
+            updater::updater_open_install_guide,
+            updater::updater_silent_check,
             image_utils::get_image_info,
             image_utils::save_image_data,
             llm_config::load_llm_config,

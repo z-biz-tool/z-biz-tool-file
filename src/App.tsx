@@ -29,6 +29,7 @@ import {
   FilePdfOutlined,
   ScanOutlined,
   CloudDownloadOutlined,
+  UpOutlined,
   BookOutlined,
   FormOutlined,
   ColumnHeightOutlined,
@@ -38,6 +39,7 @@ import {
   SwapOutlined,
   SafetyCertificateOutlined,
   TagOutlined,
+  Badge,
   FileTextOutlined,
   ClearOutlined,
   SettingOutlined,
@@ -87,6 +89,7 @@ import DiffViewer from "./components/DiffViewer";
 import OcrTool from "./components/OcrTool";
 import Aria2Manager from "./components/Aria2Manager";
 import LibraryView from "./components/LibraryView";
+import Updater from "./components/Updater";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
@@ -210,6 +213,8 @@ function AppShellInner() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [aria2Open, setAria2Open] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+    const [updaterOpen, setUpdaterOpen] = useState(false);
+    const [hasUpdate, setHasUpdate] = useState(false);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -247,6 +252,14 @@ function AppShellInner() {
       return {};
     }
   });
+
+  // 启动时静默检查更新
+  useEffect(() => {
+    invoke("updater_silent_check").then((status) => {
+      if (status) setHasUpdate(true);
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem("z-tool-table-col-widths", JSON.stringify(columnWidths));
@@ -1400,6 +1413,21 @@ function AppShellInner() {
               图书馆
             </Button>
           </Tooltip>
+          {hasUpdate && (
+            <Tooltip title="发现新版本，点击更新">
+              <Badge dot>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<UpOutlined />}
+                  onClick={() => setUpdaterOpen(true)}
+                  aria-label="更新可用"
+                >
+                  更新
+                </Button>
+              </Badge>
+            </Tooltip>
+          )}
           <Tooltip title="回收站（已删除的文件）">
             <Button
               size="small"
@@ -1823,6 +1851,9 @@ function AppShellInner() {
 
       {/* 图书馆 & 媒体库 */}
       <LibraryView open={libraryOpen} onClose={() => setLibraryOpen(false)} />
+
+      {/* 应用更新 */}
+      <Updater open={updaterOpen} onClose={() => setUpdaterOpen(false)} />
 
       {/* 归档管理器 (压缩/解压) */}
       <ArchiveManager
