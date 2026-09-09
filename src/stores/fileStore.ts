@@ -225,11 +225,13 @@ export const useFileStore = create<FileStore>((set) => ({
   },
   switchTab: (id) => {
     set((s) => {
-      if (!s.tabs.find((t) => t.id === id)) return s;
       const tab = s.tabs.find((t) => t.id === id);
+      if (!tab) return s;
+      // library / media tab 不更新 currentPath（避免无效路径触发目录加载）
+      const nextPath = tab.kind === "directory" ? tab.path : s.currentPath;
       return {
         activeTabId: id,
-        currentPath: tab?.path ?? s.currentPath,
+        currentPath: nextPath,
       };
     });
   },

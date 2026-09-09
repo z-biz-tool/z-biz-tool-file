@@ -8,7 +8,12 @@ interface Props {
 }
 
 /** 把绝对路径压缩成 tab 标题：~/Downloads/foo */
-function tabTitle(path: string): string {
+function tabTitle(tab: { path: string; kind: string }): string {
+  // 特殊 tab（library / media）显示友好名
+  if (tab.kind === "library") return "图书馆";
+  if (tab.kind === "media") return "媒体库";
+  // 普通目录 tab
+  const path = tab.path;
   if (!path || path === "/") return "/";
   const home = "/Users/zifang";
   if (path === home) return "~";
@@ -32,7 +37,7 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
   if (tabs.length === 0) return null;
 
   const items = tabs.map((t) => {
-    const title = tabTitle(t.path);
+    const title = tabTitle(t);
     return {
       key: t.id,
       label: (
@@ -98,7 +103,8 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
         onChange={(key) => {
           switchTab(key as string);
           const tab = tabs.find((t) => t.id === key);
-          if (tab) onSwitchTo(tab.path);
+          // 仅 directory tab 才触发目录切换；library/media tab 不调用 onSwitchTo
+          if (tab && tab.kind === "directory") onSwitchTo(tab.path);
         }}
         onEdit={(targetKey, action) => {
           if (action === "remove") {
