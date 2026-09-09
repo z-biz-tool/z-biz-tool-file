@@ -745,8 +745,8 @@ function AppShellInner() {
     setRenameModal({ visible: false, path: "", oldName: "" });
   }, [renameModal.path, newName, currentPath, loadDirectory, message]);
 
-  // 右键菜单
-  const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
+  // 单文件右键菜单
+  const singleContextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
     const lowerName = record.name.toLowerCase();
     const isDir = record.is_dir;
     const isZip = lowerName.endsWith(".zip");
@@ -765,307 +765,341 @@ function AppShellInner() {
     const isText = /\.(txt|md|markdown|json|ya?ml|toml|xml|html?|css|scss|less|sass|js|jsx|ts|tsx|vue|svelte|py|rs|go|java|kt|swift|c|h|cc|cpp|hpp|sh|bash|zsh|sql|log|conf|ini|csv|tsv)$/i.test(lowerName);
 
     const items: MenuProps["items"] = [
-      // ── 打开 / 预览 ──
+      { key: "open", label: "用默认应用打开", icon: <RocketOutlined />, onClick: () => {
+        invoke("open_with_default_app", { path: record.path }).catch((err) => message.error("打开失败: " + err));
+      }},
+      ...(!isDir ? [{
+        key: "quicklook", label: "Quick Look 预览", icon: <EyeOutlined />, onClick: () => {
+          invoke("quick_look_preview", { path: record.path }).catch((err) => message.error("Quick Look 失败: " + err));
+        },
+      }] : []),
+      { type: "divider" as const },
+      ...(isPdf ? [{
+        key: "pdf-tools", label: "PDF 工具集", icon: <FilePdfOutlined />, onClick: () => { setPdfToolsPath(record.path); setPdfToolsOpen(true); },
+      }] : []),
+      ...(isImage ? [{
+        key: "ocr", label: "OCR 文字识别", icon: <ScanOutlined />, onClick: () => { setSelectedFile(record); setOcrOpen(true); },
+      }, {
+        key: "image-editor", label: "图片编辑", icon: <PictureOutlined />, onClick: () => { message.info("请使用工具栏 [OCR] 进入图片编辑"); },
+      }] : []),
+      ...(isImage || isVideo ? [{
+        key: "media-library", label: isVideo ? "加入视频库" : "加入图片库", icon: <PictureOutlined />, onClick: () => {
+          setMediaLibraryType(isVideo ? "video" : "image");
+          setMediaLibraryPath(record.path);
+          setMediaLibraryOpen(true);
+        },
+      }] : []),
+      ...(isAudio ? [{
+        key: "audio-library", label: "加入音乐库", icon: <AudioOutlined />, onClick: () => {
+          setMediaLibraryType("audio");
+          setMediaLibraryPath(record.path);
+          setMediaLibraryOpen(true);
+        },
+      }] : []),
+      ...(isText && !isDir ? [{
+        key: "diff", label: "与另一个文件对比", icon: <SwapOutlined />, onClick: () => { setDiffOpen(true); setSelectedFile(record); },
+      }] : []),
+      ...(isZip ? [{
+        key: "browse-zip", label: "浏览压缩包", icon: <FileZipOutlined />, onClick: () => { setZipBrowserPath(record.path); setZipBrowserOpen(true); },
+      }] : []),
+      ...(isArchive ? [{
+        key: "extract", label: "解压缩", icon: <ExpandOutlined />, onClick: () => handleExtract(record),
+      }] : [{
+        key: "compress", label: "压缩为 ZIP", icon: <FileZipOutlined />, onClick: () => {
+          setSelectedFile(record);
+          setArchiveSources([record.path]);
+          setArchiveMode("compress");
+          setArchiveTarget(null);
+          setArchiveOpen(true);
+        },
+      }]),
+      ...(!isDir ? [{
+        key: "hash", label: "计算哈希", icon: <SafetyCertificateOutlined />, onClick: () => { setSelectedFile(record); setHashCalcOpen(true); },
+      }] : []),
+      ...(isDir ? [{
+        key: "duplicate-scan", label: "查找重复文件", icon: <CopyOutlined />, onClick: () => { setSelectedFile(record); setDuplicateFinderOpen(true); },
+      }, {
+        key: "storage-analyze", label: "存储分析", icon: <PieChartOutlined />, onClick: () => { setSelectedFile(record); setStorageOpen(true); },
+      }] : []),
+      { type: "divider" as const },
+      { key: "copy", label: "复制 (⌘+C)", icon: <CopyOutlined />, onClick: () => handleCopy([record]) },
+      { key: "cut", label: "剪切 (⌘+X)", icon: <ScissorOutlined />, onClick: () => handleCut([record]) },
+      { key: "rename", label: "重命名", icon: <EditOutlined />, onClick: () => {
+        setRenameModal({ visible: true, path: record.path, oldName: record.name });
+        setNewName(record.name);
+      }},
+      { key: "copy-path", label: "复制完整路径", icon: <CopyFilled />, onClick: () => {
+        navigator.clipboard.writeText(record.path);
+        message.success("已复制路径");
+      }},
+      { key: "delete", label: "移到回收站", icon: <DeleteOutlined />, onClick: () => handleDelete(record, false) },
+      { key: "delete_permanent", label: "永久删除", danger: true, onClick: () => handleDelete(record, true) },
+      { type: "divider" as const },
+      { key: "tags", label: tagsByPath[record.path] ? "编辑标签/备注" : "加标签/备注", icon: <TagOutlined />, onClick: () => {
+        setSelectedFile(record);
+        setTagEditOpen(true);
+      }},
+      { key: "properties", label: "属性", icon: <InfoCircleOutlined />, onClick: () => {
+        setSelectedFile(record);
+        setPropertiesOpen(true);
+      }},
+      { type: "divider" as const },
+      { key: "reveal", label: "在 Finder 中显示", icon: <FolderOpenOutlined />, onClick: () => {
+        invoke("reveal_in_finder", { path: record.path }).catch((err) => message.error("打开 Finder 失败: " + err));
+      }},
+      ...(isDir ? [{
+        key: "terminal", label: "在终端中打开", icon: <CodeOutlined />, onClick: () => { invoke("open_terminal_at", { path: record.path }).catch((err) => message.error("打开终端失败: " + err)); },
+      }, {
+        key: "new-tab", label: "在新标签页打开", icon: <FileAddOutlined />, onClick: () => { openTab(record.path); },
+      }] : []),
+      { key: "sftp-upload", label: "SFTP 上传到远程…", icon: <CloudServerOutlined />, onClick: () => {
+        setSelectedFile(record);
+        setSftpOpen(true);
+      }},
+    ];
+
+    return items;
+  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message, tagsByPath, openTab]);
+
+  // 多选右键菜单（基于 selectedRowKeys）
+  const multiContextMenuItems = useCallback((records: FileEntry[]): MenuProps["items"] => {
+    const count = records.length;
+    const allDirs = records.every((r) => r.is_dir);
+    const allFiles = records.every((r) => !r.is_dir);
+    const allPdf = records.every((r) => r.name.toLowerCase().endsWith(".pdf"));
+    const allImages = records.every((r) => /\.(png|jpe?g|gif|bmp|webp|tiff?|heic|svg)$/i.test(r.name));
+    const totalSize = records.reduce((s, r) => s + (r.size || 0), 0);
+    const sizeStr = totalSize < 1024 ? `${totalSize} B`
+      : totalSize < 1024 * 1024 ? `${(totalSize / 1024).toFixed(1)} KB`
+      : totalSize < 1024 * 1024 * 1024 ? `${(totalSize / 1024 / 1024).toFixed(1)} MB`
+      : `${(totalSize / 1024 / 1024 / 1024).toFixed(2)} GB`;
+
+    const items: MenuProps["items"] = [
       {
-        key: "open",
-        label: "用默认应用打开",
-        icon: <RocketOutlined />,
+        key: "header",
+        type: "group" as const,
+        label: (
+          <span style={{ fontWeight: 600, color: "#1677ff" }}>
+            已选中 {count} 项 · {sizeStr}
+          </span>
+        ),
+        children: [],
+      },
+      { type: "divider" as const },
+
+      // 批量压缩
+      {
+        key: "batch-compress",
+        label: `压缩为 ZIP（${count} 项）`,
+        icon: <FileZipOutlined />,
         onClick: () => {
-          invoke("open_with_default_app", { path: record.path }).catch((err) =>
-            message.error("打开失败: " + err)
-          );
+          setArchiveSources(records.map((r) => r.path));
+          setArchiveMode("compress");
+          setArchiveTarget(null);
+          setArchiveOpen(true);
         },
       },
-      ...(!isDir
-        ? [
-            {
-              key: "quicklook",
-              label: "Quick Look 预览（空格）",
-              icon: <EyeOutlined />,
-              onClick: () => {
-                invoke("quick_look_preview", { path: record.path }).catch((err) =>
-                  message.error("Quick Look 失败: " + err)
-                );
-              },
-            },
-          ]
-        : []),
+      ...(allPdf ? [{
+        key: "batch-pdf-merge",
+        label: `合并为 PDF（${count} 项）`,
+        icon: <FilePdfOutlined />,
+        onClick: () => {
+          setPdfToolsPath(records[0].path);
+          setPdfToolsOpen(true);
+        },
+      }] : []),
+      ...(allImages ? [{
+        key: "batch-ocr",
+        label: `批量 OCR 识别（${count} 张图）`,
+        icon: <ScanOutlined />,
+        onClick: () => {
+          if (records.length === 1) {
+            setSelectedFile(records[0]);
+            setOcrOpen(true);
+            return;
+          }
+          (async () => {
+            for (const r of records) {
+              try {
+                const result: any = await invoke("ocr_image", { path: r.path, language: "chi_sim+eng" });
+                message.success(`${r.name}: ${(result.text || "").slice(0, 50)}...`);
+              } catch (e) {
+                message.error(`${r.name} 失败: ${e}`);
+              }
+            }
+          })();
+        },
+      }] : []),
       { type: "divider" as const },
 
-      // ── z-biz-tool 内置工具（按文件类型） ──
-      ...(isPdf
-        ? [
-            {
-              key: "pdf-tools",
-              label: "PDF 工具集（合并/拆分/水印…）",
-              icon: <FilePdfOutlined />,
-              onClick: () => {
-                setPdfToolsPath(record.path);
-                setPdfToolsOpen(true);
-              },
-            },
-          ]
-        : []),
-      ...(isImage
-        ? [
-            {
-              key: "ocr",
-              label: "OCR 文字识别",
-              icon: <ScanOutlined />,
-              onClick: () => {
-                setSelectedFile(record);
-                setOcrOpen(true);
-              },
-            },
-            {
-              key: "image-editor",
-              label: "图片编辑（PS 风格）",
-              icon: <PictureOutlined />,
-              onClick: () => {
-                message.info("请使用工具栏 [OCR] 进入图片编辑");
-              },
-            },
-          ]
-        : []),
-      ...(isImage || isVideo
-        ? [
-            {
-              key: "media-library",
-              label: `加入${isVideo ? "视频" : "图片"}库`,
-              icon: <PictureOutlined />,
-              onClick: () => {
-                setMediaLibraryType(isVideo ? "video" : "image");
-                setMediaLibraryPath(record.path);
-                setMediaLibraryOpen(true);
-              },
-            },
-          ]
-        : []),
-      ...(isAudio
-        ? [
-            {
-              key: "audio-library",
-              label: "加入音乐库",
-              icon: <AudioOutlined />,
-              onClick: () => {
-                setMediaLibraryType("audio");
-                setMediaLibraryPath(record.path);
-                setMediaLibraryOpen(true);
-              },
-            },
-          ]
-        : []),
-      ...(isText && !isDir
-        ? [
-            {
-              key: "diff",
-              label: "与另一个文件对比",
-              icon: <SwapOutlined />,
-              onClick: () => {
-                setDiffOpen(true);
-                setSelectedFile(record);
-              },
-            },
-          ]
-        : []),
-      ...(isZip
-        ? [
-            {
-              key: "browse-zip",
-              label: "浏览压缩包",
-              icon: <FileZipOutlined />,
-              onClick: () => {
-                setZipBrowserPath(record.path);
-                setZipBrowserOpen(true);
-              },
-            },
-          ]
-        : []),
-      ...(isArchive
-        ? [
-            {
-              key: "extract",
-              label: "解压缩",
-              icon: <ExpandOutlined />,
-              onClick: () => handleExtract(record),
-            },
-          ]
-        : [
-            {
-              key: "compress",
-              label: "压缩为 ZIP",
-              icon: <FileZipOutlined />,
-              onClick: () => {
-                setSelectedFile(record);
-                setArchiveSources([record.path]);
-                setArchiveMode("compress");
-                setArchiveTarget(null);
-                setArchiveOpen(true);
-              },
-            },
-          ]),
-      ...(!isDir
-        ? [
-            {
-              key: "hash",
-              label: "计算哈希（MD5/SHA256）",
-              icon: <SafetyCertificateOutlined />,
-              onClick: () => {
-                setSelectedFile(record);
-                setHashCalcOpen(true);
-              },
-            },
-          ]
-        : []),
-      ...(isDir
-        ? [
-            {
-              key: "duplicate-scan",
-              label: "在此目录查找重复文件",
-              icon: <CopyOutlined />,
-              onClick: () => {
-                setSelectedFile(record);
-                setDuplicateFinderOpen(true);
-              },
-            },
-            {
-              key: "storage-analyze",
-              label: "存储分析（占用空间）",
-              icon: <PieChartOutlined />,
-              onClick: () => {
-                setSelectedFile(record);
-                setStorageOpen(true);
-              },
-            },
-          ]
-        : []),
-      { type: "divider" as const },
-
-      // ── 文件操作 ──
+      // 批量重命名 + 标签
       {
-        key: "copy",
-        label: "复制 (⌘+C)",
-        icon: <CopyOutlined />,
-        onClick: () => handleCopy([record]),
-      },
-      {
-        key: "cut",
-        label: "剪切 (⌘+X)",
-        icon: <ScissorOutlined />,
-        onClick: () => handleCut([record]),
-      },
-      {
-        key: "rename",
-        label: "重命名 (Enter)",
+        key: "batch-rename",
+        label: `批量重命名（${count} 项）`,
         icon: <EditOutlined />,
         onClick: () => {
-          setRenameModal({ visible: true, path: record.path, oldName: record.name });
-          setNewName(record.name);
+          setSelectedFile(records[0]);
+          setBatchRenameOpen(true);
         },
       },
       {
-        key: "copy-path",
-        label: "复制完整路径",
-        icon: <CopyFilled />,
-        onClick: () => {
-          navigator.clipboard.writeText(record.path);
-          message.success("已复制路径");
-        },
-      },
-      {
-        key: "copy-name",
-        label: "复制文件名",
-        icon: <CopyFilled />,
-        onClick: () => {
-          navigator.clipboard.writeText(record.name);
-          message.success("已复制文件名");
-        },
-      },
-      {
-        key: "delete",
-        label: "移到回收站 (⌘+⌫)",
-        icon: <DeleteOutlined />,
-        onClick: () => handleDelete(record, false),
-      },
-      {
-        key: "delete_permanent",
-        label: "永久删除",
-        danger: true,
-        onClick: () => handleDelete(record, true),
-      },
-      { type: "divider" as const },
-
-      // ── 标签 / 属性 ──
-      {
-        key: "tags",
-        label: tagsByPath[record.path] ? "编辑标签/备注" : "加标签/备注",
+        key: "batch-tag",
+        label: `批量加标签`,
         icon: <TagOutlined />,
         onClick: () => {
-          setSelectedFile(record);
+          setSelectedFile(records[0]);
           setTagEditOpen(true);
-        },
-      },
-      {
-        key: "properties",
-        label: "属性",
-        icon: <InfoCircleOutlined />,
-        onClick: () => {
-          setSelectedFile(record);
-          setPropertiesOpen(true);
+          message.info("批量打标签:将为所有选中项添加相同标签");
         },
       },
       { type: "divider" as const },
 
-      // ── 系统操作 ──
+      // 复制 / 剪切
+      { key: "batch-copy", label: `复制 (${count} 项)`, icon: <CopyOutlined />, onClick: () => handleCopy(records) },
+      { key: "batch-cut", label: `剪切 (${count} 项)`, icon: <ScissorOutlined />, onClick: () => handleCut(records) },
       {
-        key: "reveal",
-        label: "在 Finder 中显示",
-        icon: <FolderOpenOutlined />,
+        key: "batch-copy-paths",
+        label: `复制 ${count} 个路径`,
+        icon: <CopyFilled />,
         onClick: () => {
-          invoke("reveal_in_finder", { path: record.path }).catch((err) =>
-            message.error("打开 Finder 失败: " + err)
-          );
+          navigator.clipboard.writeText(records.map((r) => r.path).join("\n"));
+          message.success(`已复制 ${count} 个路径`);
         },
       },
-      ...(isDir
-        ? [
-            {
-              key: "terminal",
-              label: "在终端中打开",
-              icon: <CodeOutlined />,
-              onClick: () => {
-                invoke("open_terminal_at", { path: record.path }).catch((err) =>
-                  message.error("打开终端失败: " + err)
-                );
-              },
-            },
-          ]
-        : []),
-      ...(isDir
-        ? [
-            {
-              key: "new-tab",
-              label: "在新标签页打开",
-              icon: <FileAddOutlined />,
-              onClick: () => {
-                openTab(record.path);
-              },
-            },
-          ]
-        : []),
       {
-        key: "sftp-upload",
-        label: "SFTP 上传到远程…",
+        key: "batch-copy-names",
+        label: `复制 ${count} 个文件名`,
+        icon: <CopyFilled />,
+        onClick: () => {
+          navigator.clipboard.writeText(records.map((r) => r.name).join("\n"));
+          message.success(`已复制 ${count} 个文件名`);
+        },
+      },
+      { type: "divider" as const },
+
+      // 批量哈希
+      ...(allFiles ? [{
+        key: "batch-hash",
+        label: `批量计算哈希`,
+        icon: <SafetyCertificateOutlined />,
+        onClick: () => {
+          (async () => {
+            for (const r of records) {
+              try {
+                await invoke("compute_file_hash", { path: r.path, algorithm: "sha256" });
+              } catch (e) {
+                console.error(`${r.name} 失败:`, e);
+              }
+            }
+            message.success("批量哈希完成");
+          })();
+        },
+      }] : []),
+
+      // 批量合并目录
+      ...(allDirs ? [{
+        key: "batch-merge-dirs",
+        label: `合并到第一个目录`,
+        icon: <FolderAddOutlined />,
+        onClick: () => {
+          (async () => {
+            const target = records[0].path;
+            for (let i = 1; i < records.length; i++) {
+              try {
+                await invoke("move_file", { srcPath: records[i].path, destDir: target });
+              } catch (e) {
+                message.error(`移动 ${records[i].name} 失败: ${e}`);
+              }
+            }
+            loadDirectory(currentPath);
+            message.success("目录合并完成");
+          })();
+        },
+      }] : []),
+      { type: "divider" as const },
+
+      // 批量删除
+      {
+        key: "batch-delete",
+        label: `移到回收站 (${count} 项)`,
+        icon: <DeleteOutlined />,
+        onClick: () => {
+          modal.confirm({
+            title: "移到回收站?",
+            content: `将 ${count} 项移到回收站,可在回收站中恢复。`,
+            okText: "移到回收站",
+            okType: "danger",
+            cancelText: "取消",
+            onOk: async () => {
+              let ok = 0, fail = 0;
+              for (const r of records) {
+                try { await invoke("delete_to_trash", { path: r.path }); ok++; } catch { fail++; }
+              }
+              message.success(`已处理 ${ok} 项${fail ? `,失败 ${fail} 项` : ""}`);
+              loadDirectory(currentPath);
+            },
+          });
+        },
+      },
+      {
+        key: "batch-delete-permanent",
+        label: `永久删除 (${count} 项)`,
+        danger: true,
+        onClick: () => {
+          modal.confirm({
+            title: "永久删除?",
+            content: `将永久删除 ${count} 项,无法恢复。`,
+            okText: "永久删除",
+            okType: "danger",
+            cancelText: "取消",
+            onOk: async () => {
+              let ok = 0, fail = 0;
+              for (const r of records) {
+                try { await invoke("delete_file", { path: r.path }); ok++; } catch { fail++; }
+              }
+              message.success(`已处理 ${ok} 项${fail ? `,失败 ${fail} 项` : ""}`);
+              loadDirectory(currentPath);
+            },
+          });
+        },
+      },
+      { type: "divider" as const },
+
+      // 批量上传
+      {
+        key: "batch-sftp",
+        label: `SFTP 批量上传 (${count} 项)`,
         icon: <CloudServerOutlined />,
         onClick: () => {
-          setSelectedFile(record);
+          setSelectedFile(records[0]);
           setSftpOpen(true);
+        },
+      },
+      { type: "divider" as const },
+
+      // 取消选择
+      {
+        key: "deselect",
+        label: "取消选择",
+        icon: <ClearOutlined />,
+        onClick: () => {
+          setSelectedRowKeys([]);
+          setSelectedFile(null);
         },
       },
     ];
 
     return items;
-  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message, tagsByPath, openTab]);
+  }, [handleCopy, handleCut, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setSftpOpen, setArchiveSources, setArchiveMode, setArchiveTarget, setArchiveOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
+
+  // 兼容旧接口的 contextMenuItems:根据是否多选派发
+  const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
+    if (selectedRowKeys.length > 1 && selectedRowKeys.includes(record.path)) {
+      const selected = fileList.filter((f) => selectedRowKeys.includes(f.path));
+      return multiContextMenuItems(selected);
+    }
+    return singleContextMenuItems(record);
+  }, [selectedRowKeys, fileList, singleContextMenuItems, multiContextMenuItems]);
 
   // 表格列定义
   const columns = useMemo(() => [
