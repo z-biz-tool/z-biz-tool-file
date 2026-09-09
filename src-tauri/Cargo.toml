@@ -34,7 +34,7 @@ bzip2 = "0.4"
 xz2 = "0.1"
 sevenz-rust = "0.6"
 html2text = "0.12"
-lopdf = "0.34"
+lopdf = { version = "0.34", features = ["pom_parser"] }
 regex-lite = "0.1"
 image = "0.25"
 uuid = { version = "1", features = ["v4"] }
@@ -45,3 +45,7 @@ sha1 = "0.10"
 regex = "1"
 sha2 = "0.10"
 chrono = "0.4"
+
+leptess = "0.4"
+
+ureq = "2"

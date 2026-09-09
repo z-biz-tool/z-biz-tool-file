@@ -1698,3 +1698,181 @@ fn add_file_to_tar<W: std::io::Write>(
     archive.append_file(&file_name, &mut file)?;
     Ok(())
 }
+
+// ============================================================================
+// 文件对比 (Diff)
+// ============================================================================
+
+/// Diff 行
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiffLine {
+    pub kind: String,           // "context" | "add" | "remove"
+    pub old_line: Option<u32>,
+    pub new_line: Option<u32>,
+    pub content: String,
+}
+
+/// Diff 结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiffResult {
+    pub added: u32,
+    pub removed: u32,
+    pub equal: u32,
+    pub lines: Vec<DiffLine>,
+    pub old_size: u64,
+    pub new_size: u64,
+}
+
+/// 两文件对比 (基于 LCS)
+#[tauri::command]
+pub fn diff_files(old_path: &str, new_path: &str) -> Result<DiffResult, String> {
+    let old = fs::read_to_string(old_path).map_err(|e| format!("读取旧文件失败: {}", e))?;
+    let new = fs::read_to_string(new_path).map_err(|e| format!("读取新文件失败: {}", e))?;
+    let old_size = old.len() as u64;
+    let new_size = new.len() as u64;
+
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    // 简化 LCS：使用类似 Unix diff 的算法（动态规划）
+    let m = old_lines.len();
+    let n = new_lines.len();
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+
+    for i in 0..m {
+        for j in 0..n {
+            if old_lines[i] == new_lines[j] {
+                dp[i + 1][j + 1] = dp[i][j] + 1;
+            } else {
+                dp[i + 1][j + 1] = std::cmp::max(dp[i + 1][j], dp[i][j + 1]);
+            }
+        }
+    }
+
+    // 回溯生成 diff
+    let mut lines = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    let mut added = 0u32;
+    let mut removed = 0u32;
+    let mut equal = 0u32;
+
+    while i > 0 && j > 0 {
+        if old_lines[i - 1] == new_lines[j - 1] {
+            lines.push(DiffLine {
+                kind: "context".to_string(),
+                old_line: Some(i as u32),
+                new_line: Some(j as u32),
+                content: old_lines[i - 1].to_string(),
+            });
+            equal += 1;
+            i -= 1;
+            j -= 1;
+        } else if dp[i - 1][j] >= dp[i][j - 1] {
+            lines.push(DiffLine {
+                kind: "remove".to_string(),
+                old_line: Some(i as u32),
+                new_line: None,
+                content: old_lines[i - 1].to_string(),
+            });
+            removed += 1;
+            i -= 1;
+        } else {
+            lines.push(DiffLine {
+                kind: "add".to_string(),
+                old_line: None,
+                new_line: Some(j as u32),
+                content: new_lines[j - 1].to_string(),
+            });
+            added += 1;
+            j -= 1;
+        }
+    }
+    while i > 0 {
+        lines.push(DiffLine {
+            kind: "remove".to_string(),
+            old_line: Some(i as u32),
+            new_line: None,
+            content: old_lines[i - 1].to_string(),
+        });
+        removed += 1;
+        i -= 1;
+    }
+    while j > 0 {
+        lines.push(DiffLine {
+            kind: "add".to_string(),
+            old_line: None,
+            new_line: Some(j as u32),
+            content: new_lines[j - 1].to_string(),
+        });
+        added += 1;
+        j -= 1;
+    }
+
+    lines.reverse();
+
+    Ok(DiffResult {
+        added,
+        removed,
+        equal,
+        lines,
+        old_size,
+        new_size,
+    })
+}
+
+/// 比较两个目录（简单对比文件列表）
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DirDiffSummary {
+    pub added_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub modified_files: Vec<String>,
+}
+
+/// 比较目录内容（仅比较文件名 + 大小 + 修改时间）
+#[tauri::command]
+pub fn quick_diff_dirs(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary, String> {
+    let collect = |dir: &str| -> Result<std::collections::HashMap<String, (u64, u64)>, String> {
+        let mut map = std::collections::HashMap::new();
+        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            if entry.file_type().is_file() {
+                let meta = entry.metadata().ok();
+                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let mtime = meta.as_ref()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let rel = entry.path().strip_prefix(dir).unwrap_or(entry.path());
+                map.insert(rel.to_string_lossy().to_string(), (size, mtime));
+            }
+        }
+        Ok(map)
+    };
+
+    let left = collect(left_dir)?;
+    let right = collect(right_dir)?;
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut modified = Vec::new();
+
+    for (k, v) in &right {
+        match left.get(k) {
+            None => added.push(k.clone()),
+            Some(lv) if lv != *v => modified.push(k.clone()),
+            _ => {}
+        }
+    }
+    for k in left.keys() {
+        if !right.contains_key(k) {
+            removed.push(k.clone());
+        }
+    }
+
+    Ok(DirDiffSummary {
+        added_files: added,
+        removed_files: removed,
+        modified_files: modified,
+    })
+}

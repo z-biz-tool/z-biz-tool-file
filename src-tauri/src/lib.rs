@@ -15,6 +15,8 @@ mod image_exif;
 mod video_thumb;
 mod indexer;
 mod ai_organizer;
+mod ocr;
+mod aria2;
 
 use watcher::WatcherState;
 
@@ -26,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .manage(WatcherState::default())
+        .manage(aria2::Aria2State::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_directory,
             commands::read_file_content,
@@ -66,6 +69,25 @@ pub fn run() {
             ebook::get_epub_cover,
             pdf_utils::extract_pdf_text,
             pdf_utils::get_pdf_metadata,
+            pdf_utils::get_pdf_pages,
+            pdf_utils::merge_pdfs,
+            pdf_utils::split_pdf,
+            pdf_utils::watermark_pdf,
+            pdf_utils::extract_pdf_images,
+            pdf_utils::compress_pdf,
+            commands::diff_files,
+            commands::quick_diff_dirs,
+            ocr::list_ocr_languages,
+            ocr::ocr_image,
+            ocr::ocr_pdf,
+            ocr::check_tesseract,
+            aria2::aria2_ping,
+            aria2::aria2_add_uri,
+            aria2::aria2_get_tasks,
+            aria2::aria2_pause,
+            aria2::aria2_remove,
+            aria2::aria2_global_stat,
+            aria2::start_aria2_daemon,
             image_utils::get_image_info,
             image_utils::save_image_data,
             llm_config::load_llm_config,

@@ -26,6 +26,9 @@ import {
   InfoCircleOutlined,
   FileZipOutlined,
   ExpandOutlined,
+  FilePdfOutlined,
+  ScanOutlined,
+  CloudDownloadOutlined,
   FormOutlined,
   ColumnHeightOutlined,
   RadarChartOutlined,
@@ -78,6 +81,10 @@ import FileTagsPanel from "./components/FileTagsPanel";
 import NewFileTemplate from "./components/NewFileTemplate";
 import ZipBrowser from "./components/ZipBrowser";
 import ArchiveManager from "./components/ArchiveManager";
+import PdfTools from "./components/PdfTools";
+import DiffViewer from "./components/DiffViewer";
+import OcrTool from "./components/OcrTool";
+import Aria2Manager from "./components/Aria2Manager";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
@@ -195,6 +202,11 @@ function AppShellInner() {
   const [archiveMode, setArchiveMode] = useState<"compress" | "extract">("compress");
   const [archiveSources, setArchiveSources] = useState<string[]>([]);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+  const [pdfToolsOpen, setPdfToolsOpen] = useState(false);
+  const [pdfToolsPath, setPdfToolsPath] = useState<string | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [ocrOpen, setOcrOpen] = useState(false);
+  const [aria2Open, setAria2Open] = useState(false);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -1332,6 +1344,49 @@ function AppShellInner() {
               解压
             </Button>
           </Tooltip>
+          <Tooltip title="PDF 工具集（合并/拆分/水印/压缩/提取图片）">
+            <Button
+              size="small"
+              icon={<FilePdfOutlined />}
+              onClick={() => {
+                setPdfToolsPath(null);
+                setPdfToolsOpen(true);
+              }}
+              aria-label="打开 PDF 工具集"
+            >
+              PDF
+            </Button>
+          </Tooltip>
+          <Tooltip title="文件对比（Diff / 目录对比）">
+            <Button
+              size="small"
+              icon={<SwapOutlined />}
+              onClick={() => setDiffOpen(true)}
+              aria-label="打开文件对比"
+            >
+              对比
+            </Button>
+          </Tooltip>
+          <Tooltip title="OCR 文字识别（图片/PDF）">
+            <Button
+              size="small"
+              icon={<ScanOutlined />}
+              onClick={() => setOcrOpen(true)}
+              aria-label="打开 OCR"
+            >
+              OCR
+            </Button>
+          </Tooltip>
+          <Tooltip title="离线下载 Aria2（HTTP/FTP/magnet/BT）">
+            <Button
+              size="small"
+              icon={<CloudDownloadOutlined />}
+              onClick={() => setAria2Open(true)}
+              aria-label="打开离线下载"
+            >
+              下载
+            </Button>
+          </Tooltip>
           <Tooltip title="回收站（已删除的文件）">
             <Button
               size="small"
@@ -1730,6 +1785,28 @@ function AppShellInner() {
         currentPath={currentPath}
         onRefresh={() => loadDirectory(currentPath)}
       />
+
+      {/* PDF 工具集 */}
+      <PdfTools
+        open={pdfToolsOpen}
+        onClose={() => {
+          setPdfToolsOpen(false);
+          setPdfToolsPath(null);
+        }}
+        initialPath={pdfToolsPath}
+      />
+
+      {/* 文件对比 */}
+      <DiffViewer
+        open={diffOpen}
+        onClose={() => setDiffOpen(false)}
+      />
+
+      {/* OCR */}
+      <OcrTool open={ocrOpen} onClose={() => setOcrOpen(false)} />
+
+      {/* Aria2 离线下载 */}
+      <Aria2Manager open={aria2Open} onClose={() => setAria2Open(false)} />
 
       {/* 归档管理器 (压缩/解压) */}
       <ArchiveManager
