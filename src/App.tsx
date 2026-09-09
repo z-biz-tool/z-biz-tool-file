@@ -212,7 +212,6 @@ function AppShellInner() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [ocrOpen, setOcrOpen] = useState(false);
   const [aria2Open, setAria2Open] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
     const [updaterOpen, setUpdaterOpen] = useState(false);
     const [hasUpdate, setHasUpdate] = useState(false);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
@@ -1275,6 +1274,13 @@ function AppShellInner() {
     ? [selectedFile]
     : [];
 
+  // 当前激活的 tab 信息（用于判断是否显示图书馆/媒体库视图）
+  const activeTabKind = useMemo(() => {
+    if (!activeTabId) return "directory";
+    const tab = tabs.find((t) => t.id === activeTabId);
+    return tab?.kind ?? "directory";
+  }, [activeTabId, tabs]);
+
   // 键盘快捷键
   useKeyboardShortcuts(useMemo(() => ([
     { key: "b", meta: true, handler: () => setSiderCollapsed((v) => !v), description: "折叠/展开侧栏" },
@@ -1638,11 +1644,11 @@ function AppShellInner() {
               下载
             </Button>
           </Tooltip>
-          <Tooltip title="图书馆 & 媒体库（Calibre 风格）">
+          <Tooltip title="图书馆 & 媒体库（Calibre 风格，新标签页打开）">
             <Button
               size="small"
               icon={<BookOutlined />}
-              onClick={() => setLibraryOpen(true)}
+              onClick={() => openTab("library://main", "library")}
               aria-label="打开图书馆"
             >
               图书馆
@@ -1794,7 +1800,12 @@ function AppShellInner() {
           />
         </div>
 
-        {/* 文件列表 + 预览区 */}
+        {/* 根据当前 active tab 类型决定主内容：directory=文件列表，library=图书馆&媒体库全屏 */}
+        {activeTabKind === "library" ? (
+          <div style={{ flex: 1, overflow: "auto", background: "var(--ant-color-bg-layout)" }}>
+            <LibraryView open={true} onClose={() => {}} embedded />
+          </div>
+        ) : (
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           <DragDropTarget
             targetPath={currentPath}
@@ -1959,6 +1970,7 @@ function AppShellInner() {
             </Tooltip>
           )}
         </div>
+        )}
 
         {/* 内置终端 */}
         <BuiltInTerminal
@@ -2084,8 +2096,7 @@ function AppShellInner() {
       {/* Aria2 离线下载 */}
       <Aria2Manager open={aria2Open} onClose={() => setAria2Open(false)} />
 
-      {/* 图书馆 & 媒体库 */}
-      <LibraryView open={libraryOpen} onClose={() => setLibraryOpen(false)} />
+      {/* 图书馆 & 媒体库（作为 tab 内嵌显示，不需要独立 modal）*/}
 
       {/* 应用更新 */}
       <Updater open={updaterOpen} onClose={() => setUpdaterOpen(false)} />

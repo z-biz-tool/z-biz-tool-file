@@ -154,9 +154,10 @@ interface LibraryViewProps {
   open: boolean;
   onClose: () => void;
   initialTab?: "media" | "library";
+  embedded?: boolean; // 作为 tab 内嵌显示（不渲染 Modal 外壳）
 }
 
-export default function LibraryView({ open, onClose, initialTab }: LibraryViewProps) {
+export default function LibraryView({ open, onClose, initialTab, embedded }: LibraryViewProps) {
   const [tab, setTab] = useState<"media" | "library">(initialTab || "media");
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [msgApi, msgContext] = message.useMessage();
@@ -297,16 +298,23 @@ export default function LibraryView({ open, onClose, initialTab }: LibraryViewPr
   return (
     <Modal
       title={
-        <Space>
-          <BookOutlined style={{ color: "#eb2f96" }} />
-          <span>图书馆 & 媒体库</span>
-        </Space>
+        embedded ? null : (
+          <Space>
+            <BookOutlined style={{ color: "#eb2f96" }} />
+            <span>图书馆 & 媒体库</span>
+          </Space>
+        )
       }
-      open={open}
+      open={open || !!embedded}
       onCancel={onClose}
-      width={1100}
+      width={embedded ? "100%" : 1100}
       footer={null}
       destroyOnClose
+      mask={!embedded}
+      closable={!embedded}
+      style={embedded ? { top: 0, paddingBottom: 0, height: "100%", maxWidth: "100%" } : undefined}
+      styles={embedded ? { body: { height: "calc(100% - 0px)", overflow: "auto" } } : undefined}
+      wrapClassName={embedded ? "library-embedded-modal" : undefined}
     >
       {msgContext}
 

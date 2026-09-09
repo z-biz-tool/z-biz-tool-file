@@ -1,5 +1,5 @@
 import { Tabs, Button, Tooltip } from "antd";
-import { PlusOutlined, CloseOutlined } from "@ant-design/icons";
+import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 
 interface Props {
@@ -14,6 +14,13 @@ function tabTitle(path: string): string {
   if (path === home) return "~";
   if (path.startsWith(home + "/")) return "~/" + path.slice(home.length + 1);
   return path;
+}
+
+/** 不同类型 tab 的图标 */
+function tabIcon(kind: string): React.ReactNode {
+  if (kind === "library") return <BookOutlined style={{ fontSize: 12 }} />;
+  if (kind === "media") return <PictureOutlined style={{ fontSize: 12 }} />;
+  return <FolderOpenOutlined style={{ fontSize: 12 }} />;
 }
 
 export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
@@ -52,7 +59,8 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
             }}
             title={t.path}
           >
-            {title}
+            {tabIcon(t.kind)}
+            <span style={{ marginLeft: 4 }}>{title}</span>
           </span>
         </span>
       ),

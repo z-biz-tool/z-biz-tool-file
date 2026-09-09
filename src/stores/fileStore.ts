@@ -61,7 +61,13 @@ interface FileStore {
   // 文件列表显示模式
   viewMode: "table" | "grid" | "list" | "column";
   // 多标签页
-  tabs: Array<{ id: string; path: string }>;
+  // tab 类型:directory(目录浏览) / library(图书馆&媒体库) / media(媒体库 - 兼容)
+  tabs: Array<{
+    id: string;
+    path: string;
+    kind: "directory" | "library" | "media";
+    meta?: { libraryKind?: string };  // library tab 可指定 book/music/movie...
+  }>;
   activeTabId: string | null;
   // 文件标签/备注（path → tag）
   tagsByPath: Record<string, { color: string; label: string; note: string }>;
@@ -103,7 +109,11 @@ interface FileStore {
   // 设置文件列表显示模式
   setViewMode: (mode: "table" | "grid" | "list" | "column") => void;
   // 多标签操作
-  openTab: (path: string) => string; // 返回 tab id
+  openTab: (
+    path: string,
+    kind?: "directory" | "library" | "media",
+    meta?: { libraryKind?: string },
+  ) => string; // 返回 tab id
   closeTab: (id: string) => void;
   switchTab: (id: string) => void;
   updateActiveTabPath: (path: string) => void;
