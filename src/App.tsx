@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import {
-  Input, Button, Breadcrumb, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal,
+  Input, Button, Breadcrumb, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal, Badge,
 } from "antd";
 import type { MenuProps, BreadcrumbProps } from "antd";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -39,7 +39,6 @@ import {
   SwapOutlined,
   SafetyCertificateOutlined,
   TagOutlined,
-  Badge,
   FileTextOutlined,
   ClearOutlined,
   SettingOutlined,
@@ -50,6 +49,7 @@ import {
   VideoCameraOutlined,
   AudioOutlined,
   BrainOutlined,
+  RocketOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -747,28 +747,201 @@ function AppShellInner() {
 
   // 右键菜单
   const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
+    const lowerName = record.name.toLowerCase();
+    const isDir = record.is_dir;
+    const isZip = lowerName.endsWith(".zip");
+    const isArchive =
+      isZip ||
+      lowerName.endsWith(".tar") ||
+      lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz") ||
+      lowerName.endsWith(".tar.bz2") || lowerName.endsWith(".tbz2") ||
+      lowerName.endsWith(".tar.xz") || lowerName.endsWith(".txz") ||
+      lowerName.endsWith(".7z") ||
+      lowerName.endsWith(".gz");
+    const isPdf = lowerName.endsWith(".pdf");
+    const isImage = /\.(png|jpe?g|gif|bmp|webp|tiff?|heic|svg)$/i.test(lowerName);
+    const isVideo = /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(lowerName);
+    const isAudio = /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(lowerName);
+    const isText = /\.(txt|md|markdown|json|ya?ml|toml|xml|html?|css|scss|less|sass|js|jsx|ts|tsx|vue|svelte|py|rs|go|java|kt|swift|c|h|cc|cpp|hpp|sh|bash|zsh|sql|log|conf|ini|csv|tsv)$/i.test(lowerName);
+
     const items: MenuProps["items"] = [
+      // ── 打开 / 预览 ──
       {
         key: "open",
         label: "用默认应用打开",
-        icon: <AppstoreOutlined />,
+        icon: <RocketOutlined />,
         onClick: () => {
           invoke("open_with_default_app", { path: record.path }).catch((err) =>
             message.error("打开失败: " + err)
           );
         },
       },
-      {
-        key: "quicklook",
-        label: "Quick Look 预览",
-        icon: <EyeOutlined />,
-        onClick: () => {
-          invoke("quick_look_preview", { path: record.path }).catch((err) =>
-            message.error("Quick Look 失败: " + err)
-          );
-        },
-      },
-      { type: "divider" },
+      ...(!isDir
+        ? [
+            {
+              key: "quicklook",
+              label: "Quick Look 预览（空格）",
+              icon: <EyeOutlined />,
+              onClick: () => {
+                invoke("quick_look_preview", { path: record.path }).catch((err) =>
+                  message.error("Quick Look 失败: " + err)
+                );
+              },
+            },
+          ]
+        : []),
+      { type: "divider" as const },
+
+      // ── z-biz-tool 内置工具（按文件类型） ──
+      ...(isPdf
+        ? [
+            {
+              key: "pdf-tools",
+              label: "PDF 工具集（合并/拆分/水印…）",
+              icon: <FilePdfOutlined />,
+              onClick: () => {
+                setPdfToolsPath(record.path);
+                setPdfToolsOpen(true);
+              },
+            },
+          ]
+        : []),
+      ...(isImage
+        ? [
+            {
+              key: "ocr",
+              label: "OCR 文字识别",
+              icon: <ScanOutlined />,
+              onClick: () => {
+                setSelectedFile(record);
+                setOcrOpen(true);
+              },
+            },
+            {
+              key: "image-editor",
+              label: "图片编辑（PS 风格）",
+              icon: <PictureOutlined />,
+              onClick: () => {
+                message.info("请使用工具栏 [OCR] 进入图片编辑");
+              },
+            },
+          ]
+        : []),
+      ...(isImage || isVideo
+        ? [
+            {
+              key: "media-library",
+              label: `加入${isVideo ? "视频" : "图片"}库`,
+              icon: <PictureOutlined />,
+              onClick: () => {
+                setMediaLibraryType(isVideo ? "video" : "image");
+                setMediaLibraryPath(record.path);
+                setMediaLibraryOpen(true);
+              },
+            },
+          ]
+        : []),
+      ...(isAudio
+        ? [
+            {
+              key: "audio-library",
+              label: "加入音乐库",
+              icon: <AudioOutlined />,
+              onClick: () => {
+                setMediaLibraryType("audio");
+                setMediaLibraryPath(record.path);
+                setMediaLibraryOpen(true);
+              },
+            },
+          ]
+        : []),
+      ...(isText && !isDir
+        ? [
+            {
+              key: "diff",
+              label: "与另一个文件对比",
+              icon: <SwapOutlined />,
+              onClick: () => {
+                setDiffOpen(true);
+                setSelectedFile(record);
+              },
+            },
+          ]
+        : []),
+      ...(isZip
+        ? [
+            {
+              key: "browse-zip",
+              label: "浏览压缩包",
+              icon: <FileZipOutlined />,
+              onClick: () => {
+                setZipBrowserPath(record.path);
+                setZipBrowserOpen(true);
+              },
+            },
+          ]
+        : []),
+      ...(isArchive
+        ? [
+            {
+              key: "extract",
+              label: "解压缩",
+              icon: <ExpandOutlined />,
+              onClick: () => handleExtract(record),
+            },
+          ]
+        : [
+            {
+              key: "compress",
+              label: "压缩为 ZIP",
+              icon: <FileZipOutlined />,
+              onClick: () => {
+                setSelectedFile(record);
+                setArchiveSources([record.path]);
+                setArchiveMode("compress");
+                setArchiveTarget(null);
+                setArchiveOpen(true);
+              },
+            },
+          ]),
+      ...(!isDir
+        ? [
+            {
+              key: "hash",
+              label: "计算哈希（MD5/SHA256）",
+              icon: <SafetyCertificateOutlined />,
+              onClick: () => {
+                setSelectedFile(record);
+                setHashCalcOpen(true);
+              },
+            },
+          ]
+        : []),
+      ...(isDir
+        ? [
+            {
+              key: "duplicate-scan",
+              label: "在此目录查找重复文件",
+              icon: <CopyOutlined />,
+              onClick: () => {
+                setSelectedFile(record);
+                setDuplicateFinderOpen(true);
+              },
+            },
+            {
+              key: "storage-analyze",
+              label: "存储分析（占用空间）",
+              icon: <PieChartOutlined />,
+              onClick: () => {
+                setSelectedFile(record);
+                setStorageOpen(true);
+              },
+            },
+          ]
+        : []),
+      { type: "divider" as const },
+
+      // ── 文件操作 ──
       {
         key: "copy",
         label: "复制 (⌘+C)",
@@ -791,27 +964,38 @@ function AppShellInner() {
         },
       },
       {
+        key: "copy-path",
+        label: "复制完整路径",
+        icon: <CopyFilled />,
+        onClick: () => {
+          navigator.clipboard.writeText(record.path);
+          message.success("已复制路径");
+        },
+      },
+      {
+        key: "copy-name",
+        label: "复制文件名",
+        icon: <CopyFilled />,
+        onClick: () => {
+          navigator.clipboard.writeText(record.name);
+          message.success("已复制文件名");
+        },
+      },
+      {
         key: "delete",
-        label: "移到回收站 (⌘+Shift+⌫)",
+        label: "移到回收站 (⌘+⌫)",
         icon: <DeleteOutlined />,
         onClick: () => handleDelete(record, false),
       },
       {
         key: "delete_permanent",
-        label: "永久删除 (Shift+Option+⌫)",
+        label: "永久删除",
         danger: true,
         onClick: () => handleDelete(record, true),
       },
-      { type: "divider" },
-      {
-        key: "hash",
-        label: "计算哈希",
-        icon: <SafetyCertificateOutlined />,
-        onClick: () => {
-          setSelectedFile(record);
-          setHashCalcOpen(true);
-        },
-      },
+      { type: "divider" as const },
+
+      // ── 标签 / 属性 ──
       {
         key: "tags",
         label: tagsByPath[record.path] ? "编辑标签/备注" : "加标签/备注",
@@ -830,41 +1014,58 @@ function AppShellInner() {
           setPropertiesOpen(true);
         },
       },
+      { type: "divider" as const },
+
+      // ── 系统操作 ──
+      {
+        key: "reveal",
+        label: "在 Finder 中显示",
+        icon: <FolderOpenOutlined />,
+        onClick: () => {
+          invoke("reveal_in_finder", { path: record.path }).catch((err) =>
+            message.error("打开 Finder 失败: " + err)
+          );
+        },
+      },
+      ...(isDir
+        ? [
+            {
+              key: "terminal",
+              label: "在终端中打开",
+              icon: <CodeOutlined />,
+              onClick: () => {
+                invoke("open_terminal_at", { path: record.path }).catch((err) =>
+                  message.error("打开终端失败: " + err)
+                );
+              },
+            },
+          ]
+        : []),
+      ...(isDir
+        ? [
+            {
+              key: "new-tab",
+              label: "在新标签页打开",
+              icon: <FileAddOutlined />,
+              onClick: () => {
+                openTab(record.path);
+              },
+            },
+          ]
+        : []),
+      {
+        key: "sftp-upload",
+        label: "SFTP 上传到远程…",
+        icon: <CloudServerOutlined />,
+        onClick: () => {
+          setSelectedFile(record);
+          setSftpOpen(true);
+        },
+      },
     ];
 
-    // 压缩包：ZIP 提供浏览 + 解压；其他格式（tar/7z 等）只提供解压
-    const lowerName = record.name.toLowerCase();
-    const isZip = lowerName.endsWith(".zip");
-    const isArchive =
-      isZip ||
-      lowerName.endsWith(".tar") ||
-      lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz") ||
-      lowerName.endsWith(".tar.bz2") || lowerName.endsWith(".tbz2") ||
-      lowerName.endsWith(".tar.xz") || lowerName.endsWith(".txz") ||
-      lowerName.endsWith(".7z") ||
-      lowerName.endsWith(".gz");
-    if (isArchive) {
-      if (isZip) {
-        items.splice(5, 0, {
-          key: "browse-zip",
-          label: "浏览压缩包",
-          icon: <FileZipOutlined />,
-          onClick: () => {
-            setZipBrowserPath(record.path);
-            setZipBrowserOpen(true);
-          },
-        });
-      }
-      items.splice(isZip ? 6 : 5, 0, {
-        key: "extract",
-        label: "解压缩",
-        icon: <FileZipOutlined />,
-        onClick: () => handleExtract(record),
-      });
-    }
-
     return items;
-  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message]);
+  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message, tagsByPath, openTab]);
 
   // 表格列定义
   const columns = useMemo(() => [

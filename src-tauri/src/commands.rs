@@ -1430,6 +1430,97 @@ pub fn quick_look_preview(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 在 Finder 中显示文件
+#[tauri::command]
+pub fn reveal_in_finder(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    let target = if p.is_dir() {
+        path.to_string()
+    } else {
+        // 用 dirname 选中文件（macOS 不可直接定位到文件，只能打开父目录）
+        p.parent()
+            .and_then(|x| x.to_str())
+            .unwrap_or(path)
+            .to_string()
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("打开 Finder 失败: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("打开资源管理器失败: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("打开文件管理器失败: {}", e))?;
+        Ok(())
+    }
+}
+
+/// 在终端中打开目录（macOS: open -a Terminal，Linux: gnome-terminal，Windows: cmd）
+#[tauri::command]
+pub fn open_terminal_at(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    let target = if p.is_dir() {
+        path.to_string()
+    } else {
+        p.parent()
+            .and_then(|x| x.to_str())
+            .unwrap_or(path)
+            .to_string()
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        // 使用 Terminal.app 打开
+        std::process::Command::new("open")
+            .args(["-a", "Terminal", &target])
+            .spawn()
+            .map_err(|e| format!("打开终端失败: {}（请确保已安装 Terminal.app）", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "cmd", "/k", &format!("cd /d {}", target)])
+            .spawn()
+            .map_err(|e| format!("打开 cmd 失败: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // 尝试常见的终端
+        for term in &["gnome-terminal", "konsole", "xterm"] {
+            if std::process::Command::new(term)
+                .arg("--working-directory")
+                .arg(&target)
+                .spawn()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        Err("未找到可用的终端模拟器".to_string())
+    }
+}
+
 /// macOS Finder 标签
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileTags {

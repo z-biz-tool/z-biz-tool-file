@@ -103,6 +103,8 @@ pub fn run() {
             updater::updater_download_latest,
             updater::updater_open_install_guide,
             updater::updater_silent_check,
+            commands::reveal_in_finder,
+            commands::open_terminal_at,
             image_utils::get_image_info,
             image_utils::save_image_data,
             llm_config::load_llm_config,
