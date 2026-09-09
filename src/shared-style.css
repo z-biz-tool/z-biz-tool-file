@@ -1,0 +1,50 @@
+/* ============================================
+   z-biz-tool-file 共享样式
+   ============================================ */
+
+/* 表格行拖动列宽时的热区指示 */
+.z-tool-col-resizer:hover {
+  background: rgba(24, 144, 255, 0.3);
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* 暗色模式兼容 */
+.ant-layout-sider-dark::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* 文件图标颜色 */
+.icon-folder { color: #faad14; }
+.icon-image { color: #1890ff; }
+.icon-video { color: #722ed1; }
+.icon-audio { color: #13c2c2; }
+.icon-text { color: #52c41a; }
+.icon-code { color: #fa541c; }
+.icon-pdf { color: #f5222d; }
+.icon-archive { color: #eb2f96; }
+.icon-ebook { color: #2f54eb; }
+.icon-other { color: #8c8c8c; }
+
+/* 网格视图图片 hover */
+.grid-item:hover img {
+  opacity: 0.85;
+  transform: scale(1.02);
+}
+.grid-item {
+  transition: transform 0.15s ease;
+}

@@ -1860,7 +1860,7 @@ pub fn quick_diff_dirs(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary
     for (k, v) in &right {
         match left.get(k) {
             None => added.push(k.clone()),
-            Some(lv) if lv != *v => modified.push(k.clone()),
+            Some(lv) if *lv != *v => modified.push(k.clone()),
             _ => {}
         }
     }

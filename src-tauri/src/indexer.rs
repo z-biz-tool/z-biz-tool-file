@@ -226,14 +226,14 @@ impl SimpleIndexer {
 
             let item = FileIndexItem {
                 path: file_path.clone(),
-                name: file_name,
+                name: file_name.clone(),
                 is_dir: metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false),
                 size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
                 modified: metadata
                     .and_then(|m| m.modified().ok())
                     .map(|t| t.duration_since(UNIX_EPOCH).unwrap().as_secs())
                     .unwrap_or(0),
-                ext,
+                ext: ext.clone(),
                 tags: vec![],
                 content_hash: None,
             };
@@ -241,7 +241,7 @@ impl SimpleIndexer {
             self.file_index.insert(file_path.clone(), item);
 
             // 简单的内容索引（只索引小的文本文件）
-            self.index_file_content(&file_path, &ext)?;
+            self.index_file_content(&file_path, &ext.clone())?;
 
             processed += 1;
 
@@ -420,14 +420,14 @@ impl SimpleIndexer {
 
         let item = FileIndexItem {
             path: file_path.clone(),
-            name: file_name,
+            name: file_name.clone(),
             is_dir: metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false),
             size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
             modified: metadata
                 .and_then(|m| m.modified().ok())
                 .map(|t| t.duration_since(UNIX_EPOCH).unwrap().as_secs())
                 .unwrap_or(0),
-            ext,
+            ext: ext.clone(),
             tags: vec![],
             content_hash: None,
         };

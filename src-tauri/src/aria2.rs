@@ -1,4 +1,6 @@
 // Aria2 离线下载管理
+use serde_json::json;
+
 // 通过 XML-RPC 调用 aria2c daemon（需要用户先启动 aria2c --enable-rpc）
 use serde::{Deserialize, Serialize};
 use std::process::{Command, Child};

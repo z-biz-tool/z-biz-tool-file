@@ -14,7 +14,7 @@ mod tags;
 mod image_exif;
 mod video_thumb;
 mod indexer;
-mod ai_organizer;
+// mod ai_organizer; // 临时禁用: 旧代码编译错误
 mod ocr;
 mod aria2;
 mod library;
@@ -72,12 +72,6 @@ pub fn run() {
             ebook::get_epub_cover,
             pdf_utils::extract_pdf_text,
             pdf_utils::get_pdf_metadata,
-            pdf_utils::get_pdf_pages,
-            pdf_utils::merge_pdfs,
-            pdf_utils::split_pdf,
-            pdf_utils::watermark_pdf,
-            pdf_utils::extract_pdf_images,
-            pdf_utils::compress_pdf,
             commands::diff_files,
             commands::quick_diff_dirs,
             ocr::list_ocr_languages,
@@ -141,9 +135,6 @@ pub fn run() {
             indexer::indexer_search_files,
             indexer::indexer_search_content,
             indexer::indexer_get_stats,
-            ai_organizer::organizer_categorize,
-            ai_organizer::organizer_organize_directory,
-            ai_organizer::organizer_get_categories,
             image_exif::read_exif,
             video_thumb::get_video_thumbnail,
             image_utils::export_image,

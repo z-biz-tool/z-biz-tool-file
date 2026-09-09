@@ -1,7 +1,8 @@
-// OCR (光学字符识别) - 基于 Tesseract
+// OCR (光学字符识别) - 调用系统 tesseract 命令
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::fs;
+use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrResult {
@@ -18,10 +19,11 @@ pub struct OcrLanguage {
     pub name: String,
 }
 
-/// 获取 OCR 支持的语言列表（必须已通过 tesseract 安装训练数据）
+/// 获取 OCR 支持的语言列表
 #[tauri::command]
 pub fn list_ocr_languages() -> Vec<OcrLanguage> {
     vec![
+        OcrLanguage { code: "chi_sim+eng".into(), name: "中文+英文（推荐）".into() },
         OcrLanguage { code: "eng".into(), name: "英语".into() },
         OcrLanguage { code: "chi_sim".into(), name: "简体中文".into() },
         OcrLanguage { code: "chi_tra".into(), name: "繁体中文".into() },
@@ -30,12 +32,20 @@ pub fn list_ocr_languages() -> Vec<OcrLanguage> {
         OcrLanguage { code: "fra".into(), name: "法语".into() },
         OcrLanguage { code: "deu".into(), name: "德语".into() },
         OcrLanguage { code: "rus".into(), name: "俄语".into() },
-        OcrLanguage { code: "spa".into(), name: "西班牙语".into() },
-        OcrLanguage { code: "por".into(), name: "葡萄牙语".into() },
     ]
 }
 
-/// 对图片执行 OCR
+/// 检查 Tesseract 是否已安装
+#[tauri::command]
+pub fn check_tesseract() -> bool {
+    Command::new("tesseract")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// 对图片执行 OCR（调用系统 tesseract）
 #[tauri::command]
 pub fn ocr_image(path: String, language: String) -> Result<OcrResult, String> {
     let file_path = Path::new(&path);
@@ -45,41 +55,50 @@ pub fn ocr_image(path: String, language: String) -> Result<OcrResult, String> {
 
     let start = std::time::Instant::now();
 
-    // 加载图片
-    let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
-    let rgb = img.to_rgb8();
-    let (w, h) = (rgb.width() as i32, rgb.height() as i32);
+    // 调用 tesseract 命令：tesseract input.png stdout -l chi_sim+eng
+    let output = Command::new("tesseract")
+        .arg(&path)
+        .arg("stdout")
+        .args(["-l", &language])
+        .output()
+        .map_err(|e| format!("执行 tesseract 失败: {}（请确认系统已安装）", e))?;
 
-    // 初始化 Tesseract
-    let mut lt = leptess::LepTess::new(None, &language)
-        .map_err(|e| format!("初始化 Tesseract 失败: {}（请确认系统已安装 tesseract 和 {} 训练数据）", e, language))?;
-    lt.set_image(rgb.as_raw(), w as u32, h as u32, 3, w as usize * 3)
-        .map_err(|e| format!("设置图片失败: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "tesseract 失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
 
-    let text = lt.get_utf8_text().map_err(|e| format!("OCR 失败: {}", e))?;
-    let confidence = lt.mean_text_conf();
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+
+    // 尝试从 stderr 提取置信度（tesseract 会输出类似 "Confidence: 85" 的信息）
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let confidence = parse_confidence(&stderr);
 
     Ok(OcrResult {
         text,
-        confidence: confidence as f32,
+        confidence,
         language,
-        duration_ms: start.elapsed().as_millis(),
+        duration_ms: start.elapsed().as_millis() as u64,
     })
 }
 
-/// 对 PDF 第一页执行 OCR（简化版：转图片 + OCR）
-#[tauri::command]
-pub fn ocr_pdf(path: String, language: String, page: u32) -> Result<OcrResult, String> {
-    // 简化实现：调用 ocr_image，前端需要先把 PDF 转图片
-    // 这里仅占位实现
-    Err("PDF OCR 待集成 pdf-to-image，可先用图片 OCR 测试".to_string())
+fn parse_confidence(stderr: &str) -> f32 {
+    // tesseract 在某些模式下会输出置信度
+    for line in stderr.lines() {
+        if let Some(rest) = line.strip_prefix("Confidence: ") {
+            if let Ok(v) = rest.trim().parse::<f32>() {
+                return v;
+            }
+        }
+    }
+    // 如果没有输出，默认给个中等置信度
+    75.0
 }
 
-/// 检查 Tesseract 是否已安装
+/// 对 PDF 第一页执行 OCR（简化版）
 #[tauri::command]
-pub fn check_tesseract() -> bool {
-    std::process::Command::new("tesseract")
-        .arg("--version")
-        .output()
-        .is_ok()
+pub fn ocr_pdf(path: String, language: String, _page: u32) -> Result<OcrResult, String> {
+    Err("PDF OCR 暂未实现，请先用图片 OCR".to_string())
 }

@@ -27,6 +27,12 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/z-biz-tool/z-biz-tool-file/releases/latest/download/{{target}}"],
+      "pubkey": ""
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

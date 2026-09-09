@@ -278,7 +278,7 @@ pub fn library_scan_books() -> Result<LibraryStats, String> {
                 let id = hash_path(&path);
                 let lib = LibraryEntry {
                     id: id.clone(),
-                    item_id: id,
+                    item_id: id.clone(),
                     kind,
                     title,
                     path: path.clone(),
