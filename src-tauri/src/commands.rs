@@ -1603,3 +1603,98 @@ pub fn list_zip_contents(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
     }
     Ok(entries)
 }
+
+// ============================================================================
+// 多格式压缩：tar / tar.gz / tar.bz2（除 zip 之外的归档能力）
+// ============================================================================
+
+/// 压缩文件/目录为 tar 系列格式
+///
+/// - `paths`: 源路径列表（文件或目录）
+/// - `dest_path`: 目标归档文件路径（.tar / .tar.gz / .tar.bz2）
+/// - `compression`: "tar" / "gz" / "bz2"
+#[tauri::command]
+pub fn compress_to_tar(
+    paths: Vec<String>,
+    dest_path: String,
+    compression: String,
+) -> Result<(), String> {
+    let dest = Path::new(&dest_path);
+
+    // 确保目标目录存在
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    }
+
+    let file = fs::File::create(dest).map_err(|e| format!("创建归档文件失败: {}", e))?;
+
+    // 根据 compression 包装写入流
+    let writer: Box<dyn std::io::Write> = match compression.as_str() {
+        "tar" => Box::new(file),
+        "gz" | "tar.gz" => Box::new(flate2::write::GzEncoder::new(
+            file,
+            flate2::Compression::default(),
+        )),
+        "bz2" | "tar.bz2" => Box::new(bzip2::write::BzEncoder::new(
+            file,
+            bzip2::Compression::default(),
+        )),
+        other => return Err(format!("不支持的 tar 压缩格式: {}", other)),
+    };
+
+    let mut archive = tar::Builder::new(writer);
+
+    for path_str in &paths {
+        let src_path = Path::new(path_str);
+        if !src_path.exists() {
+            return Err(format!("路径不存在: {}", path_str));
+        }
+
+        if src_path.is_dir() {
+            add_dir_to_tar(&mut archive, src_path, src_path)
+                .map_err(|e| format!("压缩目录失败: {}", e))?;
+        } else {
+            add_file_to_tar(&mut archive, src_path, src_path)
+                .map_err(|e| format!("压缩文件失败: {}", e))?;
+        }
+    }
+
+    archive
+        .finish()
+        .map_err(|e| format!("完成 tar 写入失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 递归添加目录到 tar
+fn add_dir_to_tar<W: std::io::Write>(
+    archive: &mut tar::Builder<W>,
+    base: &Path,
+    dir: &Path,
+) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            add_dir_to_tar(archive, base, &path)?;
+        } else {
+            add_file_to_tar(archive, &path, base)?;
+        }
+    }
+    Ok(())
+}
+
+/// 添加单个文件到 tar（保持相对路径）
+fn add_file_to_tar<W: std::io::Write>(
+    archive: &mut tar::Builder<W>,
+    file_path: &Path,
+    base: &Path,
+) -> std::io::Result<()> {
+    let relative = file_path.strip_prefix(base).unwrap_or(file_path);
+    let file_name = relative.to_string_lossy().to_string();
+
+    let mut file = fs::File::open(file_path)?;
+    archive.append_file(&file_name, &mut file)?;
+    Ok(())
+}

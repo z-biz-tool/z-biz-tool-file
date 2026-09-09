@@ -41,6 +41,7 @@ pub fn run() {
             commands::cleanup_epub_temp,
             commands::list_directory_with_hidden,
             commands::compress_to_zip,
+            commands::compress_to_tar,
             commands::extract_zip,
             commands::extract_archive,
             commands::is_archive_supported,

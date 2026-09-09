@@ -25,6 +25,7 @@ import {
   TableOutlined,
   InfoCircleOutlined,
   FileZipOutlined,
+  ExpandOutlined,
   FormOutlined,
   ColumnHeightOutlined,
   RadarChartOutlined,
@@ -76,6 +77,7 @@ import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
 import NewFileTemplate from "./components/NewFileTemplate";
 import ZipBrowser from "./components/ZipBrowser";
+import ArchiveManager from "./components/ArchiveManager";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
@@ -189,6 +191,10 @@ function AppShellInner() {
   const [dirSyncOpen, setDirSyncOpen] = useState(false);
   const [zipBrowserOpen, setZipBrowserOpen] = useState(false);
   const [zipBrowserPath, setZipBrowserPath] = useState<string | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveMode, setArchiveMode] = useState<"compress" | "extract">("compress");
+  const [archiveSources, setArchiveSources] = useState<string[]>([]);
+  const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -1298,6 +1304,34 @@ function AppShellInner() {
               aria-label="打开快速操作"
             />
           </Tooltip>
+          <Tooltip title="归档管理器（压缩/解压）">
+            <Button
+              size="small"
+              icon={<FileZipOutlined />}
+              onClick={() => {
+                setArchiveSources(selectedFiles);
+                setArchiveMode("compress");
+                setArchiveOpen(true);
+              }}
+              aria-label="打开归档管理器"
+            >
+              归档
+            </Button>
+          </Tooltip>
+          <Tooltip title="解压归档（选择 .zip/.tar.gz 等）">
+            <Button
+              size="small"
+              icon={<ExpandOutlined />}
+              onClick={() => {
+                setArchiveTarget(null);
+                setArchiveMode("extract");
+                setArchiveOpen(true);
+              }}
+              aria-label="解压归档"
+            >
+              解压
+            </Button>
+          </Tooltip>
           <Tooltip title="回收站（已删除的文件）">
             <Button
               size="small"
@@ -1694,6 +1728,19 @@ function AppShellInner() {
         onClose={() => { setZipBrowserOpen(false); setZipBrowserPath(null); }}
         zipPath={zipBrowserPath}
         currentPath={currentPath}
+        onRefresh={() => loadDirectory(currentPath)}
+      />
+
+      {/* 归档管理器 (压缩/解压) */}
+      <ArchiveManager
+        open={archiveOpen}
+        onClose={() => {
+          setArchiveOpen(false);
+          setArchiveSources([]);
+          setArchiveTarget(null);
+        }}
+        sourcePaths={archiveMode === "compress" ? archiveSources : undefined}
+        archivePath={archiveMode === "extract" ? archiveTarget : null}
         onRefresh={() => loadDirectory(currentPath)}
       />
 

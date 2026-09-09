@@ -1,3 +1,9 @@
+/* ============================================
+   z-biz-tool-file 统一样式导入
+   ============================================ */
+
+@import './shared-style.css';
+
 * {
   margin: 0;
   padding: 0;
@@ -14,7 +20,11 @@ body {
   height: 100vh;
 }
 
-/* 文件树样式 */
+/* ============================================
+   z-biz-tool-file 特有样式
+   ============================================ */
+
+/* 文件树样式 - 使用统一样式 */
 .file-tree {
   height: 100%;
   overflow: auto;
@@ -23,27 +33,27 @@ body {
 
 .file-tree-node {
   cursor: pointer;
-  padding: 2px 0;
+  padding: var(--tool-padding-xs) 0;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--tool-padding-xs);
   white-space: nowrap;
 }
 
 .file-tree-node:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--tool-bg-hover);
 }
 
 .file-tree-node.selected {
-  background: #e6f4ff;
+  background: var(--tool-bg-selected);
 }
 
-/* 表格多选行高亮（macOS Finder 风格：浅蓝底色） */
+/* 表格多选行高亮 - 使用统一的选中样式 */
 .z-tool-row-selected td {
-  background: var(--ant-color-primary-bg, rgba(22, 119, 255, 0.08)) !important;
+  background: var(--tool-bg-selected) !important;
 }
 .z-tool-row-selected:hover td {
-  background: var(--ant-color-primary-bg-hover, rgba(22, 119, 255, 0.12)) !important;
+  background: var(--tool-accent-bg-hover) !important;
 }
 
 /* 预览区 */
@@ -52,39 +62,26 @@ body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  background: #fafafa;
+  background: var(--tool-bg-secondary);
 }
 
-/* 分栏视图横向滚动条：始终可见，thin + 半透明 */
+/* 分栏视图横向滚动条 */
 .column-view-scroll {
-  scrollbar-width: thin; /* Firefox */
-  scrollbar-color: rgba(0, 0, 0, 0.25) rgba(0, 0, 0, 0.04);
+  scrollbar-width: thin;
+  scrollbar-color: var(--tool-text-secondary) transparent;
 }
 .column-view-scroll::-webkit-scrollbar {
-  height: 10px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
+  height: 6px;
 }
 .column-view-scroll::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 5px;
+  background: transparent;
 }
 .column-view-scroll::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 5px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+  background: var(--tool-text-secondary);
+  border-radius: 3px;
 }
 .column-view-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.45);
-  background-clip: padding-box;
-  border: 2px solid transparent;
-}
-.column-view-scroll::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
+  background: var(--tool-text-primary);
 }
 
 .preview-image {
@@ -105,7 +102,7 @@ body {
 .preview-text {
   width: 100%;
   height: 100%;
-  padding: 16px;
+  padding: var(--tool-padding-lg);
   overflow: auto;
   font-family: "SF Mono", "Fira Code", monospace;
   font-size: 13px;
@@ -120,11 +117,11 @@ body {
 }
 
 .search-result-item {
-  padding: 6px 12px;
+  padding: var(--tool-padding-xs) var(--tool-padding-sm);
   cursor: pointer;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--tool-border-color);
 }
 
 .search-result-item:hover {
-  background: #f5f5f5;
+  background: var(--tool-bg-hover);
 }

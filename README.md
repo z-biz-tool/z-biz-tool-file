@@ -64,7 +64,8 @@
 | 工具 | 说明 |
 |------|------|
 | 内置终端 (BuiltInTerminal) | 当前目录直接打开终端 |
-| 压缩包浏览 (ZipBrowser) | 不解压浏览 zip/tar 等压缩包 |
+| 归档管理器 (ArchiveManager) | **压缩/解压** zip / tar / tar.gz / tar.bz2 / 7z / gz |
+| 压缩包浏览 (ZipBrowser) | 不解压浏览 zip 压缩包（保留原功能） |
 | 批量重命名 (BatchRename) | 正则/序号/替换批量重命名 |
 | 文本转换 (TextConverter) | 编码转换（GBK/UTF-8 等）/ 行尾符转换 |
 | 新建文件模板 (NewFileTemplate) | 按模板快速新建文件 |
