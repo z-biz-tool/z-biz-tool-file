@@ -67,6 +67,7 @@ pub fn run() {
             pdf_utils::extract_pdf_text,
             pdf_utils::get_pdf_metadata,
             image_utils::get_image_info,
+            image_utils::save_image_data,
             llm_config::load_llm_config,
             llm_config::save_llm_config,
             llm_config::get_llm_config_path,

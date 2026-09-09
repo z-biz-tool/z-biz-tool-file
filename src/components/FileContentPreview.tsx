@@ -230,7 +230,6 @@ export default function FileContentPreview({
           body = (
             <ImageEditor
               filePath={file.path}
-              fileName={file.name}
               onBack={() => setEditingImage(false)}
             />
           );
