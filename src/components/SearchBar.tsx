@@ -10,6 +10,10 @@ import { message } from "antd";
 
 const { Text } = Typography;
 
+// 渐变色定义
+const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
+const searchBgGradient = "linear-gradient(135deg, rgba(102,126,234,0.08) 0%, rgba(118,75,162,0.08) 100%)";
+
 interface SearchBarProps {
   rootPath: string;
 }
@@ -168,15 +172,29 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
   const trimmedQuery = query.trim();
 
   return (
-    <div style={{ padding: "8px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+    <div style={{ padding: "10px 14px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
         <Input
           placeholder="全盘搜索文件名或内容..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+          prefix={<SearchOutlined style={{ color: "#667eea", fontSize: 16 }} />}
           allowClear
-          style={{ flex: 1 }}
+          style={{ 
+            flex: 1,
+            background: searchBgGradient,
+            borderRadius: 10,
+            border: '1px solid rgba(102,126,234,0.1)',
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.boxShadow = '0 2px 8px rgba(102,126,234,0.15)';
+            e.currentTarget.style.border = '1px solid rgba(102,126,234,0.3)';
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.boxShadow = 'none';
+            e.currentTarget.style.border = '1px solid rgba(102,126,234,0.1)';
+          }}
         />
         <Segmented
           options={[
@@ -186,6 +204,10 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
           value={mode}
           onChange={(v) => setMode(v as "filename" | "content")}
           size="small"
+          style={{
+            borderRadius: 8,
+            overflow: 'hidden'
+          }}
         />
       </div>
 
@@ -196,30 +218,34 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
             display: "flex",
             alignItems: "center",
             gap: 8,
-            padding: "4px 0",
-            fontSize: 11,
+            padding: "6px 10px",
+            fontSize: 12,
             color: "var(--ant-color-text-secondary)",
+            background: "linear-gradient(90deg, rgba(102,126,234,0.04) 0%, rgba(118,75,162,0.04) 100%)",
+            borderRadius: 8,
+            marginTop: 6
           }}
         >
           <BuildOutlined
             style={{
-              color: isIndexing ? "var(--ant-color-warning)" : "var(--ant-color-success)",
+              color: isIndexing ? "var(--ant-color-warning)" : "#52c41a",
+              fontSize: 14
             }}
           />
           <span>
-            索引已就绪：{indexStats.total_files.toLocaleString()} 个文件
+            索引已就绪：<strong>{indexStats.total_files.toLocaleString()}</strong> 个文件
           </span>
           {!isIndexing && (
             <Button
               type="link"
               size="small"
               onClick={() => buildIndex()}
-              style={{ padding: 0, height: "auto" }}
+              style={{ padding: 0, height: "auto", color: brandGradient, fontWeight: 500 }}
             >
               [重新构建]
             </Button>
           )}
-          {isIndexing && <span style={{ color: "var(--ant-color-warning)" }}>构建中...</span>}
+          {isIndexing && <span style={{ color: "var(--ant-color-warning)", marginLeft: 4 }}>构建中...</span>}
         </div>
       )}
 
