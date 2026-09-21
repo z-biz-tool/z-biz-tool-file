@@ -14,7 +14,7 @@ import {
   Tag
 } from 'antd';
 import { RobotOutlined, SendOutlined } from '@ant-design/icons';
-import { useAgentStore } from '../agent/AgentManager';
+import { useAgentStore } from 'z-biz-tool-shared/src/agent/AgentManager';
 
 const { TextArea } = Input;
 const { Text } = Typography;
