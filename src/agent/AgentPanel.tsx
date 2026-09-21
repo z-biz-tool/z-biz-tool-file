@@ -14,7 +14,7 @@ import {
   Tag
 } from 'antd';
 import { RobotOutlined, SendOutlined } from '@ant-design/icons';
-import { useAgentStore } from '../agent/AgentManager';
+import { useAgentStore } from 'z-biz-tool-shared/src/agent/AgentManager';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -168,7 +168,7 @@ export const AgentPanel: React.FC = () => {
       </div>
 
       {/* 输入框 */}
-      <Space size="small">
+      <Space size="small" style={{ width: '100%' }}>
         <TextArea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -176,14 +176,12 @@ export const AgentPanel: React.FC = () => {
           placeholder="输入自然语言描述... (例如: 查询所有用户表)"
           rows={2}
           style={{ flex: 1 }}
-          suffix={
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={handleSend}
-              disabled={!input.trim() || loading}
-            />
-          }
+        />
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={handleSend}
+          disabled={!input.trim() || loading}
         />
       </Space>
 

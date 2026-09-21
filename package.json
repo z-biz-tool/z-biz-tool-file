@@ -20,7 +20,8 @@
     "@tauri-apps/plugin-clipboard-manager": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
-    "@tauri-apps/plugin-shell": "^2.0.0"
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "z-biz-tool-shared": "file:../z-biz-tool-shared"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
