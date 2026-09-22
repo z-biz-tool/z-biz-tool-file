@@ -698,6 +698,47 @@ function AppShellInner() {
     [currentPath, loadDirectory, message, modal],
   );
 
+  // 批量删除：一次确认、逐条执行、汇总失败项。右键菜单与 Delete/⌘⌫ 共用这一条路径，
+  // 避免"菜单里删 N 项、快捷键只删 1 项"这种口径分叉。
+  const handleDeleteMany = useCallback(
+    (entries: FileEntry[], permanent: boolean) => {
+      if (entries.length === 0) return;
+      if (entries.length === 1) {
+        handleDelete(entries[0], permanent);
+        return;
+      }
+      const count = entries.length;
+      modal.confirm({
+        title: permanent ? "永久删除" : "移到回收站？",
+        content: permanent
+          ? `将永久删除 ${count} 项，无法恢复。`
+          : `将 ${count} 项移到回收站，可以在「设置」旁的回收站按钮中恢复。`,
+        okText: permanent ? "永久删除" : "移到回收站",
+        okType: "danger",
+        cancelText: "取消",
+        onOk: async () => {
+          let ok = 0;
+          const failed: string[] = [];
+          for (const r of entries) {
+            try {
+              await invoke(permanent ? "delete_file" : "delete_to_trash", { path: r.path });
+              ok++;
+            } catch (err) {
+              failed.push(`${r.name}: ${err}`);
+            }
+          }
+          message.success(`已处理 ${ok} 项${failed.length ? `，失败 ${failed.length} 项` : ""}`);
+          // 被拦下的那条路径往往才是用户要的答案（path_guard 会说明原因），只报第一条
+          if (failed.length) message.error(failed[0]);
+          setSelectedRowKeys([]);
+          setSelectionAnchor(null);
+          loadDirectory(currentPath);
+        },
+      });
+    },
+    [currentPath, handleDelete, loadDirectory, message, modal],
+  );
+
   // 重命名
   const handleRename = useCallback(async () => {
     if (!renameModal.path || !newName.trim()) return;
@@ -989,45 +1030,13 @@ function AppShellInner() {
         key: "batch-delete",
         label: `移到回收站 (${count} 项)`,
         icon: <DeleteOutlined />,
-        onClick: () => {
-          modal.confirm({
-            title: "移到回收站?",
-            content: `将 ${count} 项移到回收站,可在回收站中恢复。`,
-            okText: "移到回收站",
-            okType: "danger",
-            cancelText: "取消",
-            onOk: async () => {
-              let ok = 0, fail = 0;
-              for (const r of records) {
-                try { await invoke("delete_to_trash", { path: r.path }); ok++; } catch { fail++; }
-              }
-              message.success(`已处理 ${ok} 项${fail ? `,失败 ${fail} 项` : ""}`);
-              loadDirectory(currentPath);
-            },
-          });
-        },
+        onClick: () => handleDeleteMany(records, false),
       },
       {
         key: "batch-delete-permanent",
         label: `永久删除 (${count} 项)`,
         danger: true,
-        onClick: () => {
-          modal.confirm({
-            title: "永久删除?",
-            content: `将永久删除 ${count} 项,无法恢复。`,
-            okText: "永久删除",
-            okType: "danger",
-            cancelText: "取消",
-            onOk: async () => {
-              let ok = 0, fail = 0;
-              for (const r of records) {
-                try { await invoke("delete_file", { path: r.path }); ok++; } catch { fail++; }
-              }
-              message.success(`已处理 ${ok} 项${fail ? `,失败 ${fail} 项` : ""}`);
-              loadDirectory(currentPath);
-            },
-          });
-        },
+        onClick: () => handleDeleteMany(records, true),
       },
       { type: "divider" as const },
 
@@ -1056,7 +1065,7 @@ function AppShellInner() {
     ];
 
     return items;
-  }, [handleCopy, handleCut, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setSftpOpen, setArchiveSources, setArchiveMode, setArchiveTarget, setArchiveOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
+  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setSftpOpen, setArchiveSources, setArchiveMode, setArchiveTarget, setArchiveOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
 
   // 兼容旧接口的 contextMenuItems:根据是否多选派发
   const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
@@ -1268,7 +1277,12 @@ function AppShellInner() {
     { key: "c", meta: true, handler: () => selectedFiles.length > 0 && handleCopy(selectedFiles), description: "复制选中" },
     { key: "x", meta: true, handler: () => selectedFiles.length > 0 && handleCut(selectedFiles), description: "剪切选中" },
     { key: "v", meta: true, handler: handlePaste, description: "粘贴" },
-    { key: "Backspace", meta: true, shift: true, handler: () => selectedFile && handleDelete(selectedFile), description: "删除选中" },
+    { key: "a", meta: true, handler: () => setSelectedRowKeys(filteredFileList.map((f) => f.path)), description: "全选当前目录" },
+    // 删除走"选中项"而不是"当前行"：选中 50 项按 ⌘⌫ 只干掉 1 项是意外的差别
+    { key: "Backspace", meta: true, handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站" },
+    { key: "Delete", handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站" },
+    { key: "Backspace", meta: true, shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中" },
+    { key: "Delete", shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中" },
     { key: "Enter", handler: () => {
       // 重命名快捷键：选中文件时按 Enter 打开重命名
       if (selectedFile && !selectedFile.is_dir) {
@@ -1293,6 +1307,10 @@ function AppShellInner() {
   ]), [
     goBack, goForward, goUp, currentPath, loadDirectory, showHidden, setShowHidden,
     setViewMode, selectedFiles, handleCopy, handleCut, handlePaste, selectedFile, handleDelete,
+    // openTab/closeTab/activeTabId 缺一个，⌘T 就会一直开旧路径、⌘W 一直关最初那个标签
+    openTab, closeTab, activeTabId,
+    // 新增的 ⌘A / Delete 系：漏了会让闭包拿到首帧的列表和选择集
+    filteredFileList, setSelectedRowKeys, handleDeleteMany,
     renameModal.visible, createModal.visible, batchRenameOpen, propertiesOpen,
     dualPanelOpen, duplicateFinderOpen, hashCalcOpen, dirSyncOpen, zipBrowserOpen,
     newFileTemplateOpen, terminalVisible,
