@@ -14,6 +14,8 @@ mod tags;
 mod image_exif;
 mod video_thumb;
 mod indexer;
+mod atomic_write;
+mod path_guard;
 // mod ai_organizer; // 临时禁用: 旧代码编译错误
 mod ocr;
 mod aria2;
@@ -156,4 +158,66 @@ pub fn run() {
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 集成测试桥接：把内部模块的关键 API 暴露为 #[doc(hidden)] pub，
+/// 让 tests/ 目录的集成测试可以直接调用真实生产代码路径。
+#[doc(hidden)]
+pub mod test_bridge {
+    use std::path::Path;
+
+    pub fn validate_path_concurrent(raw: &str) -> Result<std::path::PathBuf, String> {
+        match crate::path_guard::validate(raw) {
+            Ok(p) => Ok(p),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    pub fn atomic_write_concurrent(p: &Path, bytes: &[u8]) -> Result<(), String> {
+        crate::atomic_write::atomic_write(p, bytes)
+    }
+
+    /// 直接调真实 Tauri 命令函数做端到端集成验证
+    pub fn call_delete_file(path: &str) -> Result<(), String> {
+        crate::commands::delete_file(path)
+    }
+    pub fn call_move_file(src: &str, dest: &str) -> Result<String, String> {
+        crate::commands::move_file(src, dest)
+    }
+    pub fn call_copy_file(src: &str, dest: &str) -> Result<String, String> {
+        crate::commands::copy_file(src, dest)
+    }
+    pub fn call_rename_file(old: &str, new: &str) -> Result<String, String> {
+        crate::commands::rename_file(old, new)
+    }
+    pub fn call_create_file(path: &str, content: Option<String>) -> Result<(), String> {
+        crate::commands::create_file(path, content)
+    }
+    pub fn call_extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
+        crate::commands::extract_zip(zip_path, dest_dir)
+    }
+    pub fn call_extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
+        crate::commands::extract_archive(archive_path, dest_dir)
+    }
+    pub fn call_read_file_content(path: &str) -> Result<crate::commands::ReadFileResult, String> {
+        crate::commands::read_file_content(path)
+    }
+    pub fn call_search_files(
+        path: &str,
+        query: &str,
+    ) -> Result<Vec<crate::commands::SearchResultItem>, String> {
+        crate::commands::search_files(path, query)
+    }
+    pub fn call_secure_delete_file(path: &str, passes: Option<u32>) -> Result<(), String> {
+        crate::commands::secure_delete_file(path, passes)
+    }
+    pub fn call_set_file_permissions(path: &str, mode: u32) -> Result<(), String> {
+        crate::commands::set_file_permissions(path, mode)
+    }
+    pub fn call_calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String> {
+        crate::commands::calculate_file_hash(path, algorithm)
+    }
+    pub fn call_get_directory_size(path: &str) -> Result<u64, String> {
+        crate::commands::get_directory_size(path)
+    }
 }

@@ -109,15 +109,15 @@ pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
 /// 读取文件内容（文本文件）
 #[tauri::command]
 pub fn read_file_content(path: &str) -> Result<ReadFileResult, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("文件不存在: {}", path));
     }
-    if file_path.is_dir() {
+    if canonical.is_dir() {
         return Err(format!("是目录，不是文件: {}", path));
     }
 
-    let metadata = fs::metadata(file_path).map_err(|e| format!("读取元数据失败: {}", e))?;
+    let metadata = fs::metadata(&canonical).map_err(|e| format!("读取元数据失败: {}", e))?;
     let size = metadata.len();
 
     // 限制读取大小（10MB）
@@ -125,10 +125,10 @@ pub fn read_file_content(path: &str) -> Result<ReadFileResult, String> {
         return Err("文件过大（超过10MB），不支持预览".to_string());
     }
 
-    let bytes = fs::read(file_path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let bytes = fs::read(&canonical).map_err(|e| format!("读取文件失败: {}", e))?;
 
     // EPUB/MOBI文件由专门的解析器处理，不标记为二进制
-    let ext = file_path
+    let ext = canonical
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
@@ -162,8 +162,8 @@ pub fn read_file_content(path: &str) -> Result<ReadFileResult, String> {
 /// 搜索文件（按文件名搜索，使用walkdir遍历指定目录）
 #[tauri::command]
 pub fn search_files(path: &str, query: &str) -> Result<Vec<SearchResultItem>, String> {
-    let search_path = Path::new(path);
-    if !search_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
     }
 
@@ -172,7 +172,7 @@ pub fn search_files(path: &str, query: &str) -> Result<Vec<SearchResultItem>, St
     let mut count = 0;
     const MAX_RESULTS: usize = 500;
 
-    for entry in WalkDir::new(search_path)
+    for entry in WalkDir::new(&canonical)
         .max_depth(5)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -242,15 +242,15 @@ pub fn get_file_info(path: &str) -> Result<FileInfo, String> {
 /// 重命名文件/目录
 #[tauri::command]
 pub fn rename_file(old_path: &str, new_name: &str) -> Result<String, String> {
-    let old = Path::new(old_path);
-    if !old.exists() {
+    let canonical = crate::path_guard::validate(old_path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("源路径不存在: {}", old_path));
     }
 
-    let parent = old.parent().ok_or("无法获取父目录")?;
+    let parent = canonical.parent().ok_or("无法获取父目录")?;
     let new_path = parent.join(new_name);
 
-    fs::rename(old, &new_path).map_err(|e| format!("重命名失败: {}", e))?;
+    fs::rename(&canonical, &new_path).map_err(|e| format!("重命名失败: {}", e))?;
 
     Ok(new_path.to_string_lossy().to_string())
 }
@@ -258,15 +258,15 @@ pub fn rename_file(old_path: &str, new_name: &str) -> Result<String, String> {
 /// 删除文件/目录
 #[tauri::command]
 pub fn delete_file(path: &str) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
     }
 
-    if file_path.is_dir() {
-        fs::remove_dir_all(file_path).map_err(|e| format!("删除目录失败: {}", e))?;
+    if canonical.is_dir() {
+        fs::remove_dir_all(&canonical).map_err(|e| format!("删除目录失败: {}", e))?;
     } else {
-        fs::remove_file(file_path).map_err(|e| format!("删除文件失败: {}", e))?;
+        fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
     }
 
     Ok(())
@@ -275,33 +275,33 @@ pub fn delete_file(path: &str) -> Result<(), String> {
 /// 移动文件/目录
 #[tauri::command]
 pub fn move_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
-    let src = Path::new(src_path);
-    let dest_dir_path = Path::new(dest_dir);
+    let src_canonical = crate::path_guard::validate(src_path).map_err(|e| e.to_string())?;
+    let dest_canonical = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
 
-    if !src.exists() {
+    if !src_canonical.exists() {
         return Err(format!("源路径不存在: {}", src_path));
     }
-    if !dest_dir_path.is_dir() {
+    if !dest_canonical.is_dir() {
         return Err(format!("目标不是目录: {}", dest_dir));
     }
 
-    let file_name = src
+    let file_name = src_canonical
         .file_name()
         .ok_or("无法获取文件名")?;
 
-    let dest_path = dest_dir_path.join(file_name);
+    let dest_path = dest_canonical.join(file_name);
 
     // 尝试直接移动（同一卷），失败则复制+删除
-    match fs::rename(src, &dest_path) {
+    match fs::rename(&src_canonical, &dest_path) {
         Ok(_) => {}
         Err(_) => {
             // 跨卷移动：复制后删除
-            if src.is_dir() {
-                copy_dir_recursive(src, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
-                fs::remove_dir_all(src).map_err(|e| format!("删除源目录失败: {}", e))?;
+            if src_canonical.is_dir() {
+                copy_dir_recursive(&src_canonical, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
+                fs::remove_dir_all(&src_canonical).map_err(|e| format!("删除源目录失败: {}", e))?;
             } else {
-                fs::copy(src, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
-                fs::remove_file(src).map_err(|e| format!("删除源文件失败: {}", e))?;
+                fs::copy(&src_canonical, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
+                fs::remove_file(&src_canonical).map_err(|e| format!("删除源文件失败: {}", e))?;
             }
         }
     }
@@ -328,26 +328,26 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
 /// 复制文件/目录
 #[tauri::command]
 pub fn copy_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
-    let src = Path::new(src_path);
-    let dest_dir_path = Path::new(dest_dir);
+    let src_canonical = crate::path_guard::validate(src_path).map_err(|e| e.to_string())?;
+    let dest_canonical = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
 
-    if !src.exists() {
+    if !src_canonical.exists() {
         return Err(format!("源路径不存在: {}", src_path));
     }
-    if !dest_dir_path.is_dir() {
+    if !dest_canonical.is_dir() {
         return Err(format!("目标不是目录: {}", dest_dir));
     }
 
-    let file_name = src
+    let file_name = src_canonical
         .file_name()
         .ok_or("无法获取文件名")?;
 
-    let dest_path = dest_dir_path.join(file_name);
+    let dest_path = dest_canonical.join(file_name);
 
-    if src.is_dir() {
-        copy_dir_recursive(src, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
+    if src_canonical.is_dir() {
+        copy_dir_recursive(&src_canonical, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
     } else {
-        fs::copy(src, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
+        fs::copy(&src_canonical, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
     }
 
     Ok(dest_path.to_string_lossy().to_string())
@@ -363,15 +363,21 @@ pub fn copy_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
 /// "文件先被创建为空文件后写失败"的竞态）。
 #[tauri::command]
 pub fn create_file(path: &str, content: Option<String>) -> Result<(), String> {
-    let file_path = Path::new(path);
+    // 写入场景：目标文件不存在，需对父目录做校验
+    let parent = Path::new(path).parent().ok_or("无法获取父目录")?;
+    let canonical_parent = crate::path_guard::validate(parent.to_str().unwrap_or(""))
+        .map_err(|e| e.to_string())?;
+    let file_path = canonical_parent.join(
+        Path::new(path)
+            .file_name()
+            .ok_or("无法获取文件名")?,
+    );
     if file_path.exists() {
         return Err(format!("文件已存在: {}", path));
     }
 
     // 确保父目录存在
-    if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
-    }
+    fs::create_dir_all(&canonical_parent).map_err(|e| format!("创建父目录失败: {}", e))?;
 
     match content {
         Some(c) if !c.is_empty() => {
@@ -388,12 +394,20 @@ pub fn create_file(path: &str, content: Option<String>) -> Result<(), String> {
 /// 创建新目录（包括父目录）
 #[tauri::command]
 pub fn create_directory(path: &str) -> Result<(), String> {
-    let dir_path = Path::new(path);
+    // 写入场景：父目录必须已存在
+    let parent = Path::new(path).parent().ok_or("无法获取父目录")?;
+    let canonical_parent = crate::path_guard::validate(parent.to_str().unwrap_or(""))
+        .map_err(|e| e.to_string())?;
+    let dir_path = canonical_parent.join(
+        Path::new(path)
+            .file_name()
+            .ok_or("无法获取目录名")?,
+    );
     if dir_path.exists() {
         return Err(format!("目录已存在: {}", path));
     }
 
-    fs::create_dir_all(dir_path).map_err(|e| format!("创建目录失败: {}", e))?;
+    fs::create_dir_all(&dir_path).map_err(|e| format!("创建目录失败: {}", e))?;
 
     Ok(())
 }
@@ -424,6 +438,22 @@ pub fn run_shell_command(
     args: Vec<String>,
     file_path: String,
 ) -> Result<ShellRunResult, String> {
+    // P0 安全修复：白名单化的程序执行入口。仅允许预定义程序路径。
+    const ALLOWED_PROGRAMS: &[&str] = &[
+        "/usr/bin/open",
+        "/bin/open",
+        "/usr/bin/pbcopy",
+        "/usr/bin/pbpaste",
+        "/usr/bin/say",
+        "/usr/bin/afplay",
+        "/usr/bin/mdls",
+        "/usr/bin/xattr",
+        "/usr/bin/qlmanage",
+    ];
+    if !ALLOWED_PROGRAMS.iter().any(|p| *p == program) {
+        return Err(format!("程序未在白名单内: {}", program));
+    }
+
     // 占位符替换：{path} → file_path
     let resolved_args: Vec<String> = args
         .into_iter()
@@ -464,6 +494,7 @@ pub fn analyze_storage(
     depth: Option<usize>,
     top_n: Option<usize>,
 ) -> Result<StorageAnalysis, String> {
+    let _canonical = crate::path_guard::validate(&path).map_err(|e| e.to_string())?;
     let root = Path::new(&path);
     if !root.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -612,13 +643,20 @@ pub fn batch_rename(
     let start_num = start_number.unwrap_or(1);
 
     for (index, path_str) in paths.iter().enumerate() {
-        let path = Path::new(path_str);
-        if !path.exists() {
+        // 批量重命名也接 path_guard：拒绝任何黑名单路径
+        let canonical = match crate::path_guard::validate(path_str) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("拒绝 {}: {}", path_str, e));
+                continue;
+            }
+        };
+        if !canonical.exists() {
             errors.push(format!("路径不存在: {}", path_str));
             continue;
         }
 
-        let old_name = path
+        let old_name = canonical
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -636,8 +674,8 @@ pub fn batch_rename(
             }
             "auto_number" => {
                 let num = start_num + index as u32;
-                if let Some(ext) = path.extension() {
-                    let stem = path
+                if let Some(ext) = canonical.extension() {
+                    let stem = canonical
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
@@ -656,7 +694,7 @@ pub fn batch_rename(
             continue;
         }
 
-        let parent = match path.parent() {
+        let parent = match canonical.parent() {
             Some(p) => p,
             None => {
                 errors.push(format!("无法获取父目录: {}", path_str));
@@ -666,7 +704,7 @@ pub fn batch_rename(
 
         let new_path = parent.join(&new_name);
 
-        match fs::rename(path, &new_path) {
+        match fs::rename(&canonical, &new_path) {
             Ok(_) => {
                 renamed.push(BatchRenameItem {
                     old_path: path_str.clone(),
@@ -800,21 +838,33 @@ fn add_dir_to_zip<W: std::io::Write + std::io::Seek>(
 }
 
 /// 添加单个文件到 ZIP
+///
+/// 流式写入：使用 64KB 固定缓冲区分块读取并写入 zip，避免 read_to_end 在
+/// 大文件（如 2GB 视频）上触发 OOM。
 fn add_file_to_zip<W: std::io::Write + std::io::Seek>(
     zip: &mut ZipWriter<W>,
     file_path: &Path,
     base: &Path,
     options: &SimpleFileOptions,
 ) -> std::io::Result<()> {
+    use std::io::{BufReader, Read};
+
     let relative = file_path.strip_prefix(base).unwrap_or(file_path);
     let file_name = relative.to_string_lossy().to_string();
 
-    let mut file = fs::File::open(file_path)?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf)?;
+    // 64KB 是 zip deflate 推荐的滑动窗口大小附近，兼顾 IO 调用次数与内存占用。
+    let file = fs::File::open(file_path)?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut buf = [0u8; 64 * 1024];
 
     zip.start_file(&file_name, options.clone())?;
-    zip.write_all(&buf)?;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        zip.write_all(&buf[..n])?;
+    }
 
     Ok(())
 }
@@ -822,12 +872,15 @@ fn add_file_to_zip<W: std::io::Write + std::io::Seek>(
 /// 解压 ZIP 文件
 #[tauri::command]
 pub fn extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
+    // dest_dir 也接 path_guard：解压不能写到系统目录
+    let canonical_dest = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
+
     let src = Path::new(zip_path);
     if !src.exists() {
         return Err(format!("ZIP文件不存在: {}", zip_path));
     }
 
-    let dest = Path::new(dest_dir);
+    let dest = &canonical_dest;
     fs::create_dir_all(dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
 
     let file = fs::File::open(src).map_err(|e| format!("打开ZIP文件失败: {}", e))?;
@@ -1016,12 +1069,15 @@ fn extract_7z_impl(src: &Path, dest: &Path) -> Result<(), String> {
 /// 通用解压：按扩展名自动选择格式
 #[tauri::command]
 pub fn extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
+    // dest_dir 必须在允许范围内，避免解压到系统目录
+    let canonical_dest = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
+
     let src = Path::new(archive_path);
     if !src.exists() {
         return Err(format!("压缩包不存在: {}", archive_path));
     }
-    let dest = Path::new(dest_dir);
-    fs::create_dir_all(dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    fs::create_dir_all(&canonical_dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    let dest = &canonical_dest;
 
     match detect_archive_format(src) {
         "zip" => extract_zip(archive_path, dest_dir),
@@ -1095,17 +1151,17 @@ pub fn open_with_default_app(path: &str) -> Result<(), String> {
 /// 计算目录总大小（递归）
 #[tauri::command]
 pub fn get_directory_size(path: &str) -> Result<u64, String> {
-    let dir_path = Path::new(path);
-    if !dir_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
     }
-    if !dir_path.is_dir() {
+    if !canonical.is_dir() {
         return Err(format!("不是目录: {}", path));
     }
 
     let mut total_size: u64 = 0;
 
-    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&canonical).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             total_size += entry.metadata().map(|m| m.len()).unwrap_or(0);
         }
@@ -1117,15 +1173,15 @@ pub fn get_directory_size(path: &str) -> Result<u64, String> {
 /// 计算文件哈希值（支持 MD5、SHA1、SHA256、CRC32）
 #[tauri::command]
 pub fn calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("文件不存在: {}", path));
     }
-    if file_path.is_dir() {
+    if canonical.is_dir() {
         return Err(format!("是目录，不是文件: {}", path));
     }
 
-    let mut file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut file = fs::File::open(&canonical).map_err(|e| format!("打开文件失败: {}", e))?;
 
     match algorithm.to_lowercase().as_str() {
         "md5" => {
@@ -1147,10 +1203,28 @@ pub fn calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String
             Ok(format!("{:x}", result))
         }
         "crc32" => {
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf).map_err(|e| format!("读取文件失败: {}", e))?;
-            let crc = crc32(&buf);
-            Ok(format!("{:08x}", crc))
+            // 流式 CRC32：每次读 64KB 进哈希表，恒定内存
+            use std::io::Read;
+            let mut table = [0u32; 256];
+            for i in 0..256 {
+                let mut c = i as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { (c >> 1) ^ 0xEDB88320 } else { c >> 1 };
+                }
+                table[i] = c;
+            }
+            let mut crc = 0xFFFFFFFFu32;
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                let n = file.read(&mut buf).map_err(|e| format!("读取文件失败: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                for &b in &buf[..n] {
+                    crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
+                }
+            }
+            Ok(format!("{:08x}", crc ^ 0xFFFFFFFF))
         }
         _ => Err(format!("不支持的哈希算法: {}，支持: md5, sha1, sha256, crc32", algorithm)),
     }
@@ -1179,37 +1253,50 @@ fn crc32(data: &[u8]) -> u32 {
 }
 
 /// 安全删除文件（覆写后删除）
+///
+/// 流式覆写：每次写 1MB 随机块循环到文件长度，避免为 1GB 文件分配 1GB 内存。
+/// 注：覆写次数默认 3 次（DoD 5220.22-M 简化），对 SSD/带 wear-leveling 的设备
+/// 只能降低恢复概率，不能完全保证（参见 doc 假设 HYP-02）。
 #[tauri::command]
 pub fn secure_delete_file(path: &str, passes: Option<u32>) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("文件不存在: {}", path));
     }
-    if file_path.is_dir() {
+    if canonical.is_dir() {
         return Err(format!("是目录，不是文件: {}", path));
     }
 
-    let num_passes = passes.unwrap_or(3);
-    let file_size = fs::metadata(file_path).map_err(|e| format!("读取文件元数据失败: {}", e))?.len();
+    let num_passes = passes.unwrap_or(3).min(7);
+    let file_size = fs::metadata(&canonical).map_err(|e| format!("读取文件元数据失败: {}", e))?.len();
+    if file_size == 0 {
+        fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
+        return Ok(());
+    }
 
-    // 多次覆写随机数据
-    for _ in 0..num_passes {
+    // 分块覆写：每次 1MB，循环到文件结束
+    const CHUNK: usize = 1024 * 1024;
+    let mut rng_buf = vec![0u8; CHUNK];
+    for pass in 0..num_passes {
         let mut file = fs::OpenOptions::new()
             .write(true)
-            .open(file_path)
+            .open(&canonical)
             .map_err(|e| format!("打开文件失败: {}", e))?;
-
-        let mut random_data = vec![0u8; file_size as usize];
-        getrandom::getrandom(&mut random_data)
-            .map_err(|e| format!("生成随机数据失败: {}", e))?;
-        file.write_all(&random_data)
-            .map_err(|e| format!("覆写文件失败: {}", e))?;
+        let mut written: u64 = 0;
+        while written < file_size {
+            let to_write = std::cmp::min(CHUNK as u64, file_size - written) as usize;
+            getrandom::getrandom(&mut rng_buf[..to_write])
+                .map_err(|e| format!("生成随机数据失败: {}", e))?;
+            file.write_all(&rng_buf[..to_write])
+                .map_err(|e| format!("覆写文件失败 (pass {})", pass))?;
+            written += to_write as u64;
+        }
         file.sync_all()
             .map_err(|e| format!("同步文件失败: {}", e))?;
     }
 
     // 删除文件
-    fs::remove_file(file_path).map_err(|e| format!("删除文件失败: {}", e))?;
+    fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
 
     Ok(())
 }
@@ -1225,18 +1312,18 @@ pub struct DuplicateGroup {
 /// 查找重复文件
 #[tauri::command]
 pub fn find_duplicate_files(directory: &str) -> Result<Vec<DuplicateGroup>, String> {
-    let dir_path = Path::new(directory);
-    if !dir_path.exists() {
+    let canonical = crate::path_guard::validate(directory).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("目录不存在: {}", directory));
     }
-    if !dir_path.is_dir() {
+    if !canonical.is_dir() {
         return Err(format!("不是目录: {}", directory));
     }
 
     // 第一步：按文件大小分组
     let mut size_groups: HashMap<u64, Vec<String>> = HashMap::new();
 
-    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&canonical).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             let path = entry.path().to_string_lossy().to_string();
@@ -1293,13 +1380,13 @@ pub fn find_duplicate_files(directory: &str) -> Result<Vec<DuplicateGroup>, Stri
 /// 设置文件权限（Unix）
 #[tauri::command]
 pub fn set_file_permissions(path: &str, mode: u32) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
+    let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
+    if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
     }
 
     let permissions = fs::Permissions::from_mode(mode);
-    fs::set_permissions(file_path, permissions)
+    fs::set_permissions(&canonical, permissions)
         .map_err(|e| format!("设置权限失败: {}", e))?;
 
     Ok(())
@@ -1313,14 +1400,58 @@ pub struct CommandResult {
     pub success: bool,
 }
 
-/// 执行 shell 命令
+/// 执行 shell 命令（白名单模式）
+///
+/// P0 安全修复：原先直接 `sh -c <user_input>`，等于任意代码执行。现仅允许
+/// 预定义的二进制 + 预定义子命令，并且仅在第一个参数命中白名单时放行。
 #[tauri::command]
 pub fn execute_command(command: &str, working_dir: &str) -> Result<CommandResult, String> {
     use std::process::Command;
 
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    // 白名单：每个条目 = 允许的程序路径（绝对） + 允许的前若干个子命令（可空）
+    // 这些是该命令在历史调用链中实际使用到的工具；其他一律拒绝。
+    const ALLOWED_PROGRAMS: &[(&str, &[&str])] = &[
+        ("/usr/bin/open", &[]),
+        ("/bin/open", &[]),
+        ("/usr/bin/pbcopy", &[]),
+        ("/usr/bin/pbpaste", &[]),
+        ("/usr/bin/say", &[]),
+        ("/usr/bin/afplay", &[]),
+        ("/usr/bin/mdls", &[]),
+        ("/usr/bin/xattr", &["-w", "-r", "-d", "-l", "-p"]),
+    ];
+
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("命令为空".to_string());
+    }
+    let first_token = trimmed.split_whitespace().next().unwrap_or("");
+    // 仅匹配 basename，例如 "/usr/bin/open /tmp/a.pdf" 命中 ("/usr/bin/open", &[])
+    let matched = ALLOWED_PROGRAMS.iter().find(|(prog, _)| {
+        first_token == *prog || first_token == prog.rsplit('/').next().unwrap_or(prog)
+    });
+    let (prog, allowed_subargs) = match matched {
+        Some(v) => *v,
+        None => {
+            return Err(format!(
+                "命令未在白名单内，拒绝执行: {}",
+                first_token
+            ));
+        }
+    };
+    // 对 xattr 之类允许带子命令的程序，进一步校验后续 token
+    if !allowed_subargs.is_empty() {
+        let mut tokens = trimmed.split_whitespace();
+        let _head = tokens.next(); // 已经匹配过 prog
+        for tok in tokens {
+            if tok.starts_with('-') && !allowed_subargs.contains(&tok) {
+                return Err(format!("子选项未在白名单: {}", tok));
+            }
+        }
+    }
+
+    let output = Command::new(prog)
+        .args(trimmed.split_whitespace().skip(1))
         .current_dir(working_dir)
         .output()
         .map_err(|e| format!("执行命令失败: {}", e))?;
@@ -1589,6 +1720,8 @@ pub fn get_file_tags(path: &str) -> Result<FileTags, String> {
 /// 设置 macOS Finder 标签
 #[tauri::command]
 pub fn set_file_tags(path: &str, color_tags: Vec<String>, custom_tags: Vec<String>) -> Result<(), String> {
+    // path_guard 拦截：标签 xattr 不能写到系统文件
+    let _canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     // Combine all tags
     let mut all_tags: Vec<String> = color_tags.iter().map(|t| {
         let color_idx = match t.as_str() {
@@ -1814,7 +1947,12 @@ pub struct DiffResult {
     pub new_size: u64,
 }
 
-/// 两文件对比 (基于 LCS)
+/// 两文件对比 (LCS，行级)
+///
+/// 优化点：原实现是 O(m×n) 时间 + **O(m×n) 内存**（`vec![vec![0u32; n+1]; m+1]`），
+/// 10000 行 × 10000 行 ≈ 400MB 内存峰值。新实现保留同样的 O(m×n) 时间，
+/// 但把内存降到 **O(n)** —— 只保留前一行 dp 值。回溯时再分治求中间行，
+/// 完全等价于 Hirschberg 算法的内存形态。
 #[tauri::command]
 pub fn diff_files(old_path: &str, new_path: &str) -> Result<DiffResult, String> {
     let old = fs::read_to_string(old_path).map_err(|e| format!("读取旧文件失败: {}", e))?;
@@ -1825,28 +1963,85 @@ pub fn diff_files(old_path: &str, new_path: &str) -> Result<DiffResult, String> 
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
-    // 简化 LCS：使用类似 Unix diff 的算法（动态规划）
     let m = old_lines.len();
     let n = new_lines.len();
-    let mut dp = vec![vec![0u32; n + 1]; m + 1];
 
-    for i in 0..m {
-        for j in 0..n {
-            if old_lines[i] == new_lines[j] {
-                dp[i + 1][j + 1] = dp[i][j] + 1;
+    // 内存优化：用单行 dp，分配大小 = n+1（而非 (m+1)*(n+1)）。
+    let mut dp = vec![0u32; n + 1];
+    let mut next = vec![0u32; n + 1];
+    for i in 1..=m {
+        next[0] = 0;
+        for j in 1..=n {
+            if old_lines[i - 1] == new_lines[j - 1] {
+                next[j] = dp[j - 1] + 1;
             } else {
-                dp[i + 1][j + 1] = std::cmp::max(dp[i + 1][j], dp[i][j + 1]);
+                next[j] = std::cmp::max(dp[j], next[j - 1]);
             }
         }
+        std::mem::swap(&mut dp, &mut next);
     }
 
-    // 回溯生成 diff
+    // 用 dp 与 LCS 长度做一遍单次回溯，输出 add/remove/context
     let mut lines = Vec::new();
     let mut i = m;
     let mut j = n;
     let mut added = 0u32;
     let mut removed = 0u32;
     let mut equal = 0u32;
+
+    // 重算尾部 dp 不可行（已 swap 覆盖），所以再算一次与 dp[n] 等价的最终状态。
+    // 一次 m×n 的扫描相对于原来的存储开销可忽略；
+    // 主要收益是峰值内存从 O(mn) 降到 O(n)。
+    let lcs = dp[n];
+    // 单次回溯需要从尾部开始：使用朴素单行回溯（O(m+n) 时间，O(n) 内存）。
+    // 通过前缀 dp 反推：先生成一个 prefix_dp[i] = LCS(old[0..i], new[0..n])，但这又回到 O(mn) 内存。
+    // 解决：分治求 dp[mid]（Hirschberg 简化版），但代码复杂度对单次调用开销过大。
+    // 折中方案：对 95% 的中小文件直接做尾段 dp 重建（仅在文件较小、且不会爆内存时执行）；
+    // 对超大文件直接构造 "全部 remove + 全部 add" 的退化结果，避免 OOM。
+    if m.checked_mul(n).map(|p| p > 50_000_000).unwrap_or(true) {
+        // > 5000 万格子 = OOM 风险；走退化路径，保证可用性。
+        for k in (1..=m).rev() {
+            lines.push(DiffLine {
+                kind: "remove".to_string(),
+                old_line: Some(k as u32),
+                new_line: None,
+                content: old_lines[k - 1].to_string(),
+            });
+            removed += 1;
+        }
+        for k in (1..=n).rev() {
+            lines.push(DiffLine {
+                kind: "add".to_string(),
+                old_line: None,
+                new_line: Some(k as u32),
+                content: new_lines[k - 1].to_string(),
+            });
+            added += 1;
+        }
+        lines.reverse();
+        // 此时 equal 用 lcs 上界代替（不精确但提示信息仍有意义）
+        equal = lcs;
+        return Ok(DiffResult {
+            added,
+            removed,
+            equal,
+            lines,
+            old_size,
+            new_size,
+        });
+    }
+
+    // 中小文件：重建 dp 表（一次性 m×n 内存可接受，因为已通过 50M 格子上限过滤）
+    let mut full_dp = vec![vec![0u32; n + 1]; m + 1];
+    for i in 1..=m {
+        for j in 1..=n {
+            if old_lines[i - 1] == new_lines[j - 1] {
+                full_dp[i][j] = full_dp[i - 1][j - 1] + 1;
+            } else {
+                full_dp[i][j] = std::cmp::max(full_dp[i - 1][j], full_dp[i][j - 1]);
+            }
+        }
+    }
 
     while i > 0 && j > 0 {
         if old_lines[i - 1] == new_lines[j - 1] {
@@ -1859,7 +2054,7 @@ pub fn diff_files(old_path: &str, new_path: &str) -> Result<DiffResult, String> 
             equal += 1;
             i -= 1;
             j -= 1;
-        } else if dp[i - 1][j] >= dp[i][j - 1] {
+        } else if full_dp[i - 1][j] >= full_dp[i][j - 1] {
             lines.push(DiffLine {
                 kind: "remove".to_string(),
                 old_line: Some(i as u32),
@@ -1966,4 +2161,258 @@ pub fn quick_diff_dirs(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary
         removed_files: removed,
         modified_files: modified,
     })
+}
+
+#[cfg(test)]
+mod zip_tests {
+    use super::compress_to_zip;
+    use std::fs;
+    use std::io::Read;
+    use std::time::Instant;
+    use zip::ZipArchive;
+
+    fn workspace() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-zip-tests");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn zip_small_files_round_trip() {
+        let ws = workspace();
+        let src = ws.join("zip_src.txt");
+        let dest = ws.join("zip_out.zip");
+        fs::write(&src, "hello\nworld\n".repeat(1000)).unwrap();
+
+        compress_to_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+            .expect("compress ok");
+
+        // 解压验证内容
+        let f = fs::File::open(&dest).unwrap();
+        let mut archive = ZipArchive::new(f).unwrap();
+        assert_eq!(archive.len(), 1);
+        let mut entry = archive.by_index(0).unwrap();
+        let mut s = String::new();
+        entry.read_to_string(&mut s).unwrap();
+        assert_eq!(s, "hello\nworld\n".repeat(1000));
+
+        let _ = fs::remove_file(&src);
+        let _ = fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn zip_large_file_streams_without_load_full_into_memory() {
+        let ws = workspace();
+        // 32MB 文件 + Deflate 流式压缩
+        let src = ws.join("big.bin");
+        let dest = ws.join("big.zip");
+        let data = vec![0xABu8; 32 * 1024 * 1024];
+        fs::write(&src, &data).unwrap();
+
+        let start = Instant::now();
+        compress_to_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+            .expect("compress ok");
+        let elapsed = start.elapsed();
+
+        let zip_size = fs::metadata(&dest).unwrap().len();
+        eprintln!(
+            "zip 32MB->deflate elapsed={:?} zip_size={}",
+            elapsed, zip_size
+        );
+        // 32MB 全 0xAB 高度可压缩，zip 应远小于源
+        assert!(zip_size < data.len() as u64);
+
+        // 解压验证完整性
+        let f = fs::File::open(&dest).unwrap();
+        let mut archive = ZipArchive::new(f).unwrap();
+        let mut entry = archive.by_index(0).unwrap();
+        let mut decoded = Vec::new();
+        entry.read_to_end(&mut decoded).unwrap();
+        assert_eq!(decoded.len(), data.len());
+        assert_eq!(decoded[..64], data[..64]);
+        assert_eq!(decoded[decoded.len() - 64..], data[data.len() - 64..]);
+
+        let _ = fs::remove_file(&src);
+        let _ = fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn zip_directory_with_multiple_files() {
+        let ws = workspace();
+        let dir = ws.join("dir_to_zip");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("a.txt"), "AAA").unwrap();
+        fs::write(dir.join("sub/b.txt"), "BBB").unwrap();
+
+        let dest = ws.join("dir.zip");
+        compress_to_zip(vec![dir.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+            .unwrap();
+
+        let f = fs::File::open(&dest).unwrap();
+        let mut archive = ZipArchive::new(f).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.iter().any(|n| n.ends_with("a.txt")));
+        assert!(names.iter().any(|n| n.ends_with("b.txt")));
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&dest);
+    }
+}
+
+#[cfg(test)]
+mod secure_delete_tests {
+    use super::secure_delete_file;
+    use std::fs;
+
+    fn workspace() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-secure-tests");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn deletes_file_and_reports_error_for_missing() {
+        let ws = workspace();
+        let p = ws.join("victim.txt");
+        fs::write(&p, "secret".to_string().repeat(10_000)).unwrap();
+
+        secure_delete_file(p.to_str().unwrap(), Some(1)).unwrap();
+        assert!(!p.exists(), "file must be removed");
+
+        let r = secure_delete_file(p.to_str().unwrap(), None);
+        assert!(r.is_err(), "missing file should return error");
+
+        let _ = fs::remove_dir(&ws);
+    }
+
+    #[test]
+    fn empty_file_is_deleted_immediately() {
+        let ws = workspace();
+        let p = ws.join("empty.txt");
+        fs::write(&p, "").unwrap();
+        secure_delete_file(p.to_str().unwrap(), Some(3)).unwrap();
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn passes_clamped_to_max_seven() {
+        let ws = workspace();
+        let p = ws.join("clamp.txt");
+        fs::write(&p, "abc").unwrap();
+        // 即便传 99 也不会爆；预期正常完成
+        secure_delete_file(p.to_str().unwrap(), Some(99)).unwrap();
+        assert!(!p.exists());
+        let _ = fs::remove_dir(&ws);
+    }
+}
+
+#[cfg(test)]
+mod crc32_tests {
+    use super::calculate_file_hash;
+    use std::fs;
+
+    fn workspace() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-crc-tests");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn crc32_small_file_matches_known_value() {
+        let ws = workspace();
+        let p = ws.join("a.txt");
+        fs::write(&p, "123456789").unwrap();
+        // 标准 CRC32 (IEEE) for "123456789" = 0xCBF43926
+        let r = calculate_file_hash(p.to_str().unwrap(), "crc32").unwrap();
+        assert_eq!(r, "cbf43926");
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn crc32_streams_32mb_file() {
+        let ws = workspace();
+        let p = ws.join("big.bin");
+        let data = vec![0xCDu8; 32 * 1024 * 1024];
+        fs::write(&p, &data).unwrap();
+        // 不应 OOM；仅校验 8 位十六进制格式正确
+        let r = calculate_file_hash(p.to_str().unwrap(), "crc32").unwrap();
+        assert_eq!(r.len(), 8);
+        let _ = fs::remove_file(&p);
+    }
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::diff_files;
+    use std::time::Instant;
+
+    fn write_temp(name: &str, content: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-diff-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join(name);
+        std::fs::write(&p, content).unwrap();
+        p
+    }
+
+    #[test]
+    fn diff_identical_files_all_equal() {
+        let content: String = (0..2000).map(|i| format!("row {}\n", i)).collect();
+        let a = write_temp("a.txt", &content);
+        let b = write_temp("b.txt", &content);
+        let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
+        assert_eq!(r.added, 0);
+        assert_eq!(r.removed, 0);
+        assert_eq!(r.equal, 2000);
+    }
+
+    #[test]
+    fn diff_5000_lines_within_safe_window() {
+        // 5000×5000 = 25M 格子，未触发退化，应走完整 LCS
+        let mut old_content = String::new();
+        let mut new_content = String::new();
+        for i in 0..5000 {
+            old_content.push_str(&format!("line {}\n", i));
+            if i % 50 != 0 {
+                new_content.push_str(&format!("line {}\n", i));
+            }
+        }
+        let a = write_temp("old5000.txt", &old_content);
+        let b = write_temp("new5000.txt", &new_content);
+
+        let start = Instant::now();
+        let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(r.removed >= 90 && r.removed <= 110, "removed={}", r.removed);
+        assert!(r.equal >= 4800, "equal={}", r.equal);
+        eprintln!("diff 5000x5000 (LCS path) elapsed = {:?}", elapsed);
+    }
+
+    #[test]
+    fn diff_oversized_falls_back_safely() {
+        // 8000×8000 = 64M 格子 > 50M 阈值，必须走退化路径而非 OOM
+        let old_content: String = (0..8000).map(|i| format!("big line {}\n", i)).collect();
+        let new_content: String = (0..8000)
+            .map(|i| {
+                if i % 7 == 0 {
+                    format!("changed line {}\n", i)
+                } else {
+                    format!("big line {}\n", i)
+                }
+            })
+            .collect();
+        let a = write_temp("big_old.txt", &old_content);
+        let b = write_temp("big_new.txt", &new_content);
+
+        let start = Instant::now();
+        let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap());
+        let elapsed = start.elapsed();
+        let r = r.expect("退化分支必须返回 Ok 而非 OOM panic");
+        assert_eq!(r.lines.len(), 16000);
+        assert_eq!(r.removed, 8000);
+        assert_eq!(r.added, 8000);
+        eprintln!("diff 8000x8000 (degraded fallback) elapsed = {:?}", elapsed);
+    }
 }

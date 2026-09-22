@@ -70,10 +70,11 @@ pub fn move_to_trash(
     app: tauri::AppHandle,
     src_path: String,
 ) -> Result<String, String> {
-    let src = Path::new(&src_path);
-    if !is_path_safe(src) {
-        return Err(format!("拒绝移入回收站: {}", src_path));
+    // 复用 path_guard 的更严格校验（黑名单前缀 + .ssh/.gnupg 祖先拦截）
+    if let Err(e) = crate::path_guard::validate(&src_path) {
+        return Err(format!("拒绝移入回收站: {}", e));
     }
+    let src = Path::new(&src_path);
     if !src.exists() {
         return Err(format!("文件不存在: {}", src_path));
     }

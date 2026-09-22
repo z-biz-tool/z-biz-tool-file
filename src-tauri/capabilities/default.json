@@ -7,7 +7,34 @@
     "core:default",
     "clipboard-manager:default",
     "dialog:default",
-    "fs:default",
-    "shell:default"
+    "shell:allow-open",
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$APPLOCALDATA/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$APPLOCALDATA/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$APPLOCALDATA/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-home-meta-recursive",
+      "allow": [{ "path": "$HOME/**" }]
+    }
   ]
 }

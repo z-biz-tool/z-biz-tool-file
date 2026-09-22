@@ -16,6 +16,10 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
 
+// 渐变色主题常量
+const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
+const cardBgGradient = "linear-gradient(135deg, rgba(102,126,234,0.04) 0%, rgba(118,75,162,0.04) 100%)";
+
 interface PanelState {
   currentPath: string;
   history: string[];

@@ -1,5 +1,5 @@
 import { Tabs, Button, Tooltip } from "antd";
-import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined } from "@ant-design/icons";
+import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined, SparkleOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 
 interface Props {
@@ -23,9 +23,9 @@ function tabTitle(tab: { path: string; kind: string }): string {
 
 /** 不同类型 tab 的图标 */
 function tabIcon(kind: string): React.ReactNode {
-  if (kind === "library") return <BookOutlined style={{ fontSize: 12 }} />;
-  if (kind === "media") return <PictureOutlined style={{ fontSize: 12 }} />;
-  return <FolderOpenOutlined style={{ fontSize: 12 }} />;
+  if (kind === "library") return <BookOutlined style={{ fontSize: 12, color: '#667eea' }} />;
+  if (kind === "media") return <PictureOutlined style={{ fontSize: 12, color: '#764ba2' }} />;
+  return <FolderOpenOutlined style={{ fontSize: 12, background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }} />;
 }
 
 export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
@@ -48,11 +48,24 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
             gap: 6,
             maxWidth: 200,
             userSelect: "none",
+            padding: "4px 8px",
+            borderRadius: 8,
+            transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
           }}
           onDoubleClick={(e) => {
             e.stopPropagation();
             // 双击 tab = 新建（macOS 行为）
             onOpenNewTab();
+          }}
+          onMouseEnter={(ev) => {
+            if ((ev.target as HTMLElement).closest('.ant-tabs-tab')) {
+              (ev.currentTarget as HTMLElement).style.background = "rgba(102,126,234,0.08)";
+            }
+          }}
+          onMouseLeave={(ev) => {
+            if ((ev.target as HTMLElement).closest('.ant-tabs-tab')) {
+              (ev.currentTarget as HTMLElement).style.background = "transparent";
+            }
           }}
         >
           <span
@@ -76,8 +89,26 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
             e.stopPropagation();
             closeTab(t.id);
           }}
-          style={{ fontSize: 11, padding: "0 2px" }}
+          style={{ 
+            fontSize: 11, 
+            padding: "0 2px",
+            borderRadius: 4,
+            width: 16,
+            height: 16,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+          }}
           aria-label={`关闭 tab ${title}`}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.background = "#ff4d4f";
+            (e.currentTarget as HTMLElement).style.color = "white";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.background = "transparent";
+            (e.currentTarget as HTMLElement).style.color = "var(--ant-color-text-secondary)";
+          }}
         >
           <CloseOutlined />
         </span>
@@ -90,9 +121,10 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
       style={{
         display: "flex",
         alignItems: "center",
-        background: "var(--ant-color-bg-layout)",
-        borderBottom: "1px solid var(--ant-color-border-secondary)",
+        background: "linear-gradient(180deg, #f8fafd 0%, #eef2f7 100%)",
+        borderBottom: "1px solid rgba(0,0,0,0.06)",
         paddingLeft: 4,
+        boxShadow: "0 2px 4px rgba(0,0,0,0.02)",
       }}
     >
       <Tabs
@@ -114,6 +146,7 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
         items={items}
         style={{ flex: 1, minHeight: 32 }}
         tabBarStyle={{ margin: 0, borderBottom: "none" }}
+        cardGutter={8}
       />
       <Tooltip title="新建标签页 (⌘+T)">
         <Button
@@ -121,8 +154,20 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
           size="small"
           icon={<PlusOutlined />}
           onClick={onOpenNewTab}
-          style={{ marginRight: 8 }}
+          style={{ 
+            marginRight: 8,
+            borderRadius: 8,
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            color: "white",
+            transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+          }}
           aria-label="新建标签页"
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.transform = "scale(1.05)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.transform = "scale(1)";
+          }}
         />
       </Tooltip>
     </div>

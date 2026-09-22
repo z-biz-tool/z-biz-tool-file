@@ -1,15 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use walkdir::WalkDir;
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 索引文件存储路径
-const INDEX_DIR: &str = "index";
+/// 索引目录解析：固定到用户本地数据目录，避免 CWD 漂移。
+/// 旧版本使用相对路径 `index/`，导致不同启动方式下索引被写入不同位置。
+fn resolve_index_dir() -> PathBuf {
+    let mut p = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    p.push("z-biz-tool-file");
+    p.push("index");
+    let _ = fs::create_dir_all(&p);
+    p
+}
+
 const FILE_INDEX_FILE: &str = "file_index.json";
 const CONTENT_INDEX_FILE: &str = "content_index.json";
+
+/// 全局索引缓存：第一次 load 后驻留内存，后续搜索直接命中，
+/// 避免每次都 fs::read_to_string + serde_json::from_str。
+fn index_cache() -> &'static Mutex<Option<SimpleIndexer>> {
+    static CACHE: OnceLock<Mutex<Option<SimpleIndexer>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
 
 /// 文件索引项
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -25,7 +41,7 @@ pub struct FileIndexItem {
 }
 
 /// 索引元数据
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IndexMetadata {
     pub version: u32,
     pub built_at: u64,
@@ -60,6 +76,7 @@ pub struct ContentIndexItem {
 }
 
 /// 简单的全文索引器
+#[derive(Clone)]
 pub struct SimpleIndexer {
     file_index: HashMap<String, FileIndexItem>,
     content_index: HashMap<String, Vec<ContentIndexItem>>,
@@ -83,42 +100,49 @@ impl SimpleIndexer {
         }
     }
 
-    /// 保存索引到文件
+    /// 保存索引到文件（同时更新内存缓存）
     pub fn save(&self) -> Result<(), String> {
-        let index_path = Path::new(INDEX_DIR);
-        if !index_path.exists() {
-            fs::create_dir_all(index_path).map_err(|e| e.to_string())?;
-        }
+        let index_path = resolve_index_dir();
 
         // 保存文件索引
         let file_index_path = index_path.join(FILE_INDEX_FILE);
         let file_index_data = serde_json::to_string(&self.file_index)
             .map_err(|e| e.to_string())?;
-        fs::write(&file_index_path, file_index_data)
+        crate::atomic_write::atomic_write(&file_index_path, file_index_data.as_bytes())
             .map_err(|e| e.to_string())?;
 
         // 保存内容索引（只保存最常见的词）
         let content_index_path = index_path.join(CONTENT_INDEX_FILE);
         let content_index_data = serde_json::to_string(&self.content_index)
             .map_err(|e| e.to_string())?;
-        fs::write(&content_index_path, content_index_data)
+        crate::atomic_write::atomic_write(&content_index_path, content_index_data.as_bytes())
             .map_err(|e| e.to_string())?;
 
         // 保存元数据
         let metadata_path = index_path.join("metadata.json");
         let metadata_data = serde_json::to_string(&self.metadata)
             .map_err(|e| e.to_string())?;
-        fs::write(&metadata_path, metadata_data)
+        crate::atomic_write::atomic_write(&metadata_path, metadata_data.as_bytes())
             .map_err(|e| e.to_string())?;
+
+        // 同步缓存
+        *index_cache().lock().unwrap() = Some(self.clone());
 
         Ok(())
     }
 
-    /// 从文件加载索引
+    /// 从文件加载索引（带全局缓存）
     pub fn load() -> Result<Self, String> {
-        let index_path = Path::new(INDEX_DIR);
+        // 命中缓存：直接 clone 出副本
+        if let Some(cached) = index_cache().lock().unwrap().clone() {
+            return Ok(cached);
+        }
+
+        let index_path = resolve_index_dir();
         if !index_path.exists() {
-            return Ok(Self::new());
+            let fresh = Self::new();
+            *index_cache().lock().unwrap() = Some(fresh.clone());
+            return Ok(fresh);
         }
 
         let file_index_path = index_path.join(FILE_INDEX_FILE);
@@ -157,11 +181,13 @@ impl SimpleIndexer {
             }
         };
 
-        Ok(Self {
+        let loaded = Self {
             file_index,
             content_index,
             metadata,
-        })
+        };
+        *index_cache().lock().unwrap() = Some(loaded.clone());
+        Ok(loaded)
     }
 
     /// 索引整个目录

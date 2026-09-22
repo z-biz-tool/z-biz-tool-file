@@ -3,14 +3,16 @@
  * 来源: Files v4 的 Omnibar 设计
  */
 
-import { useState, useRef, useEffect, useMemo } from "react";
-import { Input, Dropdown, type MenuProps } from "antd";
+import { useState, useRef, useEffect } from "react";
+import { Input, Dropdown } from "antd";
 import {
   SearchOutlined,
   SettingOutlined,
   HomeOutlined,
   ArrowLeftOutlined,
   ArrowUpOutlined,
+  HistoryOutlined,
+  MacCommandOutlined,
 } from "@ant-design/icons";
 import type { FC } from "react";
 
@@ -42,8 +44,8 @@ const Omnibar: FC<OmnibarProps> = ({
   const [commandInput, setCommandInput] = useState("");
   const [pathEditing, setPathEditing] = useState(false);
   
-  const inputRef = useRef<HTMLInputElement>(null);
-  const commandRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<any>(null);
+  const commandRef = useRef<any>(null);
 
   // 当切换模式时聚焦到相应输入框
   useEffect(() => {
@@ -103,7 +105,10 @@ const Omnibar: FC<OmnibarProps> = ({
           onBlur={() => setPathEditing(false)}
           ref={inputRef}
           size="small"
-          style={{ width: '100%' }}
+          style={{ 
+            width: '100%',
+            fontWeight: 500,
+          }}
         />
       );
     }
@@ -113,7 +118,7 @@ const Omnibar: FC<OmnibarProps> = ({
     const breadcrumbs = ["/", ...parts.map((_, i) => `/${parts.slice(0, i + 1).join('/')}`)];
 
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <Dropdown
           menu={{
             items: [
@@ -124,10 +129,17 @@ const Omnibar: FC<OmnibarProps> = ({
         >
           <div
             onClick={onRootNavigate}
-            style={{ cursor: 'pointer', padding: '4px 8px', borderRadius: 4 }}
+            style={{ 
+              cursor: 'pointer', 
+              padding: '4px 8px', 
+              borderRadius: 6,
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
             title="首页"
+            onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)'}
+            onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = 'transparent'}
           >
-            <HomeOutlined />
+            <HomeOutlined style={{ color: '#667eea' }} />
           </div>
         </Dropdown>
 
@@ -135,17 +147,31 @@ const Omnibar: FC<OmnibarProps> = ({
           const isLast = index === breadcrumbs.length - 1;
           return (
             <div key={path} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ color: '#8c8c8c' }}>{index > 0 ? '/' : ''}</span>
+              <span style={{ color: "#999", fontSize: 10 }}>•</span>
               {isLast ? (
-                <span style={{ fontWeight: 500 }}>{parts[index - 1] || 'Home'}</span>
+                <span 
+                  style={{ 
+                    fontWeight: 600,
+                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                    backgroundClip: "text",
+                  }}
+                >
+                  {parts[index - 1] || 'Home'}
+                </span>
               ) : (
                 <span
                   onClick={() => onNavigate(path)}
                   style={{
                     cursor: 'pointer',
                     padding: '4px 8px',
-                    borderRadius: 4,
+                    borderRadius: 6,
+                    color: "var(--ant-color-text)",
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
                   }}
+                  onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)'}
+                  onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = 'transparent'}
                 >
                   {parts[index - 1]}
                 </span>
@@ -156,8 +182,16 @@ const Omnibar: FC<OmnibarProps> = ({
 
         <span
           onClick={togglePathEditing}
-          style={{ cursor: 'text', padding: '4px 8px', borderRadius: 4, opacity: 0 }}
+          style={{ 
+            cursor: 'text', 
+            padding: '4px 8px', 
+            borderRadius: 6, 
+            opacity: 0.6,
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
           title="点击编辑路径"
+          onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.opacity = '1'}
+          onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.opacity = '0.6'}
         >
           /
         </span>
@@ -197,11 +231,19 @@ const Omnibar: FC<OmnibarProps> = ({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        padding: '4px 12px',
-        background: 'var(--ant-color-bg-container)',
-        borderRadius: 6,
-        border: `1px solid var(--ant-color-border-secondary, rgba(0,0,0,0.06))`,
+        gap: 10,
+        padding: '8px 14px',
+        background: 'linear-gradient(135deg, #ffffff 0%, #f8fafd 100%)',
+        borderRadius: 12,
+        border: '1px solid rgba(0,0,0,0.06)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)';
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)';
       }}
     >
       {/* 导航控制按钮 */}
@@ -209,8 +251,23 @@ const Omnibar: FC<OmnibarProps> = ({
         <button
           onClick={onBack}
           disabled={historyIndex <= 0}
-          style={{ padding: '4px 8px', borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 8,
+            border: 'none',
+            background: historyIndex <= 0 ? 'transparent' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: historyIndex <= 0 ? '#999' : 'white',
+            cursor: historyIndex <= 0 ? 'not-allowed' : 'pointer',
+            opacity: historyIndex <= 0 ? 0.4 : 1,
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
           title="后退 (⌥+←)"
+          onMouseEnter={(e) => {
+            if (historyIndex > 0) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
+          }}
+          onMouseLeave={(e) => {
+            if (historyIndex > 0) (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+          }}
         >
           <ArrowLeftOutlined />
         </button>
@@ -218,41 +275,79 @@ const Omnibar: FC<OmnibarProps> = ({
         <button
           onClick={onForward}
           disabled={historyIndex >= history.length - 1}
-          style={{ padding: '4px 8px', borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 8,
+            border: 'none',
+            background: historyIndex >= history.length - 1 ? 'transparent' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: historyIndex >= history.length - 1 ? '#999' : 'white',
+            cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer',
+            opacity: historyIndex >= history.length - 1 ? 0.4 : 1,
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
           title="前进 (⌥+→)"
+          onMouseEnter={(e) => {
+            if (historyIndex < history.length - 1) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
+          }}
+          onMouseLeave={(e) => {
+            if (historyIndex < history.length - 1) (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+          }}
         >
           <ArrowLeftOutlined rotate={180} />
         </button>
 
         <button
           onClick={onUp}
-          style={{ padding: '4px 8px', borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer' }}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 8,
+            border: 'none',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            cursor: 'pointer',
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+          }}
           title="上级目录 (⌥+↑)"
+          onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)'}
+          onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.transform = 'scale(1)'}
         >
           <ArrowUpOutlined />
         </button>
       </div>
 
       {/* 模式切换 */}
-      <div style={{ display: 'flex', gap: 2 }}>
-        {['navigation', 'search', 'command'].map((m) => (
+      <div style={{ display: 'flex', gap: 2, background: 'rgba(0,0,0,0.04)', padding: 4, borderRadius: 8 }}>
+        {[
+          { key: 'navigation', icon: <HistoryOutlined />, label: '路径' },
+          { key: 'search', icon: <SearchOutlined />, label: '搜索' },
+          { key: 'command', icon: <MacCommandOutlined />, label: '命令' },
+        ].map((m) => (
           <button
-            key={m}
-            onClick={() => setMode(m as any)}
+            key={m.key}
+            onClick={() => setMode(m.key as any)}
             style={{
-              padding: '4px 8px',
-              borderRadius: 4,
+              padding: '6px 12px',
+              borderRadius: 6,
               border: 'none',
-              background: mode === m ? 'var(--ant-color-primary-bg)' : 'transparent',
-              color: mode === m ? 'var(--ant-color-primary)' : 'inherit',
+              background: mode === m.key ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : 'transparent',
+              color: mode === m.key ? 'white' : 'var(--ant-color-text)',
               cursor: 'pointer',
               fontSize: 12,
-              fontWeight: mode === m ? 500 : 400,
+              fontWeight: mode === m.key ? 600 : 500,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+            onMouseEnter={(e) => {
+              if (mode !== m.key) (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.06)';
+            }}
+            onMouseLeave={(e) => {
+              if (mode !== m.key) (e.currentTarget as HTMLElement).style.background = 'transparent';
             }}
           >
-            {m === 'navigation' && '🔍'}
-            {m === 'search' && '🔎'}
-            {m === 'command' && '⚡'}
+            {m.icon}
+            <span>{m.label}</span>
           </button>
         ))}
       </div>

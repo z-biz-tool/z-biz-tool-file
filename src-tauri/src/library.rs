@@ -126,9 +126,7 @@ impl LibraryDb {
 
     pub fn save(&self) -> Result<(), String> {
         let p = Self::path();
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&p, json).map_err(|e| e.to_string())?;
-        Ok(())
+        crate::atomic_write::atomic_write_json(&p, self)
     }
 
     pub fn add_scan_dir(&mut self, dir: String) {
@@ -216,9 +214,13 @@ pub fn library_scan_media() -> Result<LibraryStats, String> {
                 let title = entry.file_name().to_string_lossy().to_string();
                 let (width, height, duration_sec) = match &kind {
                     MediaKind::Image => {
-                        if let Ok(img) = image::open(&path) {
-                            let (w, h) = image::GenericImageView::dimensions(&img);
-                            (Some(w), Some(h), None)
+                        // 只读文件头获取尺寸，避免 image::open 把整张图解码到内存
+                        if let Ok(reader) = image::ImageReader::open(&path) {
+                            if let Ok(reader) = reader.with_guessed_format() {
+                                if let Ok(dims) = reader.into_dimensions() {
+                                    (Some(dims.0), Some(dims.1), None)
+                                } else { (None, None, None) }
+                            } else { (None, None, None) }
                         } else { (None, None, None) }
                     }
                     MediaKind::Video | MediaKind::Audio => {
