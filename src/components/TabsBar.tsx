@@ -1,6 +1,7 @@
 import { Tabs, Button, Tooltip } from "antd";
 import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined, SparkleOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
+import { shortenHome } from "../utils/homeDir";
 
 interface Props {
   onOpenNewTab: () => void;
@@ -13,12 +14,7 @@ function tabTitle(tab: { path: string; kind: string }): string {
   if (tab.kind === "library") return "图书馆";
   if (tab.kind === "media") return "媒体库";
   // 普通目录 tab
-  const path = tab.path;
-  if (!path || path === "/") return "/";
-  const home = "/Users/zifang";
-  if (path === home) return "~";
-  if (path.startsWith(home + "/")) return "~/" + path.slice(home.length + 1);
-  return path;
+  return shortenHome(tab.path) || "/";
 }
 
 /** 不同类型 tab 的图标 */
