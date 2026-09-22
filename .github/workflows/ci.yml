@@ -1,0 +1,65 @@
+name: CI
+
+# Build & Release 只在打 tag 时跑，测试从来没有门禁；
+# 这里对每次 push / PR 做前端构建 + 前后端测试。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 同 Build & Release：GitHub 新 token 会写坏 dtolnay 生成的 cargo config
+      - name: Reset broken cargo config
+        run: rm -f "$HOME/.cargo/config.toml"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install npm dependencies
+        run: npm ci --registry=https://registry.npmmirror.com
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Frontend tests
+        run: npm test
+
+      # tauri::generate_context! 读取 build.frontendDist=../dist，必须先有 dist/
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
