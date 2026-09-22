@@ -61,6 +61,7 @@ pub fn run() {
             commands::find_duplicate_files,
             commands::set_file_permissions,
             commands::compare_directories,
+            commands::sync_directories,
             commands::execute_command,
             commands::quick_look_preview,
             commands::get_file_tags,

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as IoRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 use std::collections::BinaryHeap;
 use std::cmp::Reverse;
@@ -1601,89 +1601,188 @@ pub fn execute_command(command: &str, working_dir: &str) -> Result<CommandResult
     })
 }
 
-/// 目录比较差异结果
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DirectoryDiff {
-    pub only_in_left: Vec<String>,
-    pub only_in_right: Vec<String>,
-    pub modified: Vec<String>,
+/// 目录差异的类型。前端 DirectorySync 表格按这三个状态上色，
+/// 内容完全一致的文件不进列表（否则大目录会把表格撑爆）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncDiffStatus {
+    OnlyLeft,
+    OnlyRight,
+    Modified,
 }
 
-/// 比较两个目录
+/// 一条目录差异记录。字段名即前端 `DiffEntry` 的字段名（snake_case 直传）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncDiffEntry {
+    /// 相对各自根目录的路径，子目录里的文件形如 `sub/a.txt`
+    pub name: String,
+    pub status: SyncDiffStatus,
+    pub left_modified: Option<u64>,
+    pub right_modified: Option<u64>,
+    pub left_size: Option<u64>,
+    pub right_size: Option<u64>,
+}
+
+/// 收集目录下的普通文件：相对路径 -> (大小, 修改时间)。
+///
+/// `WalkDir` 默认不跟随符号链接，`file_type()` 也不会，所以链接型条目被跳过 ——
+/// 同步链接既危险（可能指向根目录之外）又没有意义（compare 出来的名字无法回指）。
+fn collect_sync_files(root: &Path) -> HashMap<String, (u64, std::time::SystemTime)> {
+    let mut map = HashMap::new();
+    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else { continue };
+        map.insert(
+            relative.to_string_lossy().to_string(),
+            (meta.len(), meta.modified().unwrap_or(std::time::UNIX_EPOCH)),
+        );
+    }
+    map
+}
+
+fn to_secs(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 比较两个目录，返回扁平的差异列表（源在左、目标在右）。
+///
+/// 判定沿用 rsync 的粗粒度口径：大小或修改时间任一不同即视为"已修改"。
+/// 时间按 `SystemTime` 全精度比较 —— 先前只比 `as_secs()`，同一秒内先后写入的
+/// 两个不同内容会被判成"相同"而永久漏同步。
 #[tauri::command]
-pub fn compare_directories(left_dir: &str, right_dir: &str) -> Result<DirectoryDiff, String> {
-    let left_path = Path::new(left_dir);
-    let right_path = Path::new(right_dir);
-
-    if !left_path.exists() || !left_path.is_dir() {
-        return Err(format!("左目录不存在或不是目录: {}", left_dir));
+pub fn compare_directories(
+    left_dir: &str,
+    right_dir: &str,
+) -> Result<Vec<SyncDiffEntry>, String> {
+    let left_path = crate::path_guard::validate(left_dir).map_err(|e| e.to_string())?;
+    let right_path = crate::path_guard::validate(right_dir).map_err(|e| e.to_string())?;
+    if !left_path.is_dir() {
+        return Err(format!("源目录不是目录: {}", left_dir));
     }
-    if !right_path.exists() || !right_path.is_dir() {
-        return Err(format!("右目录不存在或不是目录: {}", right_dir));
+    if !right_path.is_dir() {
+        return Err(format!("目标目录不是目录: {}", right_dir));
     }
 
-    // 收集两个目录中的文件（相对路径 -> 修改时间）
-    let mut left_files: HashMap<String, u64> = HashMap::new();
-    let mut right_files: HashMap<String, u64> = HashMap::new();
+    let left = collect_sync_files(&left_path);
+    let right = collect_sync_files(&right_path);
 
-    for entry in WalkDir::new(left_path).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() {
-            if let Ok(relative) = entry.path().strip_prefix(left_path) {
-                let rel_str = relative.to_string_lossy().to_string();
-                let modified = entry.metadata().ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                left_files.insert(rel_str, modified);
-            }
+    let mut entries: Vec<SyncDiffEntry> = Vec::new();
+    for (rel, (lsize, lmtime)) in &left {
+        match right.get(rel) {
+            None => entries.push(SyncDiffEntry {
+                name: rel.clone(),
+                status: SyncDiffStatus::OnlyLeft,
+                left_modified: Some(to_secs(*lmtime)),
+                right_modified: None,
+                left_size: Some(*lsize),
+                right_size: None,
+            }),
+            Some((rsize, rmtime)) if (lsize, lmtime) != (rsize, rmtime) => entries.push(SyncDiffEntry {
+                name: rel.clone(),
+                status: SyncDiffStatus::Modified,
+                left_modified: Some(to_secs(*lmtime)),
+                right_modified: Some(to_secs(*rmtime)),
+                left_size: Some(*lsize),
+                right_size: Some(*rsize),
+            }),
+            Some(_) => {}
+        }
+    }
+    for (rel, (rsize, rmtime)) in &right {
+        if !left.contains_key(rel) {
+            entries.push(SyncDiffEntry {
+                name: rel.clone(),
+                status: SyncDiffStatus::OnlyRight,
+                left_modified: None,
+                right_modified: Some(to_secs(*rmtime)),
+                left_size: None,
+                right_size: Some(*rsize),
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+/// 一次目录同步的结果
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncResult {
+    pub copied: usize,
+    pub errors: Vec<String>,
+}
+
+/// 把 `names`（compare_directories 给出的相对路径）从源目录同步到目标目录。
+///
+/// 单向、以源为准：同名目标文件直接覆盖，绝不能用 copy_file 的默认"保留两者"
+/// 策略 —— 那会把同步变成每次多产出若干 `xxx 副本` 的重复文件。
+#[tauri::command]
+pub fn sync_directories(
+    source_dir: &str,
+    target_dir: &str,
+    names: Vec<String>,
+) -> Result<SyncResult, String> {
+    let src_root = crate::path_guard::validate(source_dir).map_err(|e| e.to_string())?;
+    let dst_root = crate::path_guard::validate(target_dir).map_err(|e| e.to_string())?;
+    if !src_root.is_dir() {
+        return Err(format!("源目录不是目录: {}", source_dir));
+    }
+
+    let mut result = SyncResult::default();
+    for rel in &names {
+        if let Err(e) = sync_one(&src_root, &dst_root, rel) {
+            result.errors.push(format!("{}: {}", rel, e));
+        } else {
+            result.copied += 1;
+        }
+    }
+    Ok(result)
+}
+
+/// 同步单条相对路径。相对路径只允许普通段：`..`、绝对路径会被拼到目标根之外。
+fn sync_one(src_root: &Path, dst_root: &Path, rel: &str) -> Result<(), String> {
+    let rel_path = Path::new(rel);
+    if rel.is_empty()
+        || rel_path.is_absolute()
+        || rel_path
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err("非法的相对路径".to_string());
+    }
+    let src = src_root.join(rel_path);
+    let dst = dst_root.join(rel_path);
+
+    let meta = fs::symlink_metadata(&src).map_err(|e| format!("源不存在 {}", e))?;
+    if meta.is_symlink() {
+        return Err("源是符号链接，未同步".to_string());
+    }
+
+    // 落点可能还不存在（首次同步出子目录），走 validate_new_path：
+    // 它先把已存在的祖先 canonicalize，再拼回未存在的尾巴并整体查一次黑名单，
+    // 所以 create_dir_all 不会替调用方把 .ssh 这类敏感目录凭空建出来。
+    let dst = crate::path_guard::validate_new_path(&dst.to_string_lossy())
+        .map_err(|e| e.to_string())?;
+    if let Some(parent) = dst.parent() {
+        if meta.is_dir() {
+            fs::create_dir_all(&dst).map_err(|e| format!("创建目标目录失败: {}", e))?;
+        } else {
+            fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {}", e))?;
         }
     }
 
-    for entry in WalkDir::new(right_path).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() {
-            if let Ok(relative) = entry.path().strip_prefix(right_path) {
-                let rel_str = relative.to_string_lossy().to_string();
-                let modified = entry.metadata().ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                right_files.insert(rel_str, modified);
-            }
-        }
+    if meta.is_dir() {
+        copy_dir_recursive(&src, &dst).map_err(|e| format!("复制目录失败: {}", e))?;
+    } else {
+        fs::copy(&src, &dst).map_err(|e| format!("复制失败: {}", e))?;
     }
-
-    let mut only_in_left: Vec<String> = Vec::new();
-    let mut only_in_right: Vec<String> = Vec::new();
-    let mut modified: Vec<String> = Vec::new();
-
-    // 在左侧但不在右侧的文件
-    for (rel_path, left_mod) in &left_files {
-        match right_files.get(rel_path) {
-            None => only_in_left.push(rel_path.clone()),
-            Some(right_mod) if left_mod != right_mod => modified.push(rel_path.clone()),
-            _ => {}
-        }
-    }
-
-    // 在右侧但不在左侧的文件
-    for rel_path in right_files.keys() {
-        if !left_files.contains_key(rel_path) {
-            only_in_right.push(rel_path.clone());
-        }
-    }
-
-    // 排序
-    only_in_left.sort();
-    only_in_right.sort();
-    modified.sort();
-
-    Ok(DirectoryDiff {
-        only_in_left,
-        only_in_right,
-        modified,
-    })
+    Ok(())
 }
 
 /// macOS Quick Look 预览
@@ -2720,5 +2819,264 @@ mod conflict_tests {
         assert!(!src.exists());
         assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"old");
         assert_eq!(fs::read(dst.join("a 副本.txt")).unwrap(), b"new");
+    }
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+
+    fn case(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "z-biz-tool-file-sync-{}-{}-{}",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("dst")).unwrap();
+        dir
+    }
+
+    fn write(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    /// 返回 (name, status) 便于断言差异列表
+    fn pairs(entries: &[SyncDiffEntry]) -> Vec<(String, &'static str)> {
+        entries
+            .iter()
+            .map(|e| {
+                let s = match e.status {
+                    SyncDiffStatus::OnlyLeft => "only_left",
+                    SyncDiffStatus::OnlyRight => "only_right",
+                    SyncDiffStatus::Modified => "modified",
+                };
+                (e.name.replace(std::path::MAIN_SEPARATOR, "/"), s)
+            })
+            .collect()
+    }
+
+    fn compare(l: &Path, r: &Path) -> Vec<SyncDiffEntry> {
+        compare_directories(&l.to_string_lossy(), &r.to_string_lossy()).unwrap()
+    }
+
+    #[test]
+    fn compare_reports_flat_entries_with_relative_paths() {
+        let dir = case("flat");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("only_left.txt"), "L");
+        write(&r.join("only_right.txt"), "R");
+        write(&l.join("same.txt"), "same");
+        fs::copy(l.join("same.txt"), r.join("same.txt")).unwrap();
+        // 让"相同"一侧的 mtime 明确不同：先写再覆盖
+        write(&l.join("mod.txt"), "aaa");
+        write(&r.join("mod.txt"), "bbb");
+        write(&l.join("sub").join("deep.txt"), "deep");
+
+        let got = pairs(&compare(&l, &r));
+        assert_eq!(
+            got,
+            vec![
+                ("mod.txt".to_string(), "modified"),
+                ("only_left.txt".to_string(), "only_left"),
+                ("only_right.txt".to_string(), "only_right"),
+                ("sub/deep.txt".to_string(), "only_left"),
+            ]
+        );
+        // 完全一致的文件不进列表，否则大目录会把表格撑爆
+        assert!(!got.iter().any(|(n, _)| n == "same.txt"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_carries_size_and_mtime_per_side() {
+        let dir = case("meta");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "12345");
+        write(&r.join("a.txt"), "1");
+
+        let got = compare(&l, &r);
+        assert_eq!(got.len(), 1);
+        let e = &got[0];
+        assert_eq!(e.status, SyncDiffStatus::Modified);
+        assert_eq!(e.left_size, Some(5));
+        assert_eq!(e.right_size, Some(1));
+        // 只有单侧存在的记录另一侧必须是 None（前端据此显示 "-"）
+        assert!(e.left_modified.is_some() && e.right_modified.is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_flags_same_second_change() {
+        // 旧实现把 mtime 截断到秒再比较：同一秒内写入的同长度改动会被判成"相同"，
+        // 于是同步永远漏掉它。这里两侧大小一致，只能靠亚秒精度区分。
+        let dir = case("same-second");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "aaaa");
+        write(&r.join("a.txt"), "bbbb");
+
+        let got = pairs(&compare(&l, &r));
+        assert_eq!(got.len(), 1, "同尺寸不同内容必须算差异，实得 {:?}", got);
+        assert_eq!(got[0].1, "modified");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_rejects_blocked_directory() {
+        let dir = case("blocked");
+        let err = compare_directories("/etc", &dir.to_string_lossy())
+            .expect_err("/etc 必须被拒绝");
+        assert!(err.contains("禁止操作"), "实得 {}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn sync(src: &Path, dst: &Path, names: Vec<&str>) -> SyncResult {
+        sync_directories(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            names.into_iter().map(|s| s.to_string()).collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn sync_overwrites_instead_of_making_copy_files() {
+        // copy_file 的默认策略是"保留两者"；同步若沿用它会每次多出一个 `a 副本.txt`
+        let dir = case("overwrite");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "new");
+        write(&r.join("a.txt"), "old");
+
+        let res = sync(&l, &r, vec!["a.txt"]);
+        assert_eq!(res.copied, 1, "errors: {:?}", res.errors);
+        assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "new");
+        assert_eq!(fs::read_dir(&r).unwrap().count(), 1, "不该产生副本");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_creates_missing_subdirs_and_is_repeatable() {
+        let dir = case("nested");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("sub").join("deep").join("a.txt"), "x");
+        let first = sync(&l, &r, vec!["sub/deep/a.txt"]);
+        assert_eq!(first.copied, 1, "errors: {:?}", first.errors);
+        let second = sync(&l, &r, vec!["sub/deep/a.txt"]);
+        assert_eq!(second.copied, 1, "errors: {:?}", second.errors);
+        assert_eq!(fs::read_to_string(r.join("sub/deep/a.txt")).unwrap(), "x");
+        // 目标树里只有这一个文件，重复同步不产生任何多余目录项
+        assert_eq!(fs::read_dir(r.join("sub/deep")).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_of_directory_keeps_it_a_directory() {
+        let dir = case("dir");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("pack").join("a.txt"), "a");
+        write(&l.join("pack").join("b.txt"), "b");
+
+        let res = sync(&l, &r, vec!["pack"]);
+        assert_eq!(res.copied, 1, "errors: {:?}", res.errors);
+        assert!(r.join("pack").is_dir());
+        assert_eq!(fs::read_to_string(r.join("pack/b.txt")).unwrap(), "b");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_then_compare_reports_no_diff() {
+        // 闭环：同步完再比较应当没有差异。这条同时钉住 fs::copy 会带走 mtime ——
+        // 否则面板会永远显示"已修改"，用户点多少次同步都看不到尽头。
+        let dir = case("loop");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "aaa");
+        write(&l.join("sub").join("b.txt"), "bbb");
+        write(&r.join("only_right.txt"), "z");
+
+        let names: Vec<String> = compare(&l, &r)
+            .into_iter()
+            .filter(|e| e.status != SyncDiffStatus::OnlyRight)
+            .map(|e| e.name)
+            .collect();
+        let res = sync_directories(
+            &l.to_string_lossy(),
+            &r.to_string_lossy(),
+            names.clone(),
+        )
+        .unwrap();
+        assert_eq!(res.copied, names.len(), "errors: {:?}", res.errors);
+
+        let left = pairs(&compare(&l, &r));
+        assert_eq!(left, vec![("only_right.txt".to_string(), "only_right")]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_rejects_traversal_and_absolute_names() {
+        let dir = case("traversal");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "a");
+        write(&dir.join("outside.txt"), "victim");
+
+        let res = sync(&l, &r, vec!["../outside.txt", "/etc/passwd", ""]);
+        assert_eq!(res.copied, 0);
+        assert_eq!(res.errors.len(), 3, "{:?}", res.errors);
+        assert_eq!(fs::read_to_string(dir.join("outside.txt")).unwrap(), "victim");
+        assert_eq!(fs::read_dir(&r).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_refuses_to_create_sensitive_destination() {
+        // 目标侧出现 .ssh 这类敏感段时必须拒绝，而且不能在拒绝前把它建出来
+        let dir = case("sensitive");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join(".ssh").join("id_rsa"), "key");
+        write(&l.join("ok.txt"), "ok");
+
+        let res = sync(&l, &r, vec![".ssh", "ok.txt"]);
+        assert_eq!(res.copied, 1, "errors: {:?}", res.errors);
+        assert_eq!(res.errors.len(), 1, "{:?}", res.errors);
+        assert!(!r.join(".ssh").exists(), "被拒绝的路径不该被创建出来");
+        assert_eq!(fs::read_to_string(r.join("ok.txt")).unwrap(), "ok");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_refuses_to_follow_a_symlink_out_of_the_source_dir() {
+        // 名字合法但源是个符号链接：跟随它等于把 src_root 之外的内容搬进目标目录，
+        // path_guard 只看得到两侧根目录，拦不住这一手。
+        let dir = case("symlink");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&dir.join("secret.txt"), "victim");
+        std::os::unix::fs::symlink(dir.join("secret.txt"), l.join("link.txt")).unwrap();
+
+        let res = sync(&l, &r, vec!["link.txt"]);
+        assert_eq!(res.copied, 0, "{:?}", res);
+        assert_eq!(res.errors.len(), 1);
+        assert!(!r.join("link.txt").exists(), "不该把链接目标的内容抄进来");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_reports_missing_source_instead_of_aborting_the_batch() {
+        let dir = case("missing");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "a");
+
+        let res = sync(&l, &r, vec!["a.txt", "gone.txt"]);
+        assert_eq!(res.copied, 1);
+        assert_eq!(res.errors.len(), 1);
+        assert!(res.errors[0].starts_with("gone.txt"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
