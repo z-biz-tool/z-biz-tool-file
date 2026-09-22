@@ -55,6 +55,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
+import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
 } from "./stores/fileStore";
@@ -443,13 +444,19 @@ function AppShellInner() {
     });
   }, [historyIndex, setCurrentPath, loadDirectory, activeTabId, updateActiveTabPath]);
 
-  // 初始化：macOS默认用户目录
+  // 初始化：定位到当前登录用户的主目录（跨平台解析，不硬编码）
   useEffect(() => {
-    const defaultPath = "/Users/zifang";
-    setRootPath(defaultPath);
-    navigateTo(defaultPath, true);
-    // 初始化第一个 tab
-    if (tabs.length === 0) openTab(defaultPath);
+    let cancelled = false;
+    resolveHomeDir().then((defaultPath) => {
+      if (cancelled) return;
+      setRootPath(defaultPath);
+      navigateTo(defaultPath, true);
+      // 初始化第一个 tab
+      if (tabs.length === 0) openTab(defaultPath);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1289,7 +1296,7 @@ function AppShellInner() {
     { key: "ArrowRight", alt: true, handler: goForward, description: "前进" },
     { key: "ArrowUp", alt: true, handler: goUp, description: "返回上级" },
     { key: "r", meta: true, handler: () => currentPath && loadDirectory(currentPath), description: "刷新当前目录" },
-    { key: "t", meta: true, handler: () => { openTab(currentPath || "/Users/zifang"); }, description: "新建标签页" },
+    { key: "t", meta: true, handler: () => { openTab(currentPath || homeDirSync()); }, description: "新建标签页" },
     { key: "w", meta: true, handler: () => { activeTabId && closeTab(activeTabId); }, description: "关闭当前标签页" },
     { key: "h", meta: true, shift: true, handler: () => setShowHidden(!showHidden), description: "显示/隐藏隐藏文件" },
     { key: "1", meta: true, handler: () => setViewMode("table"), description: "表格视图" },
@@ -1412,7 +1419,7 @@ function AppShellInner() {
         {/* 多标签页 */}
         <TabsBar
           onOpenNewTab={() => {
-            const id = openTab(currentPath || "/Users/zifang");
+            const id = openTab(currentPath || homeDirSync());
             // 新 tab 默认显示当前路径
             setTimeout(() => {
               const tab = useFileStore.getState().tabs.find((t) => t.id === id);
@@ -2185,7 +2192,7 @@ function AppShellInner() {
       <StorageAnalyzerModal
         open={storageOpen}
         onClose={() => setStorageOpen(false)}
-        initialPath={currentPath || "/Users/zifang"}
+        initialPath={currentPath || homeDirSync()}
       />
       <TagEditModal
         open={tagEditOpen}
