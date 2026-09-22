@@ -2,6 +2,7 @@ mod commands;
 mod search;
 mod ebook;
 mod pdf_utils;
+mod pdf_ops;
 mod image_utils;
 mod convert;
 mod watcher;
@@ -75,6 +76,9 @@ pub fn run() {
             ebook::get_epub_cover,
             pdf_utils::extract_pdf_text,
             pdf_utils::get_pdf_metadata,
+            pdf_ops::get_pdf_pages,
+            pdf_ops::merge_pdfs,
+            pdf_ops::split_pdf,
             commands::diff_files,
             commands::quick_diff_dirs,
             ocr::list_ocr_languages,
