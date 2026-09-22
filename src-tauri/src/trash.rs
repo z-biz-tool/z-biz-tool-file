@@ -34,10 +34,38 @@ fn trash_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(trash)
 }
 
-fn is_path_safe(p: &Path) -> bool {
-    // 防止把根目录拖进回收站
-    let s = p.to_string_lossy();
-    !(s == "/" || s.is_empty() || s == "~" || s == "." || s == "..")
+/// 回收站里的路径都以字符串形式往返于前端，回传时可能已被改写。
+/// 这里要求目标确实落在 trash 根目录内，否则拒绝——`remove_dir_all` 不可逆。
+fn is_inside_trash(root: &Path, p: &Path) -> bool {
+    match (root.canonicalize(), p.canonicalize()) {
+        (Ok(r), Ok(c)) => c.starts_with(&r),
+        _ => false,
+    }
+}
+
+fn ensure_inside_trash(root: &Path, p: &Path) -> Result<PathBuf, String> {
+    let canon = p
+        .canonicalize()
+        .map_err(|_| format!("回收站项不存在: {}", p.display()))?;
+    if !is_inside_trash(root, &canon) {
+        return Err(format!("拒绝操作：路径不在回收站目录内: {}", p.display()));
+    }
+    Ok(canon)
+}
+
+/// 恢复目标往往还不存在（`path_guard::validate` 要求存在），
+/// 因此校验它最近一个存在的祖先目录。
+fn validate_restore_target(target: &Path) -> Result<(), String> {
+    let mut cursor = target.parent();
+    while let Some(dir) = cursor {
+        if dir.exists() {
+            return crate::path_guard::validate(&dir.to_string_lossy())
+                .map(|_| ())
+                .map_err(|e| format!("拒绝恢复到该路径: {}", e));
+        }
+        cursor = dir.parent();
+    }
+    Err("无法确定恢复目标所在目录".to_string())
 }
 
 fn path_to_trash(
@@ -217,11 +245,9 @@ pub fn restore_from_trash(
     trash_path: String,
     target_path: Option<String>,
 ) -> Result<String, String> {
-    let _ = app;
-    let src = Path::new(&trash_path);
-    if !src.exists() {
-        return Err(format!("回收站项不存在: {}", trash_path));
-    }
+    let root = trash_root(&app)?;
+    let src_buf = ensure_inside_trash(&root, Path::new(&trash_path))?;
+    let src: &Path = &src_buf;
     // src 是 "原文件" 路径，其父目录是 uuid 目录，uuid 目录里有 original_path.txt
     let uuid_dir = src.parent().ok_or_else(|| "无效的回收站路径".to_string())?;
     // 默认恢复到原路径
@@ -236,6 +262,7 @@ pub fn restore_from_trash(
             }
         }
     };
+    validate_restore_target(&target)?;
     if target.exists() {
         return Err(format!("目标位置已存在文件: {}", target.display()));
     }
@@ -252,22 +279,31 @@ pub fn restore_from_trash(
         }
     }
     // 删掉整个 uuid 目录（含 original_path.txt）
-    fs::remove_dir_all(uuid_dir).map_err(|e| e.to_string())?;
+    if is_inside_trash(&root, uuid_dir) {
+        fs::remove_dir_all(uuid_dir).map_err(|e| e.to_string())?;
+    }
     Ok(target.to_string_lossy().to_string())
 }
 
 /// 永久删除回收站里某项
 #[tauri::command]
-pub fn permanent_delete(trash_path: String) -> Result<(), String> {
-    let p = Path::new(&trash_path);
-    if !p.exists() {
-        return Err(format!("回收站项不存在: {}", trash_path));
+pub fn permanent_delete(
+    app: tauri::AppHandle,
+    trash_path: String,
+) -> Result<(), String> {
+    let root = trash_root(&app)?;
+    let target = ensure_inside_trash(&root, Path::new(&trash_path))?;
+    let uuid_dir = target.parent().map(Path::to_path_buf);
+    if target.is_dir() {
+        fs::remove_dir_all(&target).map_err(|e| format!("永久删除失败: {}", e))?;
+    } else {
+        fs::remove_file(&target).map_err(|e| format!("永久删除失败: {}", e))?;
     }
-    fs::remove_dir_all(p).map_err(|e| format!("永久删除失败: {}", e))?;
-    // 同时删 metadata 文件（和原文件同级的 original_path.txt）
-    let uuid_dir = p.parent();
+    // 顺带收掉装元数据的 uuid 目录；必须仍在回收站内，绝不碰日期目录或 root
     if let Some(uuid_dir) = uuid_dir {
-        let _ = fs::remove_dir_all(uuid_dir);
+        if uuid_dir != root && is_inside_trash(&root, &uuid_dir) {
+            let _ = fs::remove_dir_all(&uuid_dir);
+        }
     }
     Ok(())
 }
@@ -310,4 +346,98 @@ pub fn get_trash_size(app: tauri::AppHandle) -> Result<u64, String> {
 #[tauri::command]
 pub fn get_trash_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(trash_root(&app)?.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 建出 <tmp>/<case>/trash 与 <tmp>/<case>/outside 两棵树
+    fn fixture(case: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("z-biz-tool-file-trash-{}", case));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("trash");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        // 回收站真实布局：root/<日期>/<uuid>/<原名>
+        let item = root.join("2026-09-22").join("abcd1234");
+        fs::create_dir_all(&item).unwrap();
+        fs::write(item.join("report.txt"), b"hi").unwrap();
+        fs::write(item.join("original_path.txt"), b"/some/where").unwrap();
+        (root, outside)
+    }
+
+    #[test]
+    fn inside_trash_accepts_real_item() {
+        let (root, _o) = fixture("accept");
+        let item = root.join("2026-09-22").join("abcd1234").join("report.txt");
+        assert!(is_inside_trash(&root, &item));
+        assert!(ensure_inside_trash(&root, &item).is_ok());
+        fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn inside_trash_rejects_outside_dir() {
+        // 复现漏洞：把回收站外的目录传进来会被 remove_dir_all 连带删掉父级
+        let (root, outside) = fixture("outside");
+        fs::write(outside.join("precious.txt"), b"data").unwrap();
+        assert!(!is_inside_trash(&root, &outside));
+        let err = ensure_inside_trash(&root, &outside).unwrap_err();
+        assert!(err.contains("不在回收站目录内"), "{}", err);
+        assert!(outside.exists(), "校验必须在删除之前拦下");
+        fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn inside_trash_rejects_dotdot_escape() {
+        let (root, outside) = fixture("dotdot");
+        let sneaky = root.join("2026-09-22").join("..").join("..").join("..").join("outside");
+        // 纯词法判断会被 .. 骗过去，只有 canonicalize 之后才能识破
+        assert!(
+            sneaky.starts_with(&root),
+            "词法前缀检查对 .. 无效，这正是必须 canonicalize 的原因"
+        );
+        assert!(!is_inside_trash(&root, &sneaky));
+        assert!(ensure_inside_trash(&root, &sneaky).is_err());
+        assert!(outside.exists());
+        fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inside_trash_rejects_symlink_escape() {
+        let (root, outside) = fixture("symlink");
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let via_link = root.join("link").join("precious.txt");
+        fs::write(outside.join("precious.txt"), b"data").unwrap();
+        assert!(via_link.exists(), "软链应当可解析");
+        assert!(!is_inside_trash(&root, &via_link));
+        assert!(ensure_inside_trash(&root, &via_link).is_err());
+        fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn inside_trash_rejects_missing_item() {
+        let (root, _o) = fixture("missing");
+        let gone = root.join("2026-09-22").join("abcd1234").join("gone.txt");
+        assert!(ensure_inside_trash(&root, &gone).is_err());
+        fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn restore_target_rejects_system_paths() {
+        assert!(validate_restore_target(Path::new("/etc/passwd")).is_err());
+        let home = dirs::home_dir().unwrap();
+        assert!(validate_restore_target(&home.join(".ssh/config")).is_err());
+    }
+
+    #[test]
+    fn restore_target_allows_missing_file_in_existing_dir() {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-trash-restore");
+        fs::create_dir_all(&dir).unwrap();
+        // 恢复目标通常还不存在，校验的应是它存在的祖先目录
+        assert!(validate_restore_target(&dir.join("sub").join("report.txt")).is_ok());
+        fs::remove_dir_all(&dir).ok();
+    }
 }
