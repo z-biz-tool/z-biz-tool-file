@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as IoRead, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use walkdir::WalkDir;
 use std::collections::BinaryHeap;
@@ -13,6 +12,35 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use md5::Digest as Md5Digest;
 use sha1::Sha1;
 use sha2::Sha256;
+
+// POSIX mode 只在 unix 上有意义；Windows 走只读属性近似。
+#[cfg(unix)]
+fn current_mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).map(|m| m.permissions().mode()).unwrap_or(0)
+}
+
+#[cfg(not(unix))]
+fn current_mode(path: &Path) -> u32 {
+    match fs::metadata(path) {
+        Ok(m) if m.permissions().readonly() => 0o444,
+        Ok(_) => 0o644,
+        Err(_) => 0,
+    }
+}
+
+#[cfg(unix)]
+fn apply_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn apply_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_readonly(mode & 0o200 == 0);
+    fs::set_permissions(path, perms)
+}
 
 /// 文件条目
 #[derive(Debug, Serialize, Deserialize)]
@@ -921,13 +949,9 @@ pub fn extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
                 .map_err(|e| format!("写入文件失败: {}", e))?;
         }
 
-        // 设置文件权限（Unix）
-        #[cfg(unix)]
-        {
-            if let Some(mode) = entry.unix_mode() {
-                fs::set_permissions(&out_path, fs::Permissions::from_mode(mode))
-                    .map_err(|e| format!("设置权限失败: {}", e))?;
-            }
+        // 设置文件权限（Windows 下退化为只读属性）
+        if let Some(mode) = entry.unix_mode() {
+            apply_mode(&out_path, mode).map_err(|e| format!("设置权限失败: {}", e))?;
         }
     }
 
@@ -1124,7 +1148,7 @@ pub fn get_file_permissions(path: &str) -> Result<FilePermissions, String> {
 
     let metadata = fs::metadata(file_path).map_err(|e| format!("读取元数据失败: {}", e))?;
     let permissions = metadata.permissions();
-    let mode = permissions.mode();
+    let mode = current_mode(file_path);
 
     Ok(FilePermissions {
         readonly: permissions.readonly(),
@@ -1385,9 +1409,7 @@ pub fn set_file_permissions(path: &str, mode: u32) -> Result<(), String> {
         return Err(format!("路径不存在: {}", path));
     }
 
-    let permissions = fs::Permissions::from_mode(mode);
-    fs::set_permissions(&canonical, permissions)
-        .map_err(|e| format!("设置权限失败: {}", e))?;
+    apply_mode(&canonical, mode).map_err(|e| format!("设置权限失败: {}", e))?;
 
     Ok(())
 }

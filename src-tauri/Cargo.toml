@@ -50,3 +50,8 @@ chrono = "0.4"
 ureq = "2"
 tauri-plugin-updater = "2"
 dirs = "5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# x86_64-apple-darwin 在 arm64 runner 上交叉编译时找不到系统 OpenSSL，
+# vendored 让 openssl-sys 自己编一份
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
