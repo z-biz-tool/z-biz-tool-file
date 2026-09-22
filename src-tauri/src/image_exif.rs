@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// EXIF 提取结果（精简版，按常见字段映射）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -27,10 +26,7 @@ pub struct ExifInfo {
 /// 读取图片 EXIF
 #[tauri::command]
 pub fn read_exif(path: String) -> Result<ExifInfo, String> {
-    let p = Path::new(&path);
-    if !p.exists() {
-        return Err(format!("文件不存在: {}", path));
-    }
+    let p = &crate::path_guard::readable(&path)?;
     let ext = p
         .extension()
         .and_then(|e| e.to_str())

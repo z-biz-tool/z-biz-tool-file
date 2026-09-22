@@ -148,6 +148,23 @@ pub fn validate_new_path(raw_path: &str) -> Result<PathBuf, PathError> {
     Ok(result)
 }
 
+/// 命令入口用：读一个应当已经存在的路径。
+///
+/// 与直接 `validate` 相比省掉调用方各写一遍的 `exists()` 检查，也避免某个模块
+/// 只记得校验存在性、忘了黑名单，导致 blocklist 形同虚设。
+pub fn readable(raw: &str) -> Result<PathBuf, String> {
+    let p = validate(raw).map_err(|e| e.to_string())?;
+    if !p.exists() {
+        return Err(format!("路径不存在: {}", raw));
+    }
+    Ok(p)
+}
+
+/// 命令入口用：写一个可能还不存在的落点（另存为、导出、生成缩略图…）。
+pub fn writable(raw: &str) -> Result<PathBuf, String> {
+    validate_new_path(raw).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,10 +17,7 @@ pub struct ImageInfo {
 /// 获取图片信息
 #[tauri::command]
 pub fn get_image_info(path: &str) -> Result<ImageInfo, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let metadata = fs::metadata(file_path).map_err(|e| format!("读取元数据失败: {}", e))?;
     let size = metadata.len();
@@ -31,8 +28,9 @@ pub fn get_image_info(path: &str) -> Result<ImageInfo, String> {
 
     let format = detect_image_format(file_path);
 
-    // 尝试读取 EXIF（JPEG / TIFF / HEIF 等支持）
-    let exif = if format == "JPEG" || format == "TIFF" {
+    // 尝试读取 EXIF（JPEG / TIFF）。注意 detect_image_format 返回的是小写扩展名，
+    // 早先这里比的是 "JPEG"/"TIFF"，分支永远走不到 —— 属性面板因此从不显示 EXIF。
+    let exif = if matches!(format.as_str(), "jpg" | "tiff") {
         read_basic_exif(file_path)
     } else {
         None
@@ -138,12 +136,14 @@ pub fn save_image_data(data: String, dest_path: String, format: String) -> Resul
         .decode(data.as_bytes())
         .map_err(|e| format!("Base64 解码失败: {}", e))?;
 
-    // 确保目标目录存在
-    if let Some(parent) = Path::new(&dest_path).parent() {
+    // 这是一条"任意字节写到任意路径"的通道：必须过黑名单，否则整个 path_guard
+    // 层等于给渲染进程留了后门（~/.ssh/authorized_keys、~/Library/LaunchAgents 等）
+    let dest = crate::path_guard::writable(&dest_path)?;
+    if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
 
-    fs::write(&dest_path, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+    fs::write(&dest, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
     Ok(bytes.len() as u64)
 }
 
@@ -158,10 +158,7 @@ pub struct ImageThumbnail {
 /// 生成图片缩略图，返回 base64 编码的 PNG
 #[tauri::command]
 pub fn get_image_thumbnail(path: &str, max_size: u32) -> Result<ImageThumbnail, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
 
@@ -192,15 +189,11 @@ pub fn export_image(
     format: &str,
     quality: u8,
 ) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("源文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
-    let dest = Path::new(dest_path);
-
-    // 确保目标目录存在
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
+    let dest = &crate::path_guard::writable(dest_path)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -235,15 +228,13 @@ pub fn export_image(
 /// 缩放图片
 #[tauri::command]
 pub fn resize_image(path: &str, dest_path: &str, width: u32, height: u32) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("源文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
     let resized = img.resize(width, height, image::imageops::FilterType::Lanczos3);
 
-    let dest = Path::new(dest_path);
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
+    let dest = &crate::path_guard::writable(dest_path)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -260,10 +251,7 @@ pub fn resize_image(path: &str, dest_path: &str, width: u32, height: u32) -> Res
 /// 旋转图片
 #[tauri::command]
 pub fn rotate_image(path: &str, dest_path: &str, degrees: u32) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("源文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
     let rotated = match degrees {
@@ -273,7 +261,8 @@ pub fn rotate_image(path: &str, dest_path: &str, degrees: u32) -> Result<(), Str
         _ => return Err(format!("不支持的角度: {}，仅支持 90/180/270", degrees)),
     };
 
-    let dest = Path::new(dest_path);
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
+    let dest = &crate::path_guard::writable(dest_path)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -290,10 +279,7 @@ pub fn rotate_image(path: &str, dest_path: &str, degrees: u32) -> Result<(), Str
 /// 翻转图片
 #[tauri::command]
 pub fn flip_image(path: &str, dest_path: &str, horizontal: bool) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("源文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
     let flipped = if horizontal {
@@ -302,7 +288,8 @@ pub fn flip_image(path: &str, dest_path: &str, horizontal: bool) -> Result<(), S
         img.flipv()
     };
 
-    let dest = Path::new(dest_path);
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
+    let dest = &crate::path_guard::writable(dest_path)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -326,10 +313,7 @@ pub fn crop_image(
     w: u32,
     h: u32,
 ) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("源文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
 
@@ -348,7 +332,8 @@ pub fn crop_image(
 
     let cropped = img.crop_imm(x, y, w, h);
 
-    let dest = Path::new(dest_path);
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
+    let dest = &crate::path_guard::writable(dest_path)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -365,15 +350,13 @@ pub fn crop_image(
 /// 应用滤镜
 #[tauri::command]
 pub fn apply_filter(path: &str, dest_path: &str, filter_name: &str) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("源文件不存在: {}", path));
-    }
+    let file_path = &crate::path_guard::readable(path)?;
 
     let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
     let filtered = apply_filter_impl(&img, filter_name)?;
 
-    let dest = Path::new(dest_path);
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
+    let dest = &crate::path_guard::writable(dest_path)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -499,5 +482,204 @@ fn parse_image_format(format: &str) -> Result<ImageFormat, String> {
             "不支持的图片格式: {}，支持: jpg/png/gif/bmp/webp",
             format
         )),
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn case(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "z-biz-tool-file-img-{}-{}-{}",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 4x4 纯色 PNG，够小且 image crate 能真的解码
+    fn png(dir: &Path, rel: &str) -> PathBuf {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        image::DynamicImage::new_rgb8(4, 4).save(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn image_info_still_reads_an_ordinary_file() {
+        let dir = case("ok");
+        let src = png(&dir, "a.png");
+        let info = get_image_info(&src.to_string_lossy()).unwrap();
+        assert_eq!((info.width, info.height), (4, 4));
+        assert_eq!(info.format, "png");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 在一张真 JPEG 的段链里插一段 APP1/EXIF。
+    /// 必须基于真图：`get_image_info` 会先用 image crate 解码，手搓的假 SOI 直接
+    /// 在解码那步就报错，永远走不到 EXIF 分支。
+    fn jpeg_with_exif(dir: &Path, rel: &str) -> PathBuf {
+        let base_path = dir.join("base.jpg");
+        image::DynamicImage::new_rgb8(4, 4).save(&base_path).unwrap();
+        let base = fs::read(&base_path).unwrap();
+
+        // IFD0 一条记录：Model(0x0110) -> 偏移 26 处的 "TEST"
+        let mut tiff: Vec<u8> = Vec::new();
+        tiff.extend_from_slice(b"MM"); // 大端
+        tiff.extend_from_slice(&0x002Au16.to_be_bytes());
+        tiff.extend_from_slice(&8u32.to_be_bytes()); // IFD0 从偏移 8 开始
+        tiff.extend_from_slice(&1u16.to_be_bytes()); // 1 条记录
+        tiff.extend_from_slice(&0x0110u16.to_be_bytes()); // tag = Model
+        tiff.extend_from_slice(&2u16.to_be_bytes()); // type = ASCII
+        tiff.extend_from_slice(&5u32.to_be_bytes()); // count
+        tiff.extend_from_slice(&26u32.to_be_bytes()); // 值所在偏移
+        tiff.extend_from_slice(&0u32.to_be_bytes()); // 下一个 IFD = 无
+        tiff.extend_from_slice(b"TEST\0");
+        while tiff.len() < 40 {
+            tiff.push(0);
+        }
+        let mut body: Vec<u8> = Vec::new();
+        body.extend_from_slice(b"Exif\0\0");
+        body.extend_from_slice(&tiff);
+        // 段长把自身两字节算在内
+        let seg = (body.len() + 2) as u16;
+
+        // 跳过编码器自带的 APP0/APPn，插到它们之后、SOF 之前
+        let mut pos = 2;
+        while pos + 4 <= base.len()
+            && base[pos] == 0xFF
+            && (0xE0..=0xEF).contains(&base[pos + 1])
+        {
+            let l = u16::from_be_bytes([base[pos + 2], base[pos + 3]]) as usize;
+            pos += 2 + l;
+        }
+        let mut out = base[..pos].to_vec();
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&seg.to_be_bytes());
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&base[pos..]);
+
+        let p = dir.join(rel);
+        fs::write(&p, out).unwrap();
+        p
+    }
+
+    #[test]
+    fn image_info_actually_reads_exif_from_a_jpeg() {
+        let dir = case("exif");
+        let src = jpeg_with_exif(&dir, "a.jpg");
+        let info = get_image_info(&src.to_string_lossy()).unwrap();
+        let exif = info.exif.expect("JPEG 里的 EXIF 必须被读出来");
+        assert_eq!(exif.get("Model").map(|s| s.as_str()), Some("TEST"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_info_refuses_blocked_source() {
+        let dir = case("blocked-src");
+        let secret = dir.join(".ssh").join("id.png");
+        png(&dir, ".ssh/id.png");
+        let err = get_image_info(&secret.to_string_lossy())
+            .expect_err("黑名单内的图片不该被读出尺寸");
+        assert!(err.contains("禁止操作"), "实得 {}", err);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resize_still_writes_and_creates_parent() {
+        let dir = case("resize-ok");
+        let src = png(&dir, "a.png");
+        let dest = dir.join("out").join("small.png");
+        resize_image(&src.to_string_lossy(), &dest.to_string_lossy(), 2, 2).unwrap();
+        assert!(dest.exists());
+        assert!(fs::metadata(&dest).unwrap().len() > 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resize_refuses_sensitive_destination() {
+        let dir = case("resize-blocked");
+        let src = png(&dir, "a.png");
+        let dest = dir.join(".ssh").join("authorized_keys.png");
+        let err = resize_image(&src.to_string_lossy(), &dest.to_string_lossy(), 2, 2)
+            .expect_err("不该允许往 .ssh 里写");
+        assert!(err.contains("禁止操作"), "实得 {}", err);
+        // 关键：拒绝必须发生在 create_dir_all 之前，否则敏感目录被凭空建出来
+        assert!(!dir.join(".ssh").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_write_command_rejects_a_relative_destination() {
+        let dir = case("relative");
+        let src = png(&dir, "a.png");
+        let s = src.to_string_lossy().to_string();
+        for (label, res) in [
+            ("resize", resize_image(&s, "out.png", 2, 2).map(|_| ())),
+            ("rotate", rotate_image(&s, "out.png", 90)),
+            ("flip", flip_image(&s, "out.png", true)),
+            ("crop", crop_image(&s, "out.png", 0, 0, 2, 2)),
+            ("filter", apply_filter(&s, "out.png", "grayscale")),
+            ("export", export_image(&s, "out.png", "png", 90)),
+        ] {
+            let err = res.expect_err(&format!("{} 不该接受相对路径", label));
+            assert!(err.contains("相对路径"), "{}: 实得 {}", label, err);
+        }
+        assert!(!dir.join("out.png").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_image_data_still_writes_bytes() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let dir = case("save-ok");
+        let dest = dir.join("sub").join("blob.bin");
+        let n = save_image_data(
+            STANDARD.encode(b"payload").to_string(),
+            dest.to_string_lossy().to_string(),
+            "bin".to_string(),
+        )
+        .unwrap();
+        assert_eq!(n, 7);
+        assert_eq!(fs::read(&dest).unwrap(), b"payload");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_image_data_refuses_sensitive_destination() {
+        // 这条是"任意字节 → 任意路径"的通道，一旦放开就等于给渲染进程留后门：
+        // ~/.ssh/authorized_keys、~/Library/LaunchAgents/*.plist 都能被写穿
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let dir = case("save-blocked");
+        let dest = dir.join(".ssh").join("authorized_keys");
+        let err = save_image_data(
+            STANDARD.encode(b"ssh-rsa AAAA").to_string(),
+            dest.to_string_lossy().to_string(),
+            "bin".to_string(),
+        )
+        .expect_err("必须拒绝写进 .ssh");
+        assert!(err.contains("禁止操作"), "实得 {}", err);
+        assert!(!dir.join(".ssh").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnail_refuses_blocked_source() {
+        let dir = case("thumb");
+        let secret = png(&dir, ".gnupg/x.png");
+        let err = get_image_thumbnail(&secret.to_string_lossy(), 64)
+            .expect_err("缩略图不该读 .gnupg");
+        assert!(err.contains("禁止操作"), "实得 {}", err);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
