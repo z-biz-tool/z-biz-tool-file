@@ -3,8 +3,9 @@ import { useEffect } from "react";
 export interface ShortcutSpec {
   /** 主键（如 "k"、"ArrowLeft"） */
   key: string;
-  /** 是否需要修饰键（默认不区分大小写，组合键以当前 isMeta/isCtrl/isShift/isAlt 匹配） */
+  /** 主修饰键：mac 上 ⌘、其他平台 Ctrl */
   meta?: boolean;
+  /** 字面 Ctrl 键（主要给 mac 上的 control 用；其他平台请按 meta） */
   ctrl?: boolean;
   shift?: boolean;
   alt?: boolean;
@@ -29,12 +30,22 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
-function matchSpec(spec: ShortcutSpec, e: KeyboardEvent): boolean {
+/**
+ * 判断一次 keydown 是否命中某个 spec。
+ *
+ * 导出仅为可单测：它是纯函数，而整条快捷键链路此前只能靠手按键盘验证。
+ */
+export function matchSpec(spec: ShortcutSpec, e: KeyboardEvent): boolean {
   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform);
+  // meta 表示"主修饰键"：mac 上是 ⌘，其他平台是 Ctrl —— 与 formatShortcut 里
+  // "⌘ / Ctrl" 的显示保持一致。此前这里直接比 e.metaKey，16 条 ⌘ 快捷键在
+  // Windows/Linux 上永不触发，但界面上却告诉用户按 Ctrl。
   const modKey = isMac ? e.metaKey : e.ctrlKey;
 
-  if (!!spec.meta !== e.metaKey) return false;
-  if (!!spec.ctrl !== modKey) return false;
+  if (!!spec.meta !== modKey) return false;
+  // ctrl 是字面 Ctrl 键（mac 上那个 control）。非 mac 平台它已经充当主修饰键，
+  // 不能再单独要求一次，否则 ⌘ 类快捷键会在 Windows 上被这条判掉。
+  if (isMac && !!spec.ctrl !== e.ctrlKey) return false;
   if (!!spec.shift !== e.shiftKey) return false;
   if (!!spec.alt !== e.altKey) return false;
 
