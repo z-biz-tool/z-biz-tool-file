@@ -48,7 +48,6 @@ import {
   PictureOutlined,
   VideoCameraOutlined,
   AudioOutlined,
-  BrainOutlined,
   RocketOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";

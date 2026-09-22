@@ -2,12 +2,14 @@ import { useState } from "react";
 import { Card, Switch, Typography, Divider, Space, Input, Button, Tabs } from "antd";
 import type { TabPaneProps } from "antd/es/tabs";
 import {
-  BrainOutlined,
-  SettingsOutlined,
+  RobotOutlined,
+  SettingOutlined,
   SearchOutlined,
   FileImageOutlined,
-  FileAudioOutlined,
-  FileVideoOutlined,
+  AudioOutlined,
+  VideoCameraOutlined,
+  FileTextOutlined,
+  FormOutlined,
 } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 
@@ -33,7 +35,7 @@ const AISettingPanel: React.FC = () => {
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
         {/* 标题区域 */}
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <BrainOutlined style={{ fontSize: "24px", color: "#1677ff" }} />
+          <RobotOutlined style={{ fontSize: "24px", color: "#1677ff" }} />
           <div>
             <Title level={4} style={{ margin: 0 }}>
               AI 智能功能设置
@@ -73,7 +75,7 @@ const AISettingPanel: React.FC = () => {
           <TabPane
             tab={
               <span>
-                <SettingsOutlined />
+                <SettingOutlined />
                 基础配置
               </span>
             }
@@ -150,7 +152,7 @@ const AISettingPanel: React.FC = () => {
           <TabPane
             tab={
               <span>
-                <FileAudioOutlined />
+                <AudioOutlined />
                 音频智能
               </span>
             }
@@ -181,7 +183,7 @@ const AISettingPanel: React.FC = () => {
           <TabPane
             tab={
               <span>
-                <FileVideoOutlined />
+                <VideoCameraOutlined />
                 视频智能
               </span>
             }

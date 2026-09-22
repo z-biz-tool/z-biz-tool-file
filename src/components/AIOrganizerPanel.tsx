@@ -20,10 +20,10 @@ import {
   FolderOpenOutlined,
   TagOutlined,
   FileTextOutlined,
-  ImageOutlined,
+  FileImageOutlined,
   VideoCameraOutlined,
   AudioOutlined,
-  ArchiveOutlined,
+  FileZipOutlined,
   CodeOutlined,
   BuildOutlined,
   DownloadOutlined,
@@ -113,7 +113,7 @@ export function AIOrganizerPanel() {
   const getTypeIcon = (type: string) => {
     switch (type) {
       case "image":
-        return <ImageOutlined style={{ color: "#1890ff" }} />;
+        return <FileImageOutlined style={{ color: "#1890ff" }} />;
       case "document":
         return <FileTextOutlined style={{ color: "#52c41a" }} />;
       case "video":
@@ -123,7 +123,7 @@ export function AIOrganizerPanel() {
       case "code":
         return <CodeOutlined style={{ color: "#eb2f96" }} />;
       case "archive":
-        return <ArchiveOutlined style={{ color: "#5734d3" }} />;
+        return <FileZipOutlined style={{ color: "#5734d3" }} />;
       default:
         return <FolderOpenOutlined style={{ color: "#999" }} />;
     }
@@ -359,7 +359,7 @@ export function AIOrganizerPanel() {
 
               <Title level={5}>AI 归档建议</Title>
               <Text>自动识别长期未访问的文件并建议归档</Text>
-              <Button icon={<ArchiveOutlined />} onClick={() => message.info("归档功能待实现")}>
+              <Button icon={<FileZipOutlined />} onClick={() => message.info("归档功能待实现")}>
                 检查归档
               </Button>
             </Space>

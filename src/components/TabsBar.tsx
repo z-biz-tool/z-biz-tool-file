@@ -1,5 +1,5 @@
 import { Tabs, Button, Tooltip } from "antd";
-import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined, SparkleOutlined } from "@ant-design/icons";
+import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 import { shortenHome } from "../utils/homeDir";
 
