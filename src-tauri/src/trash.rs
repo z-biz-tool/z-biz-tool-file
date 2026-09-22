@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -153,6 +153,39 @@ pub fn list_trash(app: tauri::AppHandle) -> Result<Vec<TrashEntry>, String> {
     Ok(entries)
 }
 
+/// 删除时间以日期目录名 `YYYY-MM-DD` 为准。
+///
+/// 旧实现读 `metadata().created()`，Linux 上多数文件系统拿不到创建时间，
+/// `unwrap_or(0)` 会把删除时间算成 1970 年，`age_secs` 约等于当前时间戳——
+/// 一旦按"超过 N 天自动清理"处理就会清空整个回收站。
+fn date_dir_to_secs(date_str: &str) -> Option<i64> {
+    let naive = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+    let midnight = naive.and_hms_opt(0, 0, 0)?;
+    Some(Local.from_local_datetime(&midnight).single()?.timestamp())
+}
+
+fn mtime_secs(p: &Path) -> Option<i64> {
+    fs::metadata(p)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
+/// 日期目录给出当天 0 点，同一天内再用 uuid 目录 mtime 精化（mtime 跨平台可靠）
+fn deleted_secs_of(date_str: &str, uuid_dir: &Path) -> i64 {
+    let day = date_dir_to_secs(date_str);
+    let mtime = mtime_secs(uuid_dir);
+    match (day, mtime) {
+        (Some(d), Some(m)) if m >= d => m,
+        (Some(d), _) => d,
+        (None, Some(m)) => m,
+        (None, None) => 0,
+    }
+}
+
 fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
     // 回收站结构：trash/YYYY-MM-DD/{uuid}/original_path.txt + {原名}
     // 入口 dir 通常是 trash 根目录，遍历两层
@@ -165,6 +198,7 @@ fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
         if !date_path.is_dir() {
             continue;
         }
+        let date_str = date_entry.file_name().to_string_lossy().to_string();
         // 每个日期目录里有多个 uuid 目录
         for uuid_entry in fs::read_dir(&date_path).map_err(|e| e.to_string())? {
             let uuid_entry = uuid_entry.map_err(|e| e.to_string())?;
@@ -184,12 +218,7 @@ fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
                     continue;
                 }
                 // 这就是原文件
-                let deleted_secs = fs::metadata(&uuid_path)
-                    .ok()
-                    .and_then(|m| m.created().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
+                let deleted_secs = deleted_secs_of(&date_str, &uuid_path);
                 let now_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
@@ -422,6 +451,50 @@ mod tests {
         let (root, _o) = fixture("missing");
         let gone = root.join("2026-09-22").join("abcd1234").join("gone.txt");
         assert!(ensure_inside_trash(&root, &gone).is_err());
+        fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn date_dir_name_is_the_source_of_truth() {
+        // 40 天前的日期目录必须算出 ~40 天的年龄；旧实现用 created()，
+        // 在拿不到创建时间的文件系统上会退化成"1970 年删除"（约 2 万天）
+        let old = Local::now() - chrono::Duration::days(40);
+        let day = old.format("%Y-%m-%d").to_string();
+        let secs = date_dir_to_secs(&day).expect("应能解析 YYYY-MM-DD");
+        let age = Local::now().timestamp() - secs;
+        let forty_days = 40 * 86_400;
+        assert!(
+            (forty_days - 86_400..forty_days + 86_400).contains(&age),
+            "年龄应约 40 天，实际 {} 秒",
+            age
+        );
+    }
+
+    #[test]
+    fn junk_date_dir_falls_back_instead_of_claiming_1970() {
+        let (_root, outside) = fixture("junkdate");
+        let bogus = _root.join("not-a-date");
+        fs::create_dir_all(&bogus).unwrap();
+        assert!(date_dir_to_secs("not-a-date").is_none());
+        // 目录名解析不了时退回 mtime，绝不能再退回 0（=1970）
+        let secs = deleted_secs_of("not-a-date", &bogus);
+        assert!(secs > 0, "应有可用的时间，实际 {}", secs);
+        assert!(
+            Local::now().timestamp() - secs < 86_400,
+            "刚建的目录不该被判成远古"
+        );
+        fs::remove_dir_all(outside.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn same_day_entries_use_mtime_refinement() {
+        let (root, _o) = fixture("samday");
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let uuid_dir = root.join(&today);
+        fs::create_dir_all(&uuid_dir).unwrap();
+        // 当天 0 点 < 现在，应当被 uuid 目录的 mtime 精化到"刚刚"
+        let secs = deleted_secs_of(&today, &uuid_dir);
+        assert!(Local::now().timestamp() - secs < 120, "应精化到最近 2 分钟");
         fs::remove_dir_all(root.parent().unwrap()).ok();
     }
 
