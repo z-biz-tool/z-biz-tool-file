@@ -53,19 +53,15 @@ fn ensure_inside_trash(root: &Path, p: &Path) -> Result<PathBuf, String> {
     Ok(canon)
 }
 
-/// 恢复目标往往还不存在（`path_guard::validate` 要求存在），
-/// 因此校验它最近一个存在的祖先目录。
+/// 恢复目标往往还不存在，用 `validate_new_path`：它 canonicalize 已存在的前缀，
+/// 并对尚不存在的尾部补做黑名单检查。
+///
+/// 只校验"最近的已存在祖先"是不够的——`~/.ssh/config` 在 `.ssh` 还没建出来时
+/// 会被放行，紧接着下面的 `create_dir_all` 正好把敏感目录替攻击者建好。
 fn validate_restore_target(target: &Path) -> Result<(), String> {
-    let mut cursor = target.parent();
-    while let Some(dir) = cursor {
-        if dir.exists() {
-            return crate::path_guard::validate(&dir.to_string_lossy())
-                .map(|_| ())
-                .map_err(|e| format!("拒绝恢复到该路径: {}", e));
-        }
-        cursor = dir.parent();
-    }
-    Err("无法确定恢复目标所在目录".to_string())
+    crate::path_guard::validate_new_path(&target.to_string_lossy())
+        .map(|_| ())
+        .map_err(|e| format!("拒绝恢复到该路径: {}", e))
 }
 
 fn path_to_trash(
@@ -625,6 +621,25 @@ mod tests {
     }
 
     #[test]
+    fn restore_target_rejects_sensitive_dir_that_does_not_exist_yet() {
+        // 这就是干净 Linux runner 上暴露的那条：~/.ssh 还没建出来时，
+        // 只校验"最近的已存在祖先"会放行，随后的 create_dir_all 再把它建出来
+        let fake_home = std::env::temp_dir().join("z-biz-tool-file-trash-fakehome");
+        let _ = fs::remove_dir_all(&fake_home);
+        fs::create_dir_all(&fake_home).unwrap();
+        for name in [".ssh/authorized_keys", ".aws/credentials", ".kube/config"] {
+            let target = fake_home.join(name);
+            let err = validate_restore_target(&target).unwrap_err();
+            assert!(err.contains("禁止操作"), "{} 应被拦下，实际: {}", name, err);
+            assert!(
+                !target.parent().unwrap().exists(),
+                "校验失败时绝不能已经把敏感目录建出来"
+            );
+        }
+        let _ = fs::remove_dir_all(&fake_home);
+    }
+
+    #[test]
     fn date_dir_name_is_the_source_of_truth() {
         // 40 天前的日期目录必须算出 ~40 天的年龄；旧实现用 created()，
         // 在拿不到创建时间的文件系统上会退化成"1970 年删除"（约 2 万天）
@@ -679,7 +694,7 @@ mod tests {
     fn restore_target_allows_missing_file_in_existing_dir() {
         let dir = std::env::temp_dir().join("z-biz-tool-file-trash-restore");
         fs::create_dir_all(&dir).unwrap();
-        // 恢复目标通常还不存在，校验的应是它存在的祖先目录
+        // 恢复目标通常还不存在，中间层目录也可以还不存在
         assert!(validate_restore_target(&dir.join("sub").join("report.txt")).is_ok());
         fs::remove_dir_all(&dir).ok();
     }

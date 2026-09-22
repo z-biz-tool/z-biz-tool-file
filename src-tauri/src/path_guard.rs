@@ -101,14 +101,51 @@ fn check_blocked(canonical: &Path) -> Result<(), PathError> {
             }
         }
     }
-    for ancestor in BLOCKED_ANCESTORS {
-        // 形如 "/Users/x/.ssh/id_rsa" 应当被拒绝
-        let needle = format!("/{}", ancestor);
-        if s.contains(&needle) {
-            return Err(PathError::Blocked(needle));
+    // 按路径组件逐个精确比对。早先是拿 "/.ssh" 做子串匹配，
+    // 会把 "~/.ssh-keys"、"~/.aws-tools" 这类正常目录一起误杀。
+    for comp in canonical.components() {
+        if let Component::Normal(name) = comp {
+            let n = name.to_string_lossy();
+            if BLOCKED_ANCESTORS.iter().any(|b| *b == n) {
+                return Err(PathError::Blocked(format!("/{}", n)));
+            }
         }
     }
     Ok(())
+}
+
+/// 校验"落点可能还不存在"的写入路径（新建文件、从回收站恢复等）。
+///
+/// `validate` 要求路径存在才能 canonicalize；若因此退化成"只校验最近的已存在祖先"，
+/// `~/.ssh/config` 在 `.ssh` 还没被创建出来时就会被放行，紧接着的 `create_dir_all`
+/// 反而替攻击者把敏感目录建好。这里把已存在前缀 canonicalize（照样拆穿符号链接），
+/// 再拼回尚未存在的词法尾部，整体补一次黑名单检查。
+pub fn validate_new_path(raw_path: &str) -> Result<PathBuf, PathError> {
+    if raw_path.is_empty() {
+        return Err(PathError::Empty);
+    }
+    let p = Path::new(raw_path);
+    if !p.is_absolute() {
+        return Err(PathError::RelativePath);
+    }
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(PathError::RelativePath);
+    }
+    // ancestors() 由深到浅：自身、父、祖父……
+    let chain: Vec<&Path> = p.ancestors().collect();
+    let idx = chain
+        .iter()
+        .position(|a| a.exists())
+        .ok_or_else(|| PathError::Invalid(format!("{} (找不到已存在的上级目录)", raw_path)))?;
+    let mut result = validate(&chain[idx].to_string_lossy())?;
+    for seg in chain[..idx].iter().rev() {
+        let name = seg
+            .file_name()
+            .ok_or_else(|| PathError::Invalid(format!("{}", seg.display())))?;
+        result.push(name);
+    }
+    check_blocked(&result)?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -142,6 +179,67 @@ mod tests {
             let res = validate("/etc/passwd");
             assert!(matches!(res, Err(PathError::Blocked(_))), "got {:?}", res);
         }
+    }
+
+    #[test]
+    fn reject_new_path_through_missing_sensitive_dir() {
+        // 敏感目录本身还不存在（干净 CI runner 上的 ~/.ssh）时也必须拦住，
+        // 否则放行后紧跟的 create_dir_all 会替攻击者把目录建出来
+        let fake_home = std::env::temp_dir().join("z-biz-tool-file-pg-home");
+        let _ = fs::remove_dir_all(&fake_home);
+        fs::create_dir_all(&fake_home).unwrap();
+        assert!(!fake_home.join(".ssh").exists());
+        for name in [".ssh/id_ed25519", ".aws/credentials", ".kube/config", ".docker/config.json"] {
+            let bad = fake_home.join(name);
+            let res = validate_new_path(&bad.to_string_lossy());
+            assert!(
+                matches!(res, Err(PathError::Blocked(_))),
+                "{} 应被拒绝，实际 {:?}",
+                name,
+                res
+            );
+        }
+        // 老实现用 "/.ssh" 做子串匹配，会把这种同前缀的正常目录一起误杀
+        let ok = fake_home.join(".ssh-keys/id.pub");
+        let res = validate_new_path(&ok.to_string_lossy());
+        assert!(res.is_ok(), "同前缀的正常目录不该被拦，实际 {:?}", res);
+        let _ = fs::remove_dir_all(&fake_home);
+    }
+
+    #[test]
+    fn allow_new_path_with_missing_intermediate_dirs() {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-pg-new");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("a/b/new.txt");
+        let res = validate_new_path(target.to_str().unwrap());
+        assert!(res.is_ok(), "got {:?}", res);
+        assert!(
+            res.unwrap().to_string_lossy().ends_with("a/b/new.txt"),
+            "未存在的尾部应原样接在 canonical 前缀之后"
+        );
+        // 相对路径与 .. 依旧一律拒绝
+        assert_eq!(validate_new_path("a/b.txt"), Err(PathError::RelativePath));
+        assert_eq!(validate_new_path("/tmp/a/../../etc"), Err(PathError::RelativePath));
+        assert_eq!(validate_new_path(""), Err(PathError::Empty));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_new_path_still_resolves_symlinked_prefix() {
+        let dir = std::env::temp_dir().join("z-biz-tool-file-pg-link");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink("/etc", dir.join("link")).unwrap();
+        let probe = dir.join("link").join("passwd");
+        let res = validate_new_path(&probe.to_string_lossy());
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(res, Err(PathError::Blocked(_))),
+            "已存在前缀里的符号链接必须被 canonicalize 拆穿，实际 {:?}",
+            res
+        );
     }
 
     #[test]
