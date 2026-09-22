@@ -300,11 +300,13 @@ function AppShellInner() {
   // 切换目录时自动启动监听；监听期间文件改动 → 防抖 300ms 后刷新列表
   const fileChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlistenFileChangeRef = useRef<(() => void) | null>(null);
+  const autoWatchRef = useRef(true);
 
-  // 订阅后端 file-change 事件（仅订阅一次，组件 mount 时）
+  // 订阅后端 file-change 事件（全局仅此一个订阅）
   useEffect(() => {
     let unlistenFn: (() => void) | null = null;
     listen<{ path: string; kind: string }>("file-change", (evt) => {
+      if (!autoWatchRef.current) return;
       const { path } = evt.payload;
       // 只刷新当前目录（或当前目录的子项）
       const dir = currentPathRef.current;
@@ -313,7 +315,9 @@ function AppShellInner() {
         // 防抖：300ms 内多次事件合并
         if (fileChangeTimerRef.current) clearTimeout(fileChangeTimerRef.current);
         fileChangeTimerRef.current = setTimeout(() => {
-          loadDirectoryRef.current?.(dir);
+          // 以触发时刻的最新目录为准，避免切换目录后回刷旧路径
+          const latest = currentPathRef.current;
+          if (latest) loadDirectoryRef.current?.(latest);
         }, 300);
       }
     })
@@ -324,6 +328,7 @@ function AppShellInner() {
       .catch((err) => console.error("订阅 file-change 失败:", err));
     return () => {
       if (unlistenFn) unlistenFn();
+      if (fileChangeTimerRef.current) clearTimeout(fileChangeTimerRef.current);
     };
   }, []);
 
@@ -413,16 +418,9 @@ function AppShellInner() {
   useEffect(() => {
     loadDirectoryRef.current = loadDirectory;
   }, [loadDirectory]);
-
-  // 切换目录时重新启动监听
   useEffect(() => {
-    if (!currentPath) return;
-    invoke("start_watching", { path: currentPath })
-      .catch((err) => console.error("启动监听失败:", err));
-    return () => {
-      // 卸载监听由下次 start_watching 自动覆盖；显式 stop 留给组件 unmount
-    };
-  }, [currentPath]);
+    autoWatchRef.current = autoWatch;
+  }, [autoWatch]);
 
   // 导航到路径
   const navigateTo = useCallback((path: string, isRoot: boolean = false) => {
@@ -465,55 +463,17 @@ function AppShellInner() {
     if (currentPath) loadDirectory(currentPath);
   }, [showHidden, currentPath, loadDirectory]);
 
-  // 文件监听：当 enabled 时自动监听当前目录
-  const watchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 监听开关 / 切换目录：全局唯一一处 start_watching，关闭时显式 stop_watching
   useEffect(() => {
-    if (!autoWatch || !currentPath) return;
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-
-    const setup = async () => {
-      try {
-        await invoke("start_watching", { path: currentPath });
-      } catch (err) {
-        console.warn("启动监听失败:", err);
-      }
-      if (cancelled) return;
-
-      const un = await listen<{ path: string; kind: string }>(
-        "file-change",
-        (event) => {
-          if (!currentPath) return;
-          const evt = event.payload;
-          // 仅当事件路径在当前目录下时刷新
-          if (!evt.path.startsWith(currentPath + "/") && evt.path !== currentPath) {
-            return;
-          }
-          // 防抖：300ms 内只触发一次
-          if (watchTimerRef.current) clearTimeout(watchTimerRef.current);
-          watchTimerRef.current = setTimeout(() => {
-            loadDirectory(currentPath);
-          }, 300);
-        }
-      );
-      if (cancelled) {
-        un();
-      } else {
-        unlisten = un;
-      }
-    };
-
-    setup();
-
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-      if (watchTimerRef.current) {
-        clearTimeout(watchTimerRef.current);
-        watchTimerRef.current = null;
-      }
-    };
-  }, [autoWatch, currentPath, loadDirectory]);
+    if (!autoWatch) {
+      invoke("stop_watching").catch(() => {});
+      return;
+    }
+    if (!currentPath) return;
+    invoke("start_watching", { path: currentPath }).catch((err) =>
+      console.warn("启动监听失败:", err)
+    );
+  }, [autoWatch, currentPath]);
 
   // 后退
   const goBack = useCallback(() => {
