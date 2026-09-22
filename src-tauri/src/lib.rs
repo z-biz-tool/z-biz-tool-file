@@ -183,10 +183,25 @@ pub mod test_bridge {
         crate::commands::delete_file(path)
     }
     pub fn call_move_file(src: &str, dest: &str) -> Result<String, String> {
-        crate::commands::move_file(src, dest)
+        crate::commands::move_file(src, dest, None)
     }
     pub fn call_copy_file(src: &str, dest: &str) -> Result<String, String> {
-        crate::commands::copy_file(src, dest)
+        crate::commands::copy_file(src, dest, None)
+    }
+    /// 指定重名策略的版本；不指定时命令默认走 Rename（绝不静默覆盖）
+    pub fn call_copy_file_with(
+        src: &str,
+        dest: &str,
+        policy: crate::commands::ConflictPolicy,
+    ) -> Result<String, String> {
+        crate::commands::copy_file(src, dest, Some(policy))
+    }
+    pub fn call_move_file_with(
+        src: &str,
+        dest: &str,
+        policy: crate::commands::ConflictPolicy,
+    ) -> Result<String, String> {
+        crate::commands::move_file(src, dest, Some(policy))
     }
     pub fn call_rename_file(old: &str, new: &str) -> Result<String, String> {
         crate::commands::rename_file(old, new)

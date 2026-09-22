@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as IoRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use std::collections::BinaryHeap;
 use std::cmp::Reverse;
@@ -300,9 +300,75 @@ pub fn delete_file(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 目标重名时的处理策略。默认 Rename —— 宁可多出一个「xxx 副本」，
+/// 也不能悄悄盖掉用户已有的文件（复制粘贴覆盖旧版本是文件管理器里最贵的意外）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConflictPolicy {
+    Overwrite,
+    Skip,
+    Rename,
+}
+
+impl Default for ConflictPolicy {
+    fn default() -> Self {
+        ConflictPolicy::Rename
+    }
+}
+
+/// 目标位置是否已被占用。这里用 symlink_metadata 而不是 exists()：
+/// 指向不存在文件的悬空符号链接 exists() 会返回 false，
+/// 随后 fs::copy 就会顺着这条链接把内容写到链接指向的真实位置去。
+fn dest_occupied(dest: &Path) -> bool {
+    fs::symlink_metadata(dest).is_ok()
+}
+
+/// 生成「a.md → a 副本.md → a 副本 2.md …」里的第一个空位。
+/// 找不到空位时返回 Err 而不是硬盖。
+fn unique_dest(dest: &Path) -> Result<PathBuf, String> {
+    let name = dest
+        .file_name()
+        .ok_or("无法从目标路径取文件名")?
+        .to_string_lossy()
+        .to_string();
+    // ".gitignore" 这类点开头文件没有可扩展名可言，整名当主体
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), Some(format!(".{}", ext))),
+        _ => (name.clone(), None),
+    };
+    let parent = dest.parent().ok_or("目标没有上级目录")?;
+    for i in 0..1000usize {
+        let candidate = match i {
+            0 => format!("{} 副本{}", stem, ext.as_deref().unwrap_or("")),
+            n => format!("{} 副本 {}{}", stem, n + 1, ext.as_deref().unwrap_or("")),
+        };
+        let path = parent.join(candidate);
+        if !dest_occupied(&path) {
+            return Ok(path);
+        }
+    }
+    Err("同名文件过多，请先清理目标目录".to_string())
+}
+
+/// 按策略定出这一项最终落在哪；Ok(None) 表示跳过（不动源、也不写目标）。
+fn resolve_dest(dest: &Path, policy: ConflictPolicy) -> Result<Option<PathBuf>, String> {
+    if !dest_occupied(dest) {
+        return Ok(Some(dest.to_path_buf()));
+    }
+    match policy {
+        ConflictPolicy::Overwrite => Ok(Some(dest.to_path_buf())),
+        ConflictPolicy::Skip => Ok(None),
+        ConflictPolicy::Rename => unique_dest(dest).map(Some),
+    }
+}
+
 /// 移动文件/目录
 #[tauri::command]
-pub fn move_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
+pub fn move_file(
+    src_path: &str,
+    dest_dir: &str,
+    conflict: Option<ConflictPolicy>,
+) -> Result<String, String> {
     let src_canonical = crate::path_guard::validate(src_path).map_err(|e| e.to_string())?;
     let dest_canonical = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
 
@@ -317,7 +383,12 @@ pub fn move_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
         .file_name()
         .ok_or("无法获取文件名")?;
 
-    let dest_path = dest_canonical.join(file_name);
+    let wanted = dest_canonical.join(file_name);
+    let dest_path = match resolve_dest(&wanted, conflict.unwrap_or_default())? {
+        Some(p) => p,
+        // 跳过：源文件留在原地，什么都不动
+        None => return Ok(wanted.to_string_lossy().to_string()),
+    };
 
     // 尝试直接移动（同一卷），失败则复制+删除
     match fs::rename(&src_canonical, &dest_path) {
@@ -380,7 +451,11 @@ fn recreate_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
 
 /// 复制文件/目录
 #[tauri::command]
-pub fn copy_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
+pub fn copy_file(
+    src_path: &str,
+    dest_dir: &str,
+    conflict: Option<ConflictPolicy>,
+) -> Result<String, String> {
     let src_canonical = crate::path_guard::validate(src_path).map_err(|e| e.to_string())?;
     let dest_canonical = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
 
@@ -395,7 +470,12 @@ pub fn copy_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
         .file_name()
         .ok_or("无法获取文件名")?;
 
-    let dest_path = dest_canonical.join(file_name);
+    let wanted = dest_canonical.join(file_name);
+    let dest_path = match resolve_dest(&wanted, conflict.unwrap_or_default())? {
+        Some(p) => p,
+        // 跳过：目标保持原样，也不报错
+        None => return Ok(wanted.to_string_lossy().to_string()),
+    };
 
     if src_canonical.is_dir() {
         copy_dir_recursive(&src_canonical, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
@@ -2469,5 +2549,176 @@ mod diff_tests {
         assert_eq!(r.removed, 8000);
         assert_eq!(r.added, 8000);
         eprintln!("diff 8000x8000 (degraded fallback) elapsed = {:?}", elapsed);
+    }
+}
+
+#[cfg(test)]
+mod conflict_tests {
+    use super::*;
+
+    fn case(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "z-biz-tool-file-conflict-{}-{}-{}",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn name_of(p: &Path) -> String {
+        p.file_name().unwrap().to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn free_slot_keeps_the_original_name() {
+        let dir = case("free");
+        let dest = dir.join("a.md");
+        assert_eq!(
+            resolve_dest(&dest, ConflictPolicy::Rename).unwrap(),
+            Some(dest.clone())
+        );
+    }
+
+    #[test]
+    fn occupied_name_gets_copy_suffix_then_counts_up() {
+        let dir = case("rename");
+        let dest = dir.join("a.md");
+        fs::write(&dest, b"original").unwrap();
+
+        let first = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        assert_eq!(name_of(&first), "a 副本.md");
+
+        fs::write(&first, b"first copy").unwrap();
+        let second = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        assert_eq!(name_of(&second), "a 副本 2.md");
+    }
+
+    #[test]
+    fn dotfile_keeps_whole_name_as_stem() {
+        let dir = case("dotfile");
+        let dest = dir.join(".gitignore");
+        fs::write(&dest, b"target/").unwrap();
+        let got = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        assert_eq!(name_of(&got), ".gitignore 副本");
+    }
+
+    #[test]
+    fn skip_and_overwrite_policies() {
+        let dir = case("policy");
+        let dest = dir.join("a.md");
+        fs::write(&dest, b"x").unwrap();
+        assert_eq!(resolve_dest(&dest, ConflictPolicy::Skip).unwrap(), None);
+        assert_eq!(
+            resolve_dest(&dest, ConflictPolicy::Overwrite).unwrap(),
+            Some(dest.clone())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_counts_as_occupied() {
+        use std::os::unix::fs::symlink;
+        let dir = case("dangling");
+        let dest = dir.join("note.txt");
+        symlink(dir.join("还不存在的目标"), &dest).unwrap();
+        // exists() 会把它当成空位，随后 fs::copy 顺着链接把文件写到别处
+        assert!(!dest.exists());
+        let got = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        assert_eq!(name_of(&got), "note 副本.txt");
+        assert_eq!(fs::read_link(&dest).unwrap(), dir.join("还不存在的目标"));
+    }
+
+    #[test]
+    fn copy_file_default_never_clobbers() {
+        let dir = case("copy-default");
+        let src = dir.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.txt"), b"new content").unwrap();
+        let dst = dir.join("dst");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"precious old content").unwrap();
+
+        let out = copy_file(src.join("a.txt").to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
+        assert_eq!(name_of(Path::new(&out)), "a 副本.txt");
+        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"precious old content");
+        assert_eq!(fs::read(dst.join("a 副本.txt")).unwrap(), b"new content");
+    }
+
+    #[test]
+    fn copy_file_skip_writes_nothing() {
+        let dir = case("copy-skip");
+        let src = dir.join("a.txt");
+        fs::write(&src, b"new").unwrap();
+        let dst = dir.join("dst");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"old").unwrap();
+
+        copy_file(
+            src.to_str().unwrap(),
+            dst.to_str().unwrap(),
+            Some(ConflictPolicy::Skip),
+        )
+        .unwrap();
+        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"old");
+        assert!(!dst.join("a 副本.txt").exists(), "跳过时不该产生副本");
+    }
+
+    #[test]
+    fn copy_file_overwrite_replaces_exactly_one_file() {
+        let dir = case("copy-overwrite");
+        let src = dir.join("a.txt");
+        fs::write(&src, b"new").unwrap();
+        let dst = dir.join("dst");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"old").unwrap();
+
+        copy_file(
+            src.to_str().unwrap(),
+            dst.to_str().unwrap(),
+            Some(ConflictPolicy::Overwrite),
+        )
+        .unwrap();
+        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"new");
+        assert_eq!(fs::read_dir(&dst).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn move_file_skip_leaves_source_in_place() {
+        let dir = case("move-skip");
+        let src = dir.join("a.txt");
+        fs::write(&src, b"new").unwrap();
+        let dst = dir.join("dst");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"old").unwrap();
+
+        move_file(
+            src.to_str().unwrap(),
+            dst.to_str().unwrap(),
+            Some(ConflictPolicy::Skip),
+        )
+        .unwrap();
+        assert!(src.exists(), "跳过意味着源文件留在原地，不能被删");
+        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn move_file_default_renames_and_removes_source() {
+        let dir = case("move-rename");
+        let src = dir.join("a.txt");
+        fs::write(&src, b"new").unwrap();
+        let dst = dir.join("dst");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("a.txt"), b"old").unwrap();
+
+        move_file(src.to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"old");
+        assert_eq!(fs::read(dst.join("a 副本.txt")).unwrap(), b"new");
     }
 }
