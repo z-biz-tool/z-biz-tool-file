@@ -10,22 +10,12 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::symlink;
 use z_biz_tool_file_lib::test_bridge::{
-    call_copy_file, call_create_file, call_delete_file, call_move_file, call_rename_file,
+    call_copy_file, call_create_file, call_delete_file, call_move_file, call_rename_file, TempDir,
 };
 
-fn tempdir() -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let nonce: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-    p.push(format!(
-        "z-biz-tool-file-commands-{}-{}",
-        std::process::id(),
-        nonce
-    ));
-    fs::create_dir_all(&p).unwrap();
-    p
+/// 作用域结束即回收，不再往临时目录里堆垃圾
+fn tempdir() -> TempDir {
+    TempDir::new("commands")
 }
 
 #[test]
@@ -55,7 +45,6 @@ fn delete_file_rejects_symlink_to_etc() {
     let res = call_delete_file(link.to_str().unwrap());
     assert!(res.is_err(), "symlink → /etc/passwd 应被拦截");
 
-    // 不删 dir——让 OS 在测试进程结束后自动回收，避免并发 canonicalize 竞态
 }
 
 #[test]
@@ -75,7 +64,6 @@ fn copy_file_rejects_blacklist_src() {
     );
     assert!(!dest.join("passwd").exists(), "绝不能在 dest 下产生副本");
 
-    // 不删 dir——让 OS 在测试进程结束后自动回收，避免并发 canonicalize 竞态
 }
 
 #[test]
@@ -94,7 +82,6 @@ fn move_file_rejects_blacklist_src() {
     );
     assert!(std::path::Path::new("/etc/hosts").exists(), "/etc/hosts 必须原封不动");
 
-    // 不删 dir——让 OS 在测试进程结束后自动回收，避免并发 canonicalize 竞态
 }
 
 #[test]
@@ -162,7 +149,6 @@ fn normal_paths_still_work() {
         ret
     );
 
-    // 不删 dir——让 OS 在测试进程结束后自动回收，避免并发 canonicalize 竞态
 }
 
 #[test]
@@ -194,7 +180,6 @@ fn extract_zip_rejects_blacklist_dest() {
         "错误应表明拦截，实际: {}",
         err
     );
-    // 不删 dir——让 OS 回收，避免并发 TOCTOU 竞争
 }
 
 #[test]
@@ -226,7 +211,6 @@ fn extract_archive_rejects_blacklist_dest() {
         err
     );
 
-    // 不删 dir——让 OS 在测试进程结束后自动回收，避免并发 canonicalize 竞态
 }
 
 #[test]

@@ -2654,20 +2654,11 @@ mod diff_tests {
 #[cfg(test)]
 mod conflict_tests {
     use super::*;
+    use crate::test_bridge::TempDir;
 
-    fn case(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "z-biz-tool-file-conflict-{}-{}-{}",
-            name,
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    /// 每个用例独享一个目录，作用域结束自动删除
+    fn case(name: &str) -> TempDir {
+        TempDir::new(&format!("conflict-{}", name))
     }
 
     fn name_of(p: &Path) -> String {
@@ -2825,18 +2816,11 @@ mod conflict_tests {
 #[cfg(test)]
 mod sync_tests {
     use super::*;
+    use crate::test_bridge::TempDir;
 
-    fn case(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "z-biz-tool-file-sync-{}-{}-{}",
-            name,
-            std::process::id(),
-            nanos
-        ));
+    /// 每个用例独享一棵 src/dst，作用域结束自动删除
+    fn case(name: &str) -> TempDir {
+        let dir = TempDir::new(&format!("sync-{}", name));
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::create_dir_all(dir.join("dst")).unwrap();
         dir
@@ -2893,7 +2877,6 @@ mod sync_tests {
         );
         // 完全一致的文件不进列表，否则大目录会把表格撑爆
         assert!(!got.iter().any(|(n, _)| n == "same.txt"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2911,7 +2894,6 @@ mod sync_tests {
         assert_eq!(e.right_size, Some(1));
         // 只有单侧存在的记录另一侧必须是 None（前端据此显示 "-"）
         assert!(e.left_modified.is_some() && e.right_modified.is_some());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2926,7 +2908,6 @@ mod sync_tests {
         let got = pairs(&compare(&l, &r));
         assert_eq!(got.len(), 1, "同尺寸不同内容必须算差异，实得 {:?}", got);
         assert_eq!(got[0].1, "modified");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2935,7 +2916,6 @@ mod sync_tests {
         let err = compare_directories("/etc", &dir.to_string_lossy())
             .expect_err("/etc 必须被拒绝");
         assert!(err.contains("禁止操作"), "实得 {}", err);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     fn sync(src: &Path, dst: &Path, names: Vec<&str>) -> SyncResult {
@@ -2959,7 +2939,6 @@ mod sync_tests {
         assert_eq!(res.copied, 1, "errors: {:?}", res.errors);
         assert_eq!(fs::read_to_string(r.join("a.txt")).unwrap(), "new");
         assert_eq!(fs::read_dir(&r).unwrap().count(), 1, "不该产生副本");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2974,7 +2953,6 @@ mod sync_tests {
         assert_eq!(fs::read_to_string(r.join("sub/deep/a.txt")).unwrap(), "x");
         // 目标树里只有这一个文件，重复同步不产生任何多余目录项
         assert_eq!(fs::read_dir(r.join("sub/deep")).unwrap().count(), 1);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2988,7 +2966,6 @@ mod sync_tests {
         assert_eq!(res.copied, 1, "errors: {:?}", res.errors);
         assert!(r.join("pack").is_dir());
         assert_eq!(fs::read_to_string(r.join("pack/b.txt")).unwrap(), "b");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3016,7 +2993,6 @@ mod sync_tests {
 
         let left = pairs(&compare(&l, &r));
         assert_eq!(left, vec![("only_right.txt".to_string(), "only_right")]);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3031,7 +3007,6 @@ mod sync_tests {
         assert_eq!(res.errors.len(), 3, "{:?}", res.errors);
         assert_eq!(fs::read_to_string(dir.join("outside.txt")).unwrap(), "victim");
         assert_eq!(fs::read_dir(&r).unwrap().count(), 0);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3047,7 +3022,6 @@ mod sync_tests {
         assert_eq!(res.errors.len(), 1, "{:?}", res.errors);
         assert!(!r.join(".ssh").exists(), "被拒绝的路径不该被创建出来");
         assert_eq!(fs::read_to_string(r.join("ok.txt")).unwrap(), "ok");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
@@ -3064,7 +3038,6 @@ mod sync_tests {
         assert_eq!(res.copied, 0, "{:?}", res);
         assert_eq!(res.errors.len(), 1);
         assert!(!r.join("link.txt").exists(), "不该把链接目标的内容抄进来");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3077,6 +3050,5 @@ mod sync_tests {
         assert_eq!(res.copied, 1);
         assert_eq!(res.errors.len(), 1);
         assert!(res.errors[0].starts_with("gone.txt"));
-        let _ = fs::remove_dir_all(&dir);
     }
 }

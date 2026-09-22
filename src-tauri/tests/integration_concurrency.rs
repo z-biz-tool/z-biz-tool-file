@@ -11,21 +11,13 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::sync::{Arc, Barrier};
 use std::thread;
-use z_biz_tool_file_lib::test_bridge::{atomic_write_concurrent, validate_path_concurrent};
+use z_biz_tool_file_lib::test_bridge::{
+    atomic_write_concurrent, validate_path_concurrent, TempDir,
+};
 
-fn tempdir() -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let nonce: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-    p.push(format!(
-        "z-biz-tool-file-integ-{}-{}",
-        std::process::id(),
-        nonce
-    ));
-    fs::create_dir_all(&p).unwrap();
-    p
+/// 作用域结束即回收，不再往临时目录里堆垃圾
+fn tempdir() -> TempDir {
+    TempDir::new("integ")
 }
 
 #[test]
@@ -64,7 +56,6 @@ fn atomic_write_concurrent_writers_no_corruption() {
     let v: serde_json::Value =
         serde_json::from_str(s).expect("file must be valid JSON, not interleaved bytes");
     assert!(v.get("payload").is_some(), "got malformed payload: {:?}", v);
-    // 不删 dir——让 OS 回收，避免并发 canonicalize 竞态
 }
 
 #[test]

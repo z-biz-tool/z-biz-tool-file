@@ -166,7 +166,55 @@ pub fn run() {
 /// 让 tests/ 目录的集成测试可以直接调用真实生产代码路径。
 #[doc(hidden)]
 pub mod test_bridge {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    /// 测试专用临时目录：随作用域结束递归删除。
+    ///
+    /// 之前各测试的 `tempdir()/case()` 只建不删（注释里写的是"让 OS 回收"），
+    /// 实测一次 `cargo test` 就在临时目录留下 1000+ 个目录、约 211 MB，每次 CI
+    /// 与本地跑都再翻一倍。Drop 连测试 panic 的路径也能清掉。
+    ///
+    /// 通过 `Deref<Target = Path>` 保持和原来返回 `PathBuf` 时的写法完全一致。
+    pub struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        pub fn new(tag: &str) -> Self {
+            let nonce: u128 = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "z-biz-tool-file-{}-{}-{}",
+                tag,
+                std::process::id(),
+                nonce
+            ));
+            std::fs::create_dir_all(&path).expect("创建临时目录失败");
+            Self { path }
+        }
+    }
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    /// 让 `fs::read_dir(&dir)` 这类泛型 `P: AsRef<Path>` 的调用点原样可用
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     pub fn validate_path_concurrent(raw: &str) -> Result<std::path::PathBuf, String> {
         match crate::path_guard::validate(raw) {

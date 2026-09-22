@@ -488,21 +488,12 @@ fn parse_image_format(format: &str) -> Result<ImageFormat, String> {
 #[cfg(test)]
 mod guard_tests {
     use super::*;
+    use crate::test_bridge::TempDir;
     use std::path::PathBuf;
 
-    fn case(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "z-biz-tool-file-img-{}-{}-{}",
-            name,
-            std::process::id(),
-            nanos
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    /// 每个用例独享一个目录，作用域结束自动删除
+    fn case(name: &str) -> TempDir {
+        TempDir::new(&format!("img-{}", name))
     }
 
     /// 4x4 纯色 PNG，够小且 image crate 能真的解码
@@ -522,7 +513,6 @@ mod guard_tests {
         let info = get_image_info(&src.to_string_lossy()).unwrap();
         assert_eq!((info.width, info.height), (4, 4));
         assert_eq!(info.format, "png");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// 在一张真 JPEG 的段链里插一段 APP1/EXIF。
@@ -581,7 +571,6 @@ mod guard_tests {
         let info = get_image_info(&src.to_string_lossy()).unwrap();
         let exif = info.exif.expect("JPEG 里的 EXIF 必须被读出来");
         assert_eq!(exif.get("Model").map(|s| s.as_str()), Some("TEST"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -592,7 +581,6 @@ mod guard_tests {
         let err = get_image_info(&secret.to_string_lossy())
             .expect_err("黑名单内的图片不该被读出尺寸");
         assert!(err.contains("禁止操作"), "实得 {}", err);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -603,7 +591,6 @@ mod guard_tests {
         resize_image(&src.to_string_lossy(), &dest.to_string_lossy(), 2, 2).unwrap();
         assert!(dest.exists());
         assert!(fs::metadata(&dest).unwrap().len() > 0);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -616,7 +603,6 @@ mod guard_tests {
         assert!(err.contains("禁止操作"), "实得 {}", err);
         // 关键：拒绝必须发生在 create_dir_all 之前，否则敏感目录被凭空建出来
         assert!(!dir.join(".ssh").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -636,7 +622,6 @@ mod guard_tests {
             assert!(err.contains("相对路径"), "{}: 实得 {}", label, err);
         }
         assert!(!dir.join("out.png").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -652,7 +637,6 @@ mod guard_tests {
         .unwrap();
         assert_eq!(n, 7);
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -670,7 +654,6 @@ mod guard_tests {
         .expect_err("必须拒绝写进 .ssh");
         assert!(err.contains("禁止操作"), "实得 {}", err);
         assert!(!dir.join(".ssh").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -680,6 +663,5 @@ mod guard_tests {
         let err = get_image_thumbnail(&secret.to_string_lossy(), 64)
             .expect_err("缩略图不该读 .gnupg");
         assert!(err.contains("禁止操作"), "实得 {}", err);
-        let _ = fs::remove_dir_all(&dir);
     }
 }
