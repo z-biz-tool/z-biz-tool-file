@@ -120,6 +120,7 @@ pub fn run() {
             trash::empty_trash,
             trash::get_trash_size,
             trash::get_trash_path,
+            trash::cleanup_expired_trash,
             commands::delete_to_trash,
             commands::analyze_storage,
             commands::run_shell_command,

@@ -186,6 +186,19 @@ fn deleted_secs_of(date_str: &str, uuid_dir: &Path) -> i64 {
     }
 }
 
+/// 判定"是否过保留期"用的时间，刻意不使用 mtime 精化。
+///
+/// 取该条目删除日的**次日 0 点**，即"它最多只可能这么新"：
+/// mtime 会被恢复失败、杀毒软件、手工挪动等情况刷新，一旦参与判定，
+/// 老条目就可能永远清不掉；而按整天对齐，最多只让保留期长一天，
+/// 不会提前删掉任何文件。
+fn expiry_secs_of(date_str: &str, uuid_dir: &Path) -> i64 {
+    match date_dir_to_secs(date_str) {
+        Some(d) => d + 86_400,
+        None => mtime_secs(uuid_dir).unwrap_or(0),
+    }
+}
+
 fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
     // 回收站结构：trash/YYYY-MM-DD/{uuid}/original_path.txt + {原名}
     // 入口 dir 通常是 trash 根目录，遍历两层
@@ -377,6 +390,93 @@ pub fn get_trash_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(trash_root(&app)?.to_string_lossy().to_string())
 }
 
+/// 回收站默认保留天数
+pub const DEFAULT_TRASH_RETAIN_DAYS: i64 = 30;
+
+/// 超期清理的结果统计
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct TrashCleanupReport {
+    /// 被永久删除的条目数
+    pub removed: usize,
+    /// 释放的字节数
+    pub bytes_freed: u64,
+    /// 因为拿不到可靠删除时间而**保留**的条目数
+    pub kept_unknown_age: usize,
+    /// 生效的保留天数
+    pub retain_days: i64,
+}
+
+/// 回收站按天数保留。核心逻辑不依赖 AppHandle，便于单测。
+///
+/// 拿不到可靠删除时间的条目一律保留——宁可多留，也不能因为时间算错
+/// 把用户还在指望能恢复的文件删掉。
+fn cleanup_expired_in(
+    root: &Path,
+    now_secs: i64,
+    retain_days: i64,
+) -> Result<TrashCleanupReport, String> {
+    let days = retain_days.max(1);
+    let cutoff = now_secs - days * 86_400;
+    let mut report = TrashCleanupReport {
+        retain_days: days,
+        ..Default::default()
+    };
+    if !root.exists() {
+        return Ok(report);
+    }
+    for date_entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let date_entry = date_entry.map_err(|e| e.to_string())?;
+        let date_path = date_entry.path();
+        if !date_path.is_dir() {
+            continue;
+        }
+        let date_str = date_entry.file_name().to_string_lossy().to_string();
+        for uuid_entry in fs::read_dir(&date_path).map_err(|e| e.to_string())? {
+            let uuid_entry = uuid_entry.map_err(|e| e.to_string())?;
+            let uuid_path = uuid_entry.path();
+            if !uuid_path.is_dir() {
+                continue;
+            }
+            // 没有元信息说明不是回收站条目目录，不碰
+            if !uuid_path.join("original_path.txt").exists() {
+                continue;
+            }
+            let deleted = expiry_secs_of(&date_str, &uuid_path);
+            if deleted <= 0 {
+                report.kept_unknown_age += 1;
+                continue;
+            }
+            if deleted >= cutoff {
+                continue;
+            }
+            let size = dir_size(&uuid_path);
+            fs::remove_dir_all(&uuid_path).map_err(|e| e.to_string())?;
+            report.removed += 1;
+            report.bytes_freed += size;
+        }
+        // 日期目录空了就顺手收掉
+        let now_empty = fs::read_dir(&date_path)
+            .map(|mut r| r.next().is_none())
+            .unwrap_or(false);
+        if now_empty {
+            let _ = fs::remove_dir(&date_path);
+        }
+    }
+    Ok(report)
+}
+
+/// 清理超过保留期的回收站条目（默认 30 天）
+#[tauri::command]
+pub fn cleanup_expired_trash(
+    app: tauri::AppHandle,
+    retain_days: Option<i64>,
+) -> Result<TrashCleanupReport, String> {
+    let root = trash_root(&app)?;
+    let days = retain_days.unwrap_or(DEFAULT_TRASH_RETAIN_DAYS);
+    let now_secs = Local::now().timestamp();
+    cleanup_expired_in(&root, now_secs, days)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,6 +552,74 @@ mod tests {
         let gone = root.join("2026-09-22").join("abcd1234").join("gone.txt");
         assert!(ensure_inside_trash(&root, &gone).is_err());
         fs::remove_dir_all(root.parent().unwrap()).ok();
+    }
+
+    /// 造一个回收站条目目录：<root>/<date>/<id>/{original_path.txt, file.bin}
+    fn make_entry(root: &Path, date: &str, id: &str, payload_len: usize) -> PathBuf {
+        let dir = root.join(date).join(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("original_path.txt"), b"/orig").unwrap();
+        fs::write(dir.join("file.bin"), vec![b'x'; payload_len]).unwrap();
+        dir
+    }
+
+    fn temp_root(case: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("z-biz-tool-file-trash-{}", case));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("trash");
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn cleanup_removes_only_expired_entries() {
+        let root = temp_root("cleanup-expire");
+        let now = Local::now().timestamp();
+        let old = (Local::now() - chrono::Duration::days(45))
+            .format("%Y-%m-%d")
+            .to_string();
+        let recent = Local::now().format("%Y-%m-%d").to_string();
+        let gone = make_entry(&root, &old, "aaaa1111", 4096);
+        let kept = make_entry(&root, &recent, "bbbb2222", 1024);
+
+        let report = cleanup_expired_in(&root, now, 30).unwrap();
+
+        assert_eq!(report.removed, 1, "只应清掉超期的那一条");
+        assert!(report.bytes_freed >= 4096);
+        assert_eq!(report.retain_days, 30);
+        assert!(!gone.exists(), "45 天前的条目应被永久删除");
+        assert!(kept.exists(), "30 天内的条目必须保留");
+        assert!(
+            !root.join(&old).exists(),
+            "空掉的日期目录应被收掉，避免留下垃圾壳"
+        );
+        let _ = fs::remove_dir_all(root.parent().unwrap());
+    }
+
+    #[test]
+    fn cleanup_never_wipes_everything_when_retain_days_is_zero() {
+        let root = temp_root("cleanup-zero");
+        let now = Local::now().timestamp();
+        let recent = Local::now().format("%Y-%m-%d").to_string();
+        let kept = make_entry(&root, &recent, "cccc3333", 64);
+
+        // 传 0 / 负数不该等价于"立刻清空"，最少按 1 天保留
+        let report = cleanup_expired_in(&root, now, 0).unwrap();
+        assert_eq!(report.retain_days, 1);
+        assert_eq!(report.removed, 0);
+        assert!(kept.exists());
+        let _ = fs::remove_dir_all(root.parent().unwrap());
+    }
+
+    #[test]
+    fn unknown_age_is_the_only_case_we_refuse_to_clean() {
+        // 日期目录名非法且拿不到 mtime -> 0，代表"不知道"，绝不能当成 1970 年清理
+        let root = temp_root("cleanup-unknown");
+        let missing = root.join("not-a-date").join("dddd4444");
+        assert_eq!(deleted_secs_of("not-a-date", &missing), 0);
+        assert_eq!(deleted_secs_of("2026-02-30", &missing), 0);
+        assert!(deleted_secs_of("2026-02-01", &missing) > 0);
+        let _ = fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]
