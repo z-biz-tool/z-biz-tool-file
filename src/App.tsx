@@ -55,6 +55,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
+import type { HashTarget } from "./utils/batchHash";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
 } from "./stores/fileStore";
@@ -200,6 +201,7 @@ function AppShellInner() {
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [duplicateFinderOpen, setDuplicateFinderOpen] = useState(false);
   const [hashCalcOpen, setHashCalcOpen] = useState(false);
+  const [hashFiles, setHashFiles] = useState<HashTarget[]>([]);
   const [dirSyncOpen, setDirSyncOpen] = useState(false);
   const [zipBrowserOpen, setZipBrowserOpen] = useState(false);
   const [zipBrowserPath, setZipBrowserPath] = useState<string | null>(null);
@@ -820,7 +822,7 @@ function AppShellInner() {
         },
       }]),
       ...(!isDir ? [{
-        key: "hash", label: "计算哈希", icon: <SafetyCertificateOutlined />, onClick: () => { setSelectedFile(record); setHashCalcOpen(true); },
+        key: "hash", label: "计算哈希", icon: <SafetyCertificateOutlined />, onClick: () => { setSelectedFile(record); setHashFiles([]); setHashCalcOpen(true); },
       }] : []),
       ...(isDir ? [{
         key: "duplicate-scan", label: "查找重复文件", icon: <CopyOutlined />, onClick: () => { setSelectedFile(record); setDuplicateFinderOpen(true); },
@@ -986,19 +988,11 @@ function AppShellInner() {
       // 批量哈希
       ...(allFiles ? [{
         key: "batch-hash",
-        label: `批量计算哈希`,
+        label: `批量计算哈希（${count} 项）`,
         icon: <SafetyCertificateOutlined />,
         onClick: () => {
-          (async () => {
-            for (const r of records) {
-              try {
-                await invoke("compute_file_hash", { path: r.path, algorithm: "sha256" });
-              } catch (e) {
-                console.error(`${r.name} 失败:`, e);
-              }
-            }
-            message.success("批量哈希完成");
-          })();
+          setHashFiles(records.map((r) => ({ path: r.path, name: r.name })));
+          setHashCalcOpen(true);
         },
       }] : []),
 
@@ -1064,7 +1058,7 @@ function AppShellInner() {
     ];
 
     return items;
-  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setSftpOpen, setArchiveSources, setArchiveMode, setArchiveTarget, setArchiveOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
+  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setHashFiles, setSftpOpen, setArchiveSources, setArchiveMode, setArchiveTarget, setArchiveOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
 
   // 兼容旧接口的 contextMenuItems:根据是否多选派发
   const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
@@ -2040,6 +2034,7 @@ function AppShellInner() {
         open={hashCalcOpen}
         onClose={() => setHashCalcOpen(false)}
         filePath={selectedFile?.path || null}
+        files={hashFiles}
       />
 
       {/* 目录同步 */}

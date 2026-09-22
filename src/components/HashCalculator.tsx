@@ -1,12 +1,20 @@
-import { useState } from "react";
-import { Modal, Select, Button, Input, message, Spin, Typography, theme } from "antd";
+import { useMemo, useState } from "react";
+import { Modal, Select, Button, Input, message, Spin, Table, Typography, theme } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  computeHashes,
+  countHashFailures,
+  formatHashReport,
+  type HashRow,
+  type HashTarget,
+} from "../utils/batchHash";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   filePath: string | null;
+  /** 批量模式：传入多个文件时忽略 filePath */
+  files?: HashTarget[];
 }
 
 const ALGORITHM_OPTIONS = [
@@ -16,38 +24,63 @@ const ALGORITHM_OPTIONS = [
   { label: "CRC32", value: "CRC32" },
 ];
 
-export default function HashCalculator({ open, onClose, filePath }: Props) {
+const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+export default function HashCalculator({ open, onClose, filePath, files }: Props) {
   const { token } = theme.useToken();
   const [algorithm, setAlgorithm] = useState<string>("MD5");
   const [calculating, setCalculating] = useState(false);
   const [result, setResult] = useState<string>("");
+  const [rows, setRows] = useState<HashRow[]>([]);
+  const [progress, setProgress] = useState<string>("");
+
+  const targets = useMemo<HashTarget[]>(() => {
+    if (files && files.length > 0) return files;
+    if (filePath) return [{ path: filePath, name: baseName(filePath) }];
+    return [];
+  }, [files, filePath]);
+
+  const isBatch = targets.length > 1;
 
   const handleCalculate = async () => {
-    if (!filePath) {
+    if (targets.length === 0) {
       message.warning("未选择文件");
       return;
     }
     setCalculating(true);
     setResult("");
+    setRows([]);
+    setProgress(`0/${targets.length}`);
     try {
-      const hash = (await invoke("calculate_file_hash", {
-        path: filePath,
-        algorithm,
-      })) as string;
-      setResult(hash);
-      message.success("计算完成");
+      const res = await computeHashes(targets, algorithm, (done, total) =>
+        setProgress(`${done}/${total}`),
+      );
+      setRows(res);
+      const failed = countHashFailures(res);
+      if (!isBatch) {
+        setResult(res[0]?.hash ?? "");
+      }
+      if (failed > 0) {
+        const first = res.find((r) => r.error);
+        message.error(
+          `${res.length - failed}/${res.length} 完成，${failed} 个失败：${first?.error}`,
+        );
+      } else {
+        message.success(`已计算 ${res.length} 个文件`);
+      }
     } catch (err) {
       message.error("计算失败: " + err);
     } finally {
       setCalculating(false);
+      setProgress("");
     }
   };
 
-  const handleCopy = async () => {
-    if (!result) return;
+  const copy = async (text: string, hint: string) => {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(result);
-      message.success("已复制到剪贴板");
+      await navigator.clipboard.writeText(text);
+      message.success(hint);
     } catch {
       message.error("复制失败");
     }
@@ -57,21 +90,51 @@ export default function HashCalculator({ open, onClose, filePath }: Props) {
     if (isOpen) {
       setAlgorithm("MD5");
       setResult("");
+      setRows([]);
+      setProgress("");
     }
   };
 
+  const columns = [
+    {
+      title: "文件名",
+      dataIndex: "name",
+      ellipsis: true,
+      width: 200,
+    },
+    {
+      title: `${algorithm} 哈希`,
+      dataIndex: "hash",
+      render: (_: string, row: HashRow) =>
+        row.error ? (
+          <Typography.Text type="danger" style={{ fontSize: 12 }}>
+            {row.error}
+          </Typography.Text>
+        ) : (
+          <Typography.Text
+            copyable={{ text: row.hash, onCopy: () => message.success("已复制哈希") }}
+            style={{ fontFamily: "monospace", fontSize: 12 }}
+          >
+            {row.hash}
+          </Typography.Text>
+        ),
+    },
+  ];
+
   return (
     <Modal
-      title="哈希计算"
+      title={isBatch ? `批量哈希计算（${targets.length} 个文件）` : "哈希计算"}
       open={open}
       onCancel={onClose}
       footer={null}
-      width={500}
+      width={isBatch ? 720 : 500}
       afterOpenChange={handleAfterOpenChange}
     >
-      {/* 文件路径 */}
+      {/* 目标文件 */}
       <div style={{ marginBottom: 16 }}>
-        <div style={{ marginBottom: 4, fontWeight: 500 }}>文件路径</div>
+        <div style={{ marginBottom: 4, fontWeight: 500 }}>
+          {isBatch ? `已选 ${targets.length} 个文件` : "文件路径"}
+        </div>
         <Typography.Text
           style={{
             fontSize: 13,
@@ -79,7 +142,12 @@ export default function HashCalculator({ open, onClose, filePath }: Props) {
             color: token.colorTextSecondary,
           }}
         >
-          {filePath ?? "未选择文件"}
+          {isBatch
+            ? targets
+                .slice(0, 3)
+                .map((t) => t.path)
+                .join("、") + (targets.length > 3 ? ` 等 ${targets.length} 个` : "")
+            : (filePath ?? "未选择文件")}
         </Typography.Text>
       </div>
 
@@ -95,10 +163,18 @@ export default function HashCalculator({ open, onClose, filePath }: Props) {
           type="primary"
           onClick={handleCalculate}
           loading={calculating}
-          disabled={!filePath}
+          disabled={targets.length === 0}
         >
-          计算
+          {isBatch ? `计算 ${targets.length} 个文件` : "计算"}
         </Button>
+        {rows.length > 0 && !calculating && (
+          <Button
+            icon={<CopyOutlined />}
+            onClick={() => copy(formatHashReport(rows), "已复制全部哈希")}
+          >
+            复制全部
+          </Button>
+        )}
       </div>
 
       {/* 计算中 */}
@@ -112,13 +188,24 @@ export default function HashCalculator({ open, onClose, filePath }: Props) {
               fontSize: 13,
             }}
           >
-            正在计算 {algorithm} 哈希值...
+            正在计算 {algorithm} 哈希值...{progress ? ` ${progress}` : ""}
           </div>
         </div>
       )}
 
-      {/* 结果 */}
-      {result && !calculating && (
+      {/* 批量结果 */}
+      {isBatch && rows.length > 0 && !calculating && (
+        <Table
+          columns={columns}
+          dataSource={rows.map((r, i) => ({ ...r, key: i }))}
+          pagination={rows.length > 50 ? { pageSize: 50, size: "small" } : false}
+          size="small"
+          scroll={{ y: 320 }}
+        />
+      )}
+
+      {/* 单文件结果 */}
+      {result && !calculating && !isBatch && (
         <div>
           <div style={{ marginBottom: 4, fontWeight: 500 }}>计算结果</div>
           <Input
@@ -129,7 +216,7 @@ export default function HashCalculator({ open, onClose, filePath }: Props) {
                 type="text"
                 size="small"
                 icon={<CopyOutlined />}
-                onClick={handleCopy}
+                onClick={() => copy(result, "已复制到剪贴板")}
               />
             }
           />
