@@ -337,19 +337,44 @@ pub fn move_file(src_path: &str, dest_dir: &str) -> Result<String, String> {
     Ok(dest_path.to_string_lossy().to_string())
 }
 
-/// 递归复制目录
-fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
+/// 递归复制目录（trash.rs 的恢复/跨卷回退也走这里，避免两份实现各自漂移）。
+///
+/// 用 `DirEntry::file_type()` 判断类型 —— 它不跟随符号链接，所以 `link -> ..`
+/// 这类自引用链接不会把递归变成无限深；FIFO/socket 等特殊文件直接跳过，
+/// 否则 `fs::copy` 会在管道上永久阻塞。
+pub(crate) fn copy_dir_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
         let dest_path = dest.join(entry.file_name());
-        if src_path.is_dir() {
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            recreate_symlink(&src_path, &dest_path)?;
+        } else if ft.is_dir() {
             copy_dir_recursive(&src_path, &dest_path)?;
-        } else {
+        } else if ft.is_file() {
             fs::copy(&src_path, &dest_path)?;
         }
     }
+    Ok(())
+}
+
+/// 在目标位置原地重建符号链接（保持"链接"这一语义，而不是复制它指向的内容）。
+#[cfg(unix)]
+fn recreate_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
+    let target = fs::read_link(src)?;
+    if fs::symlink_metadata(dest).is_ok() {
+        fs::remove_file(dest)?;
+    }
+    std::os::unix::fs::symlink(&target, dest)
+}
+
+/// Windows 上创建符号链接需要开发者模式或管理员权限，拿不到就跳过这个链接本身：
+/// 退化成"跟随链接复制目标"会让自引用链接把磁盘写满，代价大得多。
+#[cfg(not(unix))]
+fn recreate_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
+    let _ = (src, dest);
     Ok(())
 }
 
@@ -578,7 +603,7 @@ pub fn analyze_storage(
     })
 }
 
-/// 永久删除文件（不进回收站）
+/// EPUB 临时目录清理结果
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EpubTempCleanupResult {
     /// 清理掉的目录数
@@ -608,7 +633,9 @@ pub fn cleanup_epub_temp() -> Result<EpubTempCleanupResult, String> {
             continue;
         }
         let path = entry.path();
-        if !path.is_dir() {
+        // file_type() 不跟随符号链接：/tmp 是共享目录，别人把 `z-tool-epub-x` 做成
+        // 指向别处的软链时，我们只跳过它，不去统计/删除链接指向的真实目录。
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
             continue;
         }
         // 计算目录大小再删
@@ -621,17 +648,23 @@ pub fn cleanup_epub_temp() -> Result<EpubTempCleanupResult, String> {
     Ok(EpubTempCleanupResult { dirs, bytes_freed })
 }
 
-fn dir_size(path: &Path) -> u64 {
+/// 统计目录体积。用 `DirEntry::file_type()`（不跟随符号链接）判断类型，
+/// 否则目录里一个 `link -> ..` 就会让递归无限深直到栈溢出。
+/// trash.rs 也复用这一份，避免两份实现行为漂移。
+pub(crate) fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_file() {
-                if let Ok(meta) = fs::metadata(&p) {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_file() {
+                if let Ok(meta) = entry.metadata() {
                     total += meta.len();
                 }
-            } else if p.is_dir() {
-                total += dir_size(&p);
+            } else if ft.is_dir() {
+                total += dir_size(&entry.path());
             }
         }
     }

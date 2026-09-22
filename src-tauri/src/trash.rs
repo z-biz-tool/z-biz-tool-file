@@ -1,4 +1,7 @@
 use chrono::{Local, TimeZone};
+// dir_size / copy_dir_recursive 复用 commands 里那一份：这两处逻辑此前各写一遍，
+// 修符号链接跟随问题时要改两处，很容易漏。
+use crate::commands::{copy_dir_recursive, dir_size};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -110,7 +113,8 @@ pub fn move_to_trash(
     // 先尝试 rename（同卷下最快），失败再 copy + remove
     if fs::rename(src, &dest).is_err() {
         if src.is_dir() {
-            copy_dir_recursive(src, &dest)?;
+            // 跨卷回退：复制走 commands 里那份统一实现（不跟随符号链接）
+            copy_dir_recursive(src, &dest).map_err(|e| e.to_string())?;
             fs::remove_dir_all(src).map_err(|e| format!("删除原目录失败: {}", e))?;
         } else {
             fs::copy(src, &dest).map_err(|e| format!("复制文件失败: {}", e))?;
@@ -118,21 +122,6 @@ pub fn move_to_trash(
         }
     }
     Ok(dest.to_string_lossy().to_string())
-}
-
-fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
-    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
-    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let s = entry.path();
-        let d = dest.join(entry.file_name());
-        if s.is_dir() {
-            copy_dir_recursive(&s, &d)?;
-        } else {
-            fs::copy(&s, &d).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
 }
 
 /// 列出回收站所有项
@@ -261,23 +250,6 @@ fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
     Ok(())
 }
 
-fn dir_size(p: &Path) -> u64 {
-    let mut total = 0u64;
-    if let Ok(entries) = fs::read_dir(p) {
-        for e in entries.flatten() {
-            let ep = e.path();
-            if ep.is_file() {
-                if let Ok(m) = fs::metadata(&ep) {
-                    total += m.len();
-                }
-            } else if ep.is_dir() {
-                total += dir_size(&ep);
-            }
-        }
-    }
-    total
-}
-
 /// 从回收站恢复某项到原位置（或新位置）
 #[tauri::command]
 pub fn restore_from_trash(
@@ -311,7 +283,7 @@ pub fn restore_from_trash(
     }
     if fs::rename(src, &target).is_err() {
         if src.is_dir() {
-            copy_dir_recursive(src, &target)?;
+            copy_dir_recursive(src, &target).map_err(|e| e.to_string())?;
             fs::remove_dir_all(src).map_err(|e| e.to_string())?;
         } else {
             fs::copy(src, &target).map_err(|e| e.to_string())?;
@@ -697,5 +669,21 @@ mod tests {
         // 恢复目标通常还不存在，中间层目录也可以还不存在
         assert!(validate_restore_target(&dir.join("sub").join("report.txt")).is_ok());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 回收站里只要有一个目录含 `link -> ..`，跟随符号链接的 dir_size 就会一路递归到栈溢出。
+    #[cfg(unix)]
+    #[test]
+    fn dir_size_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let root = temp_root("dirsize-loop");
+        let dir = root.join("2026-01-01").join("uuid-loop");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("real.bin"), vec![7u8; 1000]).unwrap();
+        symlink("..", dir.join("up")).unwrap();
+        symlink(&dir, dir.join("self")).unwrap();
+
+        assert_eq!(dir_size(&dir), 1000, "只应统计真实普通文件，链接指向的内容不算");
+        fs::remove_dir_all(root.parent().unwrap()).ok();
     }
 }

@@ -368,3 +368,27 @@ fn path_guard_blocks_file_protocol() {
         "file:// URI 应被拦截，但 got Ok"
     );
 }
+
+/// copy_file 复制一个含自引用符号链接的目录：修复前 is_dir() 会跟随链接一路递归，
+/// 测试进程直接栈溢出被 SIGSEGV 打挂；现在必须正常返回并把链接按链接还原。
+#[test]
+fn copy_dir_with_self_referential_symlink_terminates() {
+    let dir = tempdir();
+    let src = dir.join("pkg");
+    fs::create_dir_all(src.join("nested")).unwrap();
+    fs::write(src.join("a.txt"), b"hello").unwrap();
+    symlink("..", src.join("nested").join("up")).unwrap();
+    symlink(&src, src.join("self")).unwrap();
+
+    let out = dir.join("out");
+    fs::create_dir_all(&out).unwrap();
+    let res = call_copy_file(src.to_str().unwrap(), out.to_str().unwrap());
+    assert!(res.is_ok(), "复制应正常结束而不是递归爆栈: {:?}", res);
+
+    let copied = out.join("pkg");
+    assert_eq!(fs::read(copied.join("a.txt")).unwrap(), b"hello");
+    let up = copied.join("nested").join("up");
+    let meta = fs::symlink_metadata(&up).expect("链接应还原为链接，而不是被展开成真实目录");
+    assert!(meta.file_type().is_symlink(), "up 必须仍然是符号链接");
+    assert_eq!(fs::read_link(&up).unwrap(), std::path::Path::new(".."));
+}
