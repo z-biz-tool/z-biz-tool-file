@@ -23,6 +23,13 @@ interface Props {
   onRestored?: () => void;
 }
 
+interface TrashCleanupReport {
+  removed: number;
+  bytes_freed: number;
+  kept_unknown_age: number;
+  retain_days: number;
+}
+
 interface TrashEntry {
   trash_path: string;
   original_path: string;
@@ -40,7 +47,12 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+/** 与后端 DEFAULT_TRASH_RETAIN_DAYS 保持一致 */
+const RETAIN_DAYS = 30;
+const DAY_SECS = 86400;
+
 function formatAge(secs: number): string {
+  if (secs < 0) return "时间未知";
   if (secs < 60) return `${secs} 秒前`;
   if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`;
   if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`;
@@ -53,6 +65,7 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
   const [totalSize, setTotalSize] = useState(0);
   const [trashPath, setTrashPath] = useState("");
   const [loading, setLoading] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -109,6 +122,37 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
           refresh();
         } catch (err) {
           message.error("删除失败: " + err);
+        }
+      },
+    });
+  };
+
+  // 时间未知的条目（age_secs < 0）一律不计入，交给后端保留
+  const expiredCount = entries.filter((e) => e.age_secs > RETAIN_DAYS * DAY_SECS).length;
+
+  const onCleanExpired = () => {
+    modal.confirm({
+      title: "清理超期条目？",
+      icon: <ExclamationCircleOutlined style={{ color: "#faad14" }} />,
+      content: `将永久删除回收站中超过 ${RETAIN_DAYS} 天的条目，无法恢复。`,
+      okText: "清理",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        setCleaning(true);
+        try {
+          const r = await invoke<TrashCleanupReport>("cleanup_expired_trash", {
+            retainDays: RETAIN_DAYS,
+          });
+          message.success(
+            `已清理 ${r.removed} 项，释放 ${formatSize(r.bytes_freed)}` +
+              (r.kept_unknown_age > 0 ? `；${r.kept_unknown_age} 项因时间未知被保留` : "")
+          );
+          refresh();
+        } catch (err) {
+          message.error("清理失败: " + err);
+        } finally {
+          setCleaning(false);
         }
       },
     });
@@ -172,6 +216,17 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
         <Button size="small" icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
           刷新
         </Button>
+        <Tooltip title={`删除超过 ${RETAIN_DAYS} 天的条目`}>
+          <Button
+            size="small"
+            icon={<ClockCircleOutlined />}
+            onClick={onCleanExpired}
+            loading={cleaning}
+            disabled={expiredCount === 0}
+          >
+            清理超期{expiredCount > 0 ? ` (${expiredCount})` : ""}
+          </Button>
+        </Tooltip>
         <Button
           size="small"
           danger

@@ -255,7 +255,9 @@ fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
                     is_dir: file_path.is_dir(),
                     size,
                     deleted_at,
-                    age_secs: now_secs - deleted_secs,
+                    // 时间不可知用 -1，而不是"距今 50 多年"——
+                    // 否则 UI 和按天数的清理都会把它当成最老的条目
+                    age_secs: if deleted_secs == 0 { -1 } else { now_secs - deleted_secs },
                 });
             }
         }
