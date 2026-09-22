@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Input, theme } from "antd";
 import { invoke } from "@tauri-apps/api/core";
+import { homeDirSync } from "../utils/homeDir";
 
 interface CommandResult {
   stdout: string;
@@ -72,10 +73,10 @@ export default function BuiltInTerminal({
     (target: string): string => {
       if (target.startsWith("/")) return target;
       if (target === "~") {
-        return "/Users/zifang";
+        return homeDirSync();
       }
       if (target.startsWith("~/")) {
-        return "/Users/zifang" + target.slice(1);
+        return homeDirSync() + target.slice(1);
       }
       // Relative path
       const parts = workingDir.split("/").filter(Boolean);
@@ -112,8 +113,8 @@ export default function BuiltInTerminal({
       const target = cmd.slice(3).trim();
       if (!target) {
         // cd with no args - go to home
-        setWorkingDir("/Users/zifang");
-        onPathChange("/Users/zifang");
+        setWorkingDir(homeDirSync());
+        onPathChange(homeDirSync());
         return;
       }
       const resolved = resolvePath(target);
@@ -129,8 +130,8 @@ export default function BuiltInTerminal({
     }
 
     if (cmd === "cd") {
-      setWorkingDir("/Users/zifang");
-      onPathChange("/Users/zifang");
+      setWorkingDir(homeDirSync());
+      onPathChange(homeDirSync());
       return;
     }
 

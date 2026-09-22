@@ -15,6 +15,7 @@ import {
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
+import { resolveHomeDir } from "../utils/homeDir";
 
 // 渐变色主题常量
 const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
@@ -314,21 +315,30 @@ interface DualPanelViewProps {
 export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProps) {
   const [showHidden, setShowHidden] = useState(false);
   const [syncBrowsing, setSyncBrowsing] = useState(false);
-  const [leftPanel, setLeftPanel] = useState<PanelState>({
-    currentPath: "/Users/zifang",
-    history: ["/Users/zifang"],
-    historyIndex: 0,
+  const emptyPanel = (): PanelState => ({
+    currentPath: "",
+    history: [],
+    historyIndex: -1,
     fileList: [],
     selectedFile: null,
   });
-  const [rightPanel, setRightPanel] = useState<PanelState>({
-    currentPath: "/Users/zifang",
-    history: ["/Users/zifang"],
-    historyIndex: 0,
-    fileList: [],
-    selectedFile: null,
-  });
+  const [leftPanel, setLeftPanel] = useState<PanelState>(emptyPanel);
+  const [rightPanel, setRightPanel] = useState<PanelState>(emptyPanel);
   const { token } = theme.useToken();
+
+  // 双栏面板打开时落到当前用户主目录
+  useEffect(() => {
+    let cancelled = false;
+    resolveHomeDir().then((home) => {
+      if (cancelled) return;
+      const init: PanelState = { ...emptyPanel(), currentPath: home, history: [home], historyIndex: 0 };
+      setLeftPanel(init);
+      setRightPanel({ ...init });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div

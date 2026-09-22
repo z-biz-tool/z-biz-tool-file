@@ -19,6 +19,7 @@ import {
   CloseCircleOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
+import { resolveHomeDir } from "../utils/homeDir";
 import {
   loadQuickActions,
   saveUserQuickActions,
@@ -40,10 +41,14 @@ export default function QuickActionsModal({ open, onClose }: Props) {
   const [editing, setEditing] = useState<QuickAction | null>(null);
   const [editingOpen, setEditingOpen] = useState(false);
   const [running, setRunning] = useState(false);
-  const [targetPath, setTargetPath] = useState("/Users/zifang");
+  const [targetPath, setTargetPath] = useState("");
 
   useEffect(() => {
-    if (open) setActions(loadQuickActions());
+    if (!open) return;
+    setActions(loadQuickActions());
+    // 首次打开时把作用路径预填为当前用户主目录
+    if (!targetPath) resolveHomeDir().then(setTargetPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const persist = (next: QuickAction[]) => {
