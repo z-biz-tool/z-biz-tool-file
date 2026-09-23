@@ -1700,9 +1700,15 @@ fn same_content(a: &Path, b: &Path) -> bool {
 
 /// 比较两个目录，返回扁平的差异列表（源在左、目标在右）。
 ///
-/// 判定沿用 rsync 的粗粒度口径：大小或修改时间任一不同即视为"已修改"。
-/// 时间按 `SystemTime` 全精度比较 —— 先前只比 `as_secs()`，同一秒内先后写入的
-/// 两个不同内容会被判成"相同"而永久漏同步。
+/// 判定口径：**大小不同即"已修改"；大小相同则以内容为准，修改时间不参与判定**。
+/// mtime 只做展示（表格里那两列时间）。
+///
+/// 为什么不拿 mtime 当依据：
+/// - 容器/网络文件系统的 mtime 精度只到秒，"同尺寸 + 同一秒写入"的两份不同内容会被判成相同，
+///   同步永远漏掉它（CI 的 ubuntu runner 上真实红过）；
+/// - 反过来 `fs::copy` 是否带走 mtime 在各平台不一致（macOS 带、Linux 不带），拿 mtime 当依据
+///   会让"内容完全一致"的文件在 Linux 上永远显示"已修改"，用户点多少次同步都看不到尽头。
+/// 代价是尺寸相同的文件要真读一遍内容才能定论，这是 `diff -r` 同款的口径。
 #[tauri::command]
 pub fn compare_directories(
     left_dir: &str,
@@ -1732,11 +1738,8 @@ pub fn compare_directories(
                 right_size: None,
             }),
             Some((rsize, rmtime)) => {
-                // 元数据一致不等于内容一致：容器/网络文件系统（CI 的 ubuntu runner 实测如此）
-                // 的 mtime 精度只到秒，同尺寸、同一秒写入的两份不同内容会被判成"相同"，
-                // 于是同步永远漏掉它。所以元数据说"一样"时，再真比一次内容。
-                let meta_same = lsize == rsize && lmtime == rmtime;
-                if !meta_same || !same_content(&left_path.join(rel), &right_path.join(rel)) {
+                // 尺寸相同才需要真读内容；尺寸不同已经足够定论，不必付这次 IO。
+                if lsize != rsize || !same_content(&left_path.join(rel), &right_path.join(rel)) {
                     entries.push(SyncDiffEntry {
                         name: rel.clone(),
                         status: SyncDiffStatus::Modified,
@@ -2991,6 +2994,22 @@ mod sync_tests {
             vec![("diff.txt".to_string(), "modified")],
             "元数据一致时必须以内容为准"
         );
+    }
+
+    #[test]
+    fn compare_ignores_a_mtime_only_difference() {
+        // 内容一致、只有 mtime 不同：必须判"相同"。fs::copy 是否带走 mtime 在 macOS 上带、
+        // Linux 上不带，这条用例把两平台的分歧钉死 —— 少了它，Linux 腿会把整棵树显示成"已修改"，
+        // 而同步完再比还是"已修改"，用户永远看不到"已经同步好了"。
+        let dir = case("mtime-only");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("a.txt"), "same content");
+        fs::copy(l.join("a.txt"), r.join("a.txt")).unwrap();
+        align_mtime(
+            &[r.join("a.txt")],
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+        );
+        assert_eq!(pairs(&compare(&l, &r)), vec![], "mtime 单独不同不该算差异");
     }
 
     #[test]
