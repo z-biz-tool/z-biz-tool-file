@@ -153,6 +153,7 @@ pub fn run() {
             indexer::indexer_search_files,
             indexer::indexer_search_content,
             indexer::indexer_get_stats,
+            indexer::indexer_sync_dir,
             image_exif::read_exif,
             video_thumb::get_video_thumbnail,
             image_utils::export_image,

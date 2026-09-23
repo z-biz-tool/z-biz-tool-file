@@ -55,6 +55,7 @@ import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
 import { batchToast, placeBatch } from "./utils/conflictChoice";
+import { syncDirIndex } from "./services/indexService";
 import { openRejectText, resolveOpen, resolveRenameTarget } from "./utils/openBehavior";
 import type { HashTarget } from "./utils/batchHash";
 import {
@@ -423,7 +424,14 @@ function AppShellInner() {
     const args = showHidden ? { path, showHidden: true } : { path };
     invoke(cmd, args)
       .then((entries: unknown) => {
-        setFileList(entries as FileEntry[]);
+        const list = entries as FileEntry[];
+        setFileList(list);
+        // 列表是唯一权威：这一层现在有什么就按什么对齐索引（后台跑，不挡渲染）
+        syncDirIndex(
+          path,
+          list.map((e) => ({ name: e.name, size: e.size, modified: e.modified })),
+          showHidden
+        );
       })
       .catch((err) => {
         message.error("加载目录失败: " + err);

@@ -476,6 +476,73 @@ impl SimpleIndexer {
     }
 }
 
+/// 目录级"对齐"用的纯决策：给定该目录里已索引的子项与实际列到的子项，
+/// 得出该删掉谁、该刷新谁。
+///
+/// 为什么单独拿出来：这一步是全部风险的所在 —— 判断错了会把还在的文件从索引里删掉，
+/// 或者反过来让删掉的文件一直留在搜索结果里。做成纯函数才能不碰磁盘就断言。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DirSyncPlan {
+    /// 已索引但实际已经不在（或不在本次可见范围内）→ 从索引里删
+    pub drop: Vec<String>,
+    /// 实际有、但索引里没有或元数据对不上 → 重新索引（会读盘）
+    pub refresh: Vec<String>,
+    /// 索引与实际一致，什么都不做（稳态浏览就该全是这一档，否则每次进目录都在读盘）
+    pub unchanged: usize,
+}
+
+/// listing_includes_hidden = false 时，隐藏条目不参与"删"的判断：
+/// 列表按当前设置没列 dotfile，而索引里有（walkdir 默认收录），
+/// 不加这道判断的话，每进一次目录就会把该目录的隐藏文件从索引里清出去。
+pub fn plan_dir_sync(
+    dir: &str,
+    indexed: &[(String, u64, u64)],
+    present: &[(String, u64, u64)],
+    listing_includes_hidden: bool,
+) -> DirSyncPlan {
+    let prefix = if dir.ends_with('/') { dir.to_string() } else { format!("{}/", dir) };
+    let mut plan = DirSyncPlan::default();
+
+    let present_map: HashMap<String, (u64, u64)> = present
+        .iter()
+        .map(|(name, size, modified)| (format!("{}{}", prefix, name), (*size, *modified)))
+        .collect();
+
+    for (path, size, modified) in indexed {
+        if !path.starts_with(&prefix) {
+            continue;
+        }
+        let rest = &path[prefix.len()..];
+        // 只对齐这一层：子目录里的东西由它们自己的列表负责
+        if rest.is_empty() || rest.contains('/') {
+            continue;
+        }
+        if !listing_includes_hidden && rest.starts_with('.') {
+            continue;
+        }
+        match present_map.get(path) {
+            None => plan.drop.push(path.clone()),
+            Some((p_size, p_mod)) => {
+                if p_size == size && p_mod == modified {
+                    plan.unchanged += 1;
+                } else {
+                    plan.refresh.push(path.clone());
+                }
+            }
+        }
+    }
+
+    for (name, _, _) in present {
+        let path = format!("{}{}", prefix, name);
+        if indexed.iter().any(|(p, _, _)| p == &path) {
+            continue;
+        }
+        plan.refresh.push(path);
+    }
+
+    plan
+}
+
 // Tauri 命令
 #[tauri::command]
 pub fn indexer_init() -> Result<Value, String> {
@@ -541,4 +608,122 @@ pub fn indexer_get_stats() -> Result<Value, String> {
     Ok(json!({
         "stats": indexer.get_stats()
     }))
+}
+
+/// 列表刷新后顺手把这一层的索引对齐：删掉已经不在的、补上新的、刷新改过的。
+/// 搜索索引原来只在手动「重新构建」时才更新，于是新建/改名/删除之后
+/// 搜索结果里还留着旧文件（点开的却是"文件不存在"）。
+#[tauri::command]
+pub fn indexer_sync_dir(
+    dir: String,
+    entries: Vec<Value>,
+    listing_includes_hidden: Option<bool>,
+) -> Result<Value, String> {
+    let mut indexer = SimpleIndexer::load()?;
+    let prefix = if dir.ends_with('/') { dir.clone() } else { format!("{}/", dir) };
+    let indexed: Vec<(String, u64, u64)> = indexer
+        .file_index
+        .values()
+        .filter(|i| i.path.starts_with(&prefix))
+        .map(|i| (i.path.clone(), i.size, i.modified))
+        .collect();
+    let present: Vec<(String, u64, u64)> = entries
+        .iter()
+        .filter_map(|e| {
+            let name = e.get("name")?.as_str()?.to_string();
+            let size = e.get("size")?.as_u64().unwrap_or(0);
+            let modified = e.get("modified")?.as_u64().unwrap_or(0);
+            Some((name, size, modified))
+        })
+        .collect();
+
+    let plan = plan_dir_sync(&dir, &indexed, &present, listing_includes_hidden.unwrap_or(false));
+    if plan.drop.is_empty() && plan.refresh.is_empty() {
+        // 稳态浏览一个字节都不该动：既不读盘也不重写 index json
+        return Ok(json!({ "dropped": 0, "refreshed": 0, "unchanged": plan.unchanged }));
+    }
+    for path in &plan.drop {
+        indexer.remove_file(path);
+    }
+    for path in &plan.refresh {
+        // 已经不在磁盘上的会被 update_file 自己剔掉，这里不重复判断
+        indexer.update_file(path)?;
+    }
+    indexer.save()?;
+    Ok(json!({
+        "dropped": plan.drop.len(),
+        "refreshed": plan.refresh.len(),
+        "unchanged": plan.unchanged,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plan_dir_sync;
+
+    #[test]
+    fn 消失的文件要从索引里剔掉() {
+        let indexed = vec![
+            ("/d/a.txt".to_string(), 10u64, 1u64),
+            ("/d/b.txt".to_string(), 20u64, 1u64),
+        ];
+        let present = vec![("a.txt".to_string(), 10u64, 1u64)];
+        let plan = plan_dir_sync("/d", &indexed, &present, false);
+        assert_eq!(plan.drop, vec!["/d/b.txt".to_string()]);
+        assert!(plan.refresh.is_empty());
+        assert_eq!(plan.unchanged, 1);
+    }
+
+    #[test]
+    fn 大小或时间变了才重新索引() {
+        let indexed = vec![("/d/a.txt".to_string(), 10u64, 1u64)];
+        let same = vec![("a.txt".to_string(), 10u64, 1u64)];
+        assert!(plan_dir_sync("/d", &indexed, &same, false).refresh.is_empty());
+
+        let changed_size = vec![("a.txt".to_string(), 11u64, 1u64)];
+        assert_eq!(
+            plan_dir_sync("/d", &indexed, &changed_size, false).refresh,
+            vec!["/d/a.txt".to_string()]
+        );
+        let changed_mtime = vec![("a.txt".to_string(), 10u64, 2u64)];
+        assert_eq!(
+            plan_dir_sync("/d", &indexed, &changed_mtime, false).refresh,
+            vec!["/d/a.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn 隐藏文件在没开显示隐藏时不许被剔掉() {
+        // 列表按当前设置不列 dotfile，索引里有（walkdir 默认收录）：
+        // 不加这道判断，每进一次目录就会把该目录的隐藏文件从索引清出去
+        let indexed = vec![("/d/.env".to_string(), 5u64, 1u64)];
+        let plan_hidden_out = plan_dir_sync("/d", &indexed, &[], false);
+        assert!(plan_hidden_out.drop.is_empty(), "实得 {:?}", plan_hidden_out);
+        let plan_shown = plan_dir_sync("/d", &indexed, &[], true);
+        assert_eq!(plan_shown.drop, vec!["/d/.env".to_string()]);
+    }
+
+    #[test]
+    fn 只对齐本层不动子目录() {
+        let indexed = vec![("/d/sub/x.txt".to_string(), 1u64, 1u64)];
+        let plan = plan_dir_sync("/d", &indexed, &[], false);
+        assert!(plan.drop.is_empty(), "子目录条目不该被本层列表删掉：{:?}", plan);
+    }
+
+    #[test]
+    fn 目录尾斜杠与无斜杠等价() {
+        let indexed = vec![("/d/a.txt".to_string(), 10u64, 1u64)];
+        let with_slash = plan_dir_sync("/d/", &indexed, &[], false);
+        let without = plan_dir_sync("/d", &indexed, &[], false);
+        assert_eq!(with_slash.drop, without.drop);
+        assert_eq!(with_slash.drop, vec!["/d/a.txt".to_string()]);
+    }
+
+    #[test]
+    fn 新文件要补进索引() {
+        let present = vec![("new.txt".to_string(), 3u64, 9u64)];
+        let plan = plan_dir_sync("/d", &[], &present, false);
+        assert_eq!(plan.refresh, vec!["/d/new.txt".to_string()]);
+        assert_eq!(plan.unchanged, 0);
+    }
 }

@@ -105,6 +105,27 @@ export async function getIndexStats(): Promise<IndexStats> {
   }
 }
 
+/**
+ * 列表刷新后把这一层的索引对齐（后台跑，不阻塞浏览）。
+ *
+ * 索引原来只在手动「重新构建」时才更新：新建/改名/删掉一个文件之后，
+ * 搜索结果里还留着已经不存在的条目，点上去是"文件不存在"；反过来新文件搜不到。
+ * 失败一律咽掉 —— 这是自我修正，不是用户按下的动作，不该因为索引问题弹错误。
+ */
+export function syncDirIndex(
+  dir: string,
+  entries: Array<{ name: string; size: number; modified: number }>,
+  listingIncludesHidden: boolean
+): void {
+  invoke("indexer_sync_dir", {
+    dir,
+    entries: entries.map(({ name, size, modified }) => ({ name, size, modified })),
+    listingIncludesHidden,
+  }).catch(() => {
+    /* 索引对齐失败不影响这一页的显示 */
+  });
+}
+
 function defaultStats(): IndexStats {
   return {
     version: 0,
