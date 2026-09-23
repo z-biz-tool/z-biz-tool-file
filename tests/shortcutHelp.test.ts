@@ -104,11 +104,17 @@ describe("describeShortcuts", () => {
 });
 
 describe("filterShortcutDocs", () => {
-  const groups = describeShortcuts([
-    spec({ key: "t", meta: true, description: "新建标签页", group: "标签页" }),
-    spec({ key: "ArrowLeft", alt: true, description: "后退", group: "导航" }),
-    spec({ key: "1", meta: true, description: "表格视图", group: "视图" }),
-  ]);
+  // describe 体是"收集期"跑的：那时 beforeEach 的平台桩还没挂上，groups 里的键位
+  // 取的是真实 navigator.platform。本机（Node 在 mac 上就是 "MacIntel"）看不出来，
+  // Linux CI 上渲染成 Alt/Ctrl，"⌥" 整片搜不到 —— 派生值必须在桩挂好之后才算。
+  let groups: ReturnType<typeof describeShortcuts> = [];
+  beforeEach(() => {
+    groups = describeShortcuts([
+      spec({ key: "t", meta: true, description: "新建标签页", group: "标签页" }),
+      spec({ key: "ArrowLeft", alt: true, description: "后退", group: "导航" }),
+      spec({ key: "1", meta: true, description: "表格视图", group: "视图" }),
+    ]);
+  });
 
   it("空查询原样返回全部分组", () => {
     expect(filterShortcutDocs(groups, "").map((g) => g.group)).toEqual(["标签页", "导航", "视图"]);
@@ -168,7 +174,11 @@ describe("shortcutHints：tooltip 的键位来源", () => {
 });
 
 describe("hintSuffixOf：App 与子组件共用的那一个取值函数", () => {
-  const hints = shortcutHints([spec({ key: "t", meta: true, description: "新建标签页" })]);
+  // 同上：hints 里已经是按平台渲染好的键位，收集期取值在 Linux CI 上会变成 "Ctrl + T"
+  let hints: ReturnType<typeof shortcutHints> = {};
+  beforeEach(() => {
+    hints = shortcutHints([spec({ key: "t", meta: true, description: "新建标签页" })]);
+  });
 
   it("命中时带前导空格和括号，直接拼在 label 后面就是原来的文案格式", () => {
     expect(`新建标签页${hintSuffixOf(hints, "新建标签页")}`).toBe("新建标签页 (⌘ + T)");
