@@ -49,6 +49,7 @@ pub fn run() {
             commands::move_file,
             commands::copy_file,
             conflict::occupied_names,
+            conflict::existing_paths,
             commands::create_file,
             commands::create_directory,
             commands::batch_rename,

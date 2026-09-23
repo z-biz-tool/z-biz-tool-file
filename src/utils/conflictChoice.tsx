@@ -34,6 +34,20 @@ export async function occupiedNames(destDir: string, names: string[]): Promise<s
 }
 
 /**
+ * 一批源路径里仍然存在的那些（顺序与入参一致）。
+ *
+ * 复制/剪切在外部被删/挪走是常见情形：剪贴板里的路径已经过时。
+ * 让 N 个 `get_file_info` 各跑一次 IPC 太浪费；这一条一次给出结果，
+ * 调用方在真正动手前剔掉失踪项，至少能给用户一句"另有 N 项源文件不存在，已跳过"。
+ *
+ * 后端命令 `existing_paths` 对单条失败静默跳过，整批不是事务。
+ */
+export async function existingPaths(paths: string[]): Promise<string[]> {
+  if (!paths.length) return [];
+  return invoke<string[]>("existing_paths", { paths });
+}
+
+/**
  * 撞名时才打扰用户；取消返回 null，调用方整批不动。
  * 默认「保留两者」—— 和后端默认一致：悄悄盖掉用户已有的文件是文件管理器里最贵的意外。
  */
@@ -92,6 +106,8 @@ export interface BatchResult {
   note: string;
   /** 因为"搬进自己肚子里"被剔掉的条数；调用方要为此给一句解释，不能默默吞掉 */
   selfSkipped: number;
+  /** 因为源文件在外部被删/挪走而没真正动手的条数；同样要给一句解释 */
+  missingSources: number;
 }
 
 /**
@@ -113,17 +129,32 @@ export interface BatchToast {
 }
 
 export function batchToast(done: BatchResult, verb: string, target: string): BatchToast | null {
+  const missingNote = done.missingSources
+    ? `另有 ${done.missingSources} 项源文件不存在，已跳过`
+    : "";
+  const selfNote = done.selfSkipped
+    ? `另有 ${done.selfSkipped} 项会搬进自己的子目录，已跳过`
+    : "";
+  // 顺序：同名处理 → 自我包含 → 源不存在 —— 这三件事用户都需要看到，但后两条概率更小，
+  // 把更确定的事实放前面，扫一眼能直接读出"是不是按计划落地了"
+  const extras = [done.note, selfNote, missingNote].filter(Boolean).join("，");
+
   if (done.placed > 0) {
-    const extra = done.selfSkipped ? `，另有 ${done.selfSkipped} 项会搬进自己的子目录，已跳过` : "";
     return {
       kind: "success",
-      text: `${verb} ${done.placed} 项到 ${target}${done.note ? "，" + done.note : ""}${extra}`,
+      text: extras
+        ? `${verb} ${done.placed} 项到 ${target}，${extras}`
+        : `${verb} ${done.placed} 项到 ${target}`,
       refresh: true,
     };
   }
-  if (done.selfSkipped > 0) {
-    return { kind: "warning", text: "不能把一个文件夹放进它自己的子目录里", refresh: false };
+  // 一个都没落地 —— 把没落地的真实原因说给用户听，不要只说"失败了"
+  if (missingNote && selfNote) {
+    return { kind: "warning", text: `${missingNote}；${selfNote}`, refresh: false };
   }
+  if (missingNote) return { kind: "warning", text: missingNote, refresh: false };
+  if (selfNote)
+    return { kind: "warning", text: "不能把一个文件夹放进它自己的子目录里", refresh: false };
   return null;
 }
 
@@ -151,8 +182,8 @@ export function blocksDisplacement(src: string, destDir: string): boolean {
 }
 
 /**
- * 一次拖拽算一批：动手前探一次同名，撞了才问一次，然后把选择原样交给后端。
- * 返回 null 表示用户取消 —— 这时一个文件都不该动。
+ * 一次拖拽算一批：动手前先剔掉两类不能动的，剩下的探测一次同名，撞了才问一次，
+ * 然后把选择原样交给后端。返回 null 表示用户取消 —— 这时一个文件都不该动。
  */
 export async function placeBatch(
   destDir: string,
@@ -162,15 +193,26 @@ export async function placeBatch(
   // 拖到自己身上、或拖进自己的子目录，都会把自己搬空，先剔掉
   const eligible = items.filter(({ src }) => !blocksDisplacement(src, destDir));
   const selfSkipped = items.length - eligible.length;
-  if (!eligible.length) return { placed: 0, note: "", selfSkipped };
-  const names = eligible.map(({ src }) => baseName(src)).filter((n) => n.length > 0);
+  if (!eligible.length) return { placed: 0, note: "", selfSkipped, missingSources: 0 };
+
+  // 源可能在复制/剪切之后被外部删了。一次 IPC 批量问存在性，剔除失踪项再继续。
+  // 全没了就别打扰用户问冲突策略 —— 弹出来的"目标目录里有 N 个同名"全是已经失踪的，
+  // 用户本来就没看到这一批，决策权也没意义。
+  const stillThere = await existingPaths(eligible.map(({ src }) => src));
+  const present = eligible.filter(({ src }) => stillThere.includes(src));
+  const missingSources = eligible.length - present.length;
+  if (!present.length) {
+    return { placed: 0, note: "", selfSkipped, missingSources };
+  }
+
+  const names = present.map(({ src }) => baseName(src)).filter((n) => n.length > 0);
   const taken = await occupiedNames(destDir, names);
   const policy: ConflictPolicy | null = taken.length
     ? await askConflictPolicy(destDir, taken, modal)
     : "rename";
   if (!policy) return null;
   let placed = 0;
-  for (const { src, mode } of eligible) {
+  for (const { src, mode } of present) {
     await invoke(mode === "copy" ? "copy_file" : "move_file", {
       srcPath: src,
       destDir,
@@ -179,5 +221,5 @@ export async function placeBatch(
     // 「跳过」下同名那几项其实原地没动，不能报成"已移动"
     if (!(policy === "skip" && taken.includes(baseName(src)))) placed += 1;
   }
-  return { placed, note: conflictNote(policy, taken.length), selfSkipped };
+  return { placed, note: conflictNote(policy, taken.length), selfSkipped, missingSources };
 }

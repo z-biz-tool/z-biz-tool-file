@@ -73,6 +73,23 @@ pub fn occupied_names(dest_dir: String, names: Vec<String>) -> Result<Vec<String
         .collect())
 }
 
+/// 返回 `paths` 里仍然存在的那些（保持原顺序）。
+///
+/// 粘贴前要做这一步：剪贴板里的源在外部可能被删/挪走，挨个 `get_file_info` 一次一 IPC
+/// 浪费，所以塞一条批量版；前端用它把"已经不在磁盘上"的源在真正动手之前剔掉，
+/// 留下一两条原本就没了的，至少要给用户一句人话，而不是后端 `No such file or directory`。
+///
+/// 不走 path_guard：用户给的本来是"我之前看过的"，可能在外部消失了；探测接口对单条
+/// 失败必须静默跳过（用 symlink_metadata，和 occupied_names 的存在性口径保持一致），
+/// 整批不是事务。
+#[tauri::command]
+pub fn existing_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
+    Ok(paths
+        .into_iter()
+        .filter(|p| !p.is_empty() && fs::symlink_metadata(p).is_ok())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +259,52 @@ mod tests {
         .unwrap();
         assert_eq!(Path::new(&dup).file_name().unwrap(), "f 副本.txt");
         assert_eq!(fs::read(a.join("f.txt")).unwrap(), b"f");
+    }
+
+    /// 粘贴前的源存在性探测：返回已存在的子集，顺序与入参一致，
+    /// 删除/不存在的项必须被静默跳过（接口对单条失败不该炸整批）。
+    #[test]
+    fn existing_paths_returns_only_what_is_still_there() {
+        let dir = crate::test_bridge::TempDir::new("existing-paths");
+        let keep1 = dir.join("keep1.txt");
+        let keep2 = dir.join("keep2.txt");
+        let gone = dir.join("gone.txt");
+        fs::write(&keep1, b"x").unwrap();
+        fs::write(&keep2, b"x").unwrap();
+        fs::write(&gone, b"x").unwrap();
+        // 模拟"复制完后在外面删了 gone"
+        fs::remove_file(&gone).unwrap();
+
+        let res = existing_paths(vec![
+            keep1.to_string_lossy().to_string(),
+            gone.to_string_lossy().to_string(),
+            keep2.to_string_lossy().to_string(),
+        ])
+        .unwrap();
+        // 顺序保持：keep1 在前，gone 跳过，keep2 紧随其后
+        assert_eq!(
+            res,
+            vec![keep1.to_string_lossy().to_string(), keep2.to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn existing_paths_skips_empty_and_does_not_explode() {
+        // 空串不是路径，挪到 normPath 会变成 "/"（frontend 那一道闸），
+        // 后端这里直接当作不存在跳过
+        let res = existing_paths(vec!["".to_string(), "/nonexistent/a".to_string()]).unwrap();
+        assert!(res.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_paths_treats_dangling_symlinks_as_existing() {
+        // 口径必须和 occupied_names 一致：悬空符号链接 symlink_metadata 仍返回 Ok，
+        // 算"存在"，前端才能决定要不要让用户去覆盖它，而不是把它当成已删
+        let dir = crate::test_bridge::TempDir::new("existing-sym");
+        let link = dir.join("dangling");
+        std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
+        let res = existing_paths(vec![link.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(res, vec![link.to_string_lossy().to_string()]);
     }
 }
