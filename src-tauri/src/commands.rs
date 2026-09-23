@@ -1275,15 +1275,40 @@ pub fn get_file_permissions(path: &str) -> Result<FilePermissions, String> {
     })
 }
 
+/// 把路径交给外部程序（默认应用 / Quick Look / Finder / 终端）之前的统一校验。
+///
+/// 这四个命令原来是 `path_guard` 覆盖面里唯一的缝：读写命令都过 `validate`，唯独它们
+/// 把前端来的字符串原样递给 `opener` / `qlmanage` / `open`，于是"应用里看不到 `~/.ssh`"
+/// 这件事在系统层完全不成立 —— Quick Look 会把私钥渲染成缩略图，「在终端中打开」会把
+/// `~/.ssh` 变成 shell 的当前目录，用户接下来敲的每一条命令都在里面。
+///
+/// `as_dir` 给 Finder、终端这类"只认目录"的目标：文件先落到它的父目录。父目录不用再查
+/// 一遍黑名单 —— 三份黑名单都是前缀闭包的，能走到这里说明整条链都是放行的。
+///
+/// 返回的是 canonical 字符串，所以 Windows 分支里 `cd /d <target>` 那种字符串拼接拿到的
+/// 也是系统给的真实路径，而不是 `C:\a\..\..\Windows` 这种还停在词法层的写法。
+///
+/// 单独抽出来而不是各命令开头写一遍，是为了能在不拉起图形程序的前提下测到它：
+/// 单测里 spawn 出 Finder/Terminal 会真的弹窗，那就不叫"不改动系统状态"了。
+fn external_open_target(raw: &str, as_dir: bool) -> Result<String, String> {
+    let mut canonical = crate::path_guard::readable(raw)?;
+    if as_dir && !canonical.is_dir() {
+        if let Some(parent) = canonical.parent() {
+            canonical = parent.to_path_buf();
+        }
+    }
+    canonical
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("路径不是合法 UTF-8: {}", raw))
+}
+
 /// 使用系统默认应用打开文件
 #[tauri::command]
 pub fn open_with_default_app(path: &str) -> Result<(), String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("路径不存在: {}", path));
-    }
+    let target = external_open_target(path, false)?;
 
-    opener::open(path).map_err(|e| format!("打开文件失败: {}", e))?;
+    opener::open(&target).map_err(|e| format!("打开文件失败: {}", e))?;
 
     Ok(())
 }
@@ -1848,8 +1873,9 @@ fn sync_one(src_root: &Path, dst_root: &Path, rel: &str) -> Result<(), String> {
 /// macOS Quick Look 预览
 #[tauri::command]
 pub fn quick_look_preview(path: &str) -> Result<(), String> {
+    let target = external_open_target(path, false)?;
     std::process::Command::new("qlmanage")
-        .args(["-p", path])
+        .args(["-p", &target])
         .spawn()
         .map_err(|e| format!("Quick Look 打开失败: {}", e))?;
     Ok(())
@@ -1858,16 +1884,8 @@ pub fn quick_look_preview(path: &str) -> Result<(), String> {
 /// 在 Finder 中显示文件
 #[tauri::command]
 pub fn reveal_in_finder(path: &str) -> Result<(), String> {
-    let p = std::path::Path::new(path);
-    let target = if p.is_dir() {
-        path.to_string()
-    } else {
-        // 用 dirname 选中文件（macOS 不可直接定位到文件，只能打开父目录）
-        p.parent()
-            .and_then(|x| x.to_str())
-            .unwrap_or(path)
-            .to_string()
-    };
+    // 只能打开目录，所以文件要先落到父目录；这里同时挡掉受保护目录
+    let target = external_open_target(path, true)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -1900,15 +1918,9 @@ pub fn reveal_in_finder(path: &str) -> Result<(), String> {
 /// 在终端中打开目录（macOS: open -a Terminal，Linux: gnome-terminal，Windows: cmd）
 #[tauri::command]
 pub fn open_terminal_at(path: &str) -> Result<(), String> {
-    let p = std::path::Path::new(path);
-    let target = if p.is_dir() {
-        path.to_string()
-    } else {
-        p.parent()
-            .and_then(|x| x.to_str())
-            .unwrap_or(path)
-            .to_string()
-    };
+    // 终端是这四个里后果最重的一个：它把路径变成 shell 的工作目录，
+    // 之后用户敲的每一条命令都在那棵树里，所以这里绝不能只判断 `exists()`
+    let target = external_open_target(path, true)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -3155,5 +3167,115 @@ mod sync_tests {
         assert_eq!(res.copied, 1);
         assert_eq!(res.errors.len(), 1);
         assert!(res.errors[0].starts_with("gone.txt"));
+    }
+}
+
+/// 交给外部程序的那四个命令（默认应用 / Quick Look / Finder / 终端）共用的入口校验。
+///
+/// 只测纯函数：spawn 出 Finder、Terminal 会真的弹窗口，单测不该改动桌面状态。
+/// 因此四个命令里 `external_open_target` 必须是**唯一**的路径来源 —— 传给
+/// `Command`/`opener` 的一律是它返回的 canonical 字符串，原始入参在函数里不再被用到。
+#[cfg(test)]
+mod external_open_tests {
+    use super::external_open_target;
+    use crate::test_bridge::TempDir;
+    use std::fs;
+
+    #[test]
+    fn system_directories_are_refused_on_both_routes() {
+        for blocked in [
+            "/",
+            "/etc",
+            "/etc/passwd",
+            "/usr/bin",
+            "/usr/bin/vi",
+            "/var/log",
+        ] {
+            for as_dir in [false, true] {
+                let err = external_open_target(blocked, as_dir)
+                    .expect_err(&format!("{} 不该被交给外部程序", blocked));
+                assert!(
+                    err.contains("保护"),
+                    "{:?} as_dir={} 说得不明不白: {}",
+                    blocked,
+                    as_dir,
+                    err
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sensitive_ancestor_is_refused_even_in_a_temp_home() {
+        // 不依赖本机真有 ~/.ssh：CI 上没有就变成空跑，看起来全绿其实什么都没测
+        let home = TempDir::new("ext-home");
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        let key = home.join(".ssh").join("id_ed25519");
+        fs::write(&key, "private material").unwrap();
+        // 目录形式的敏感位置同样要挡（"在终端中打开" 走的就是这一条）
+        for target in [key.clone(), home.join(".ssh")] {
+            for as_dir in [false, true] {
+                let err = external_open_target(target.to_str().unwrap(), as_dir).unwrap_err();
+                assert!(
+                    err.contains("保护"),
+                    "{:?} as_dir={}: {}",
+                    target,
+                    as_dir,
+                    err
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_wearing_a_harmless_name_does_not_slip_through() {
+        let dir = TempDir::new("ext-link");
+        std::os::unix::fs::symlink("/etc/passwd", dir.join("notes.txt")).unwrap();
+        let err = external_open_target(dir.join("notes.txt").to_str().unwrap(), false).unwrap_err();
+        assert!(err.contains("保护"), "换皮绕过黑名单了: {}", err);
+    }
+
+    #[test]
+    fn ordinary_paths_still_open_and_come_back_canonical() {
+        let dir = TempDir::new("ext-ok");
+        let file = dir.join("report.txt");
+        fs::write(&file, "hi").unwrap();
+        // macOS 上临时目录本身就在符号链接后面（/var → /private/var），
+        // 所以两侧都取 canonical 才能证明"返回的就是系统真实路径"
+        assert_eq!(
+            external_open_target(file.to_str().unwrap(), false).unwrap(),
+            file.canonicalize().unwrap().to_str().unwrap()
+        );
+        // 只认目录的那两个命令：文件落到父目录，目录自己不用退
+        assert_eq!(
+            external_open_target(file.to_str().unwrap(), true).unwrap(),
+            dir.canonicalize().unwrap().to_str().unwrap()
+        );
+        let sub = dir.join("sub");
+        fs::create_dir(&sub).unwrap();
+        assert_eq!(
+            external_open_target(sub.to_str().unwrap(), true).unwrap(),
+            sub.canonicalize().unwrap().to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn missing_relative_and_empty_paths_are_refused() {
+        let dir = TempDir::new("ext-bad");
+        let gone = dir.join("gone.txt");
+        let err = external_open_target(gone.to_str().unwrap(), false).unwrap_err();
+        assert!(
+            // 注意：这里拿到的是 canonicalize 的 NotFound（"解析失败 … No such file or
+            // directory"），`readable()` 里那句"路径不存在"其实到不了 —— validate 先 canonicalize
+            // 就已经失败了。措辞要改，但"不存在的目标绝不 spawn"这条底线已经钉住。
+            err.contains("gone.txt") && !err.contains("保护"),
+            "不存在的目标应报找不到，而不是别的: {}",
+            err
+        );
+        // 相对路径以前是被 opener::open 当成"相对工作目录"直接打开的
+        assert!(external_open_target("report.txt", false).is_err());
+        assert!(external_open_target("", false).is_err());
+        assert!(external_open_target("/etc/..", true).is_err());
     }
 }
