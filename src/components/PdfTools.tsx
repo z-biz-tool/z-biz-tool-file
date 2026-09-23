@@ -26,11 +26,17 @@ import {
   FilePdfOutlined,
   PlusOutlined,
   DeleteOutlined,
+  FolderOpenOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 const { Text } = Typography;
+
+interface ExtractReport {
+  images: string[];
+  skipped: string[];
+}
 
 interface PdfPageInfo {
   page_number: number;
@@ -67,6 +73,7 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
   const [extPath, setExtPath] = useState<string | null>(initialPath || null);
   const [extOutputDir, setExtOutputDir] = useState<string>("");
   const [extImages, setExtImages] = useState<string[]>([]);
+  const [extSkipped, setExtSkipped] = useState<string[]>([]);
 
   // ====== Compress Tab ======
   const [compPath, setCompPath] = useState<string | null>(initialPath || null);
@@ -224,12 +231,26 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
     }
     setBusy(true);
     try {
-      const imgs = await invoke<string[]>("extract_pdf_images", {
+      const report = await invoke<ExtractReport>("extract_pdf_images", {
         inputPath: extPath,
         outputDir: extOutputDir,
       });
-      setExtImages(imgs);
-      msgApi.success(`提取完成！共 ${imgs.length} 张图片`);
+      setExtImages(report.images);
+      setExtSkipped(report.skipped);
+      if (report.images.length === 0) {
+        // 文字版 PDF 本来就没有位图，说"完成"会让人以为功能坏了
+        msgApi.info(
+          report.skipped.length
+            ? `没有图片可保存，${report.skipped.length} 张解码失败`
+            : "这份 PDF 里没有嵌入位图"
+        );
+      } else if (report.skipped.length) {
+        msgApi.warning(
+          `已提取 ${report.images.length} 张，${report.skipped.length} 张跳过（见下方原因）`
+        );
+      } else {
+        msgApi.success(`提取完成！共 ${report.images.length} 张图片`);
+      }
     } catch (e: any) {
       msgApi.error("提取失败: " + e);
     } finally {
@@ -441,11 +462,55 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                   提取嵌入图片
                 </Button>
 
-                {extImages.length > 0 && (
-                  <Card size="small" title={`已提取 ${extImages.length} 张图片`}>
-                    {extImages.map((p) => (
-                      <Tag key={p} icon={<PictureOutlined />}>{p.split("/").pop()}</Tag>
-                    ))}
+                {(extImages.length > 0 || extSkipped.length > 0) && (
+                  <Card
+                    size="small"
+                    title={`已提取 ${extImages.length} 张图片`}
+                    extra={
+                      extImages.length > 0 ? (
+                        <Button
+                          size="small"
+                          icon={<FolderOpenOutlined />}
+                          onClick={() =>
+                            invoke("reveal_in_finder", { path: extImages[0] }).catch((err) =>
+                              msgApi.error("打开 Finder 失败: " + err)
+                            )
+                          }
+                        >
+                          在访达中显示
+                        </Button>
+                      ) : null
+                    }
+                  >
+                    {extImages.length > 0 && (
+                      <div style={{ maxHeight: 160, overflow: "auto" }}>
+                        {extImages.map((p) => (
+                          <Tag
+                            key={p}
+                            icon={<PictureOutlined />}
+                            style={{ cursor: "pointer", marginBottom: 4 }}
+                            title={p}
+                            onClick={() =>
+                              invoke("reveal_in_finder", { path: p }).catch((err) =>
+                                msgApi.error("打开 Finder 失败: " + err)
+                              )
+                            }
+                          >
+                            {p.split("/").pop()}
+                          </Tag>
+                        ))}
+                      </div>
+                    )}
+                    {extSkipped.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <Text type="secondary">以下图片未能保存：</Text>
+                        {extSkipped.map((reason) => (
+                          <div key={reason}>
+                            <Text type="warning" style={{ fontSize: 12 }}>{reason}</Text>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </Card>
                 )}
               </Space>

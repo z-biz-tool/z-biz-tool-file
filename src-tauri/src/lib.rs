@@ -3,6 +3,7 @@ mod search;
 mod ebook;
 mod pdf_utils;
 mod pdf_font;
+mod pdf_image;
 mod pdf_ops;
 mod image_utils;
 mod convert;
@@ -80,6 +81,7 @@ pub fn run() {
             pdf_ops::get_pdf_pages,
             pdf_ops::merge_pdfs,
             pdf_ops::split_pdf,
+            pdf_image::extract_pdf_images,
             commands::diff_files,
             commands::quick_diff_dirs,
             ocr::list_ocr_languages,
