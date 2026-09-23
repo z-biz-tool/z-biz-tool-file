@@ -6,11 +6,11 @@ import {
   Table,
   Tag,
   Radio,
-  message,
   Spin,
   theme,
   Typography,
   Tooltip,
+  App as AntdApp,
 } from "antd";
 import {
   FolderOpenOutlined,
@@ -73,6 +73,7 @@ export default function DirectorySync({
   onClose,
   currentPath,
 }: Props) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
   const [leftDir, setLeftDir] = useState(currentPath);
   const [rightDir, setRightDir] = useState("");

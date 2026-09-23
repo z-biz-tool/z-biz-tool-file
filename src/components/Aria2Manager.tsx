@@ -5,7 +5,6 @@ import {
   Space,
   Input,
   Typography,
-  message,
   Table,
   Tag,
   Card,
@@ -15,6 +14,7 @@ import {
   Alert,
   Progress,
   Popconfirm,
+  App as AntdApp,
 } from "antd";
 import {
   PauseOutlined,
@@ -71,7 +71,7 @@ const statusColors: Record<string, string> = {
 };
 
 export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
-  const [msgApi, msgContext] = message.useMessage();
+  const { message } = AntdApp.useApp();
   const [tasks, setTasks] = useState<Aria2Task[]>([]);
   const [stat, setStat] = useState<Aria2GlobalStat | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
@@ -88,21 +88,21 @@ export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
       setTasks(t);
       setStat(s);
     } catch (e: any) {
-      msgApi.error("刷新失败: " + e);
+      message.error("刷新失败: " + e);
     }
-  }, [online, msgApi]);
+  }, [online]);
 
   const checkPing = useCallback(async () => {
     try {
       const ok = await invoke<boolean>("aria2_ping");
       setOnline(ok);
       if (!ok) {
-        msgApi.warning("aria2 RPC 未响应");
+        message.warning("aria2 RPC 未响应");
       }
     } catch {
       setOnline(false);
     }
-  }, [msgApi]);
+  }, [message]);
 
   useEffect(() => {
     if (open) {
@@ -120,26 +120,26 @@ export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
   const startDaemon = async () => {
     try {
       await invoke("start_aria2_daemon", { downloadDir: "~/Downloads" });
-      msgApi.success("已尝试启动 aria2c");
+      message.success("已尝试启动 aria2c");
       setTimeout(checkPing, 2000);
     } catch (e: any) {
-      msgApi.warning("启动失败: " + e);
+      message.warning("启动失败: " + e);
     }
   };
 
   const addTask = async () => {
     if (!newUrl.trim()) {
-      msgApi.warning("请输入 URL 或 magnet");
+      message.warning("请输入 URL 或 magnet");
       return;
     }
     setAdding(true);
     try {
       const gid = await invoke<string>("aria2_add_uri", { uri: newUrl });
-      msgApi.success(`已添加任务: ${gid}`);
+      message.success(`已添加任务: ${gid}`);
       setNewUrl("");
       refresh();
     } catch (e: any) {
-      msgApi.error("添加失败: " + e);
+      message.error("添加失败: " + e);
     } finally {
       setAdding(false);
     }
@@ -148,20 +148,20 @@ export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
   const pauseTask = async (gid: string) => {
     try {
       await invoke("aria2_pause", { gid });
-      msgApi.success("已暂停");
+      message.success("已暂停");
       refresh();
     } catch (e: any) {
-      msgApi.error("暂停失败: " + e);
+      message.error("暂停失败: " + e);
     }
   };
 
   const removeTask = async (gid: string) => {
     try {
       await invoke("aria2_remove", { gid });
-      msgApi.success("已删除");
+      message.success("已删除");
       refresh();
     } catch (e: any) {
-      msgApi.error("删除失败: " + e);
+      message.error("删除失败: " + e);
     }
   };
 
@@ -179,7 +179,6 @@ export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
       footer={null}
       destroyOnClose
     >
-      {msgContext}
 
       {online === false && (
         <Alert

@@ -6,9 +6,9 @@ import {
   Table,
   Checkbox,
   Tag,
-  message,
   Spin,
   theme,
+  App as AntdApp,
 } from "antd";
 import {
   SearchOutlined,
@@ -37,6 +37,7 @@ export default function DuplicateFinder({
   currentPath,
   onRefresh,
 }: DuplicateFinderProps) {
+  const { message, modal } = AntdApp.useApp();
   const [directory, setDirectory] = useState(currentPath);
   const [scanning, setScanning] = useState(false);
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
@@ -119,7 +120,8 @@ export default function DuplicateFinder({
     }
 
     const pathsToDelete = Array.from(selectedPaths);
-    Modal.confirm({
+    // 走 context 的 modal：静态 Modal.confirm 起的是模块级弹窗，深色主题下会白底黑字
+    modal.confirm({
       title: "确认删除",
       content: `确定要删除选中的 ${pathsToDelete.length} 个重复文件吗？此操作不可恢复。`,
       okText: "删除",

@@ -5,7 +5,6 @@ import {
   Space,
   Input,
   Typography,
-  message,
   Table,
   Tag,
   Card,
@@ -18,6 +17,7 @@ import {
   Rate,
   Tooltip,
   Progress,
+  App as AntdApp,
 } from "antd";
 import {
   PictureOutlined,
@@ -158,9 +158,9 @@ interface LibraryViewProps {
 }
 
 export default function LibraryView({ open, onClose, initialTab, embedded }: LibraryViewProps) {
+  const { message } = AntdApp.useApp();
   const [tab, setTab] = useState<"media" | "library">(initialTab || "media");
   const [stats, setStats] = useState<LibraryStats | null>(null);
-  const [msgApi, msgContext] = message.useMessage();
 
   // 媒体库
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -192,9 +192,9 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
       });
       setMediaItems(items);
     } catch (e: any) {
-      msgApi.error("加载失败: " + e);
+      message.error("加载失败: " + e);
     }
-  }, [mediaKind, mediaSearch, favoritesOnly, msgApi]);
+  }, [mediaKind, mediaSearch, favoritesOnly]);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -204,9 +204,9 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
       });
       setBooks(items);
     } catch (e: any) {
-      msgApi.error("加载失败: " + e);
+      message.error("加载失败: " + e);
     }
-  }, [bookKind, bookSearch, msgApi]);
+  }, [bookKind, bookSearch]);
 
   useEffect(() => {
     if (open) {
@@ -222,38 +222,38 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
       const dir = await openDialog({ directory: true, multiple: false });
       if (dir && typeof dir === "string") {
         await invoke("library_add_scan_dir", { dir });
-        msgApi.success(`已添加扫描目录: ${dir}`);
+        message.success(`已添加扫描目录: ${dir}`);
         refreshStats();
       }
     } catch (e: any) {
-      msgApi.error("添加失败: " + e);
+      message.error("添加失败: " + e);
     }
   };
 
   const removeScanDir = async (dir: string) => {
     try {
       await invoke("library_remove_scan_dir", { dir });
-      msgApi.success("已移除");
+      message.success("已移除");
       refreshStats();
     } catch (e: any) {
-      msgApi.error("移除失败: " + e);
+      message.error("移除失败: " + e);
     }
   };
 
   // 扫描
   const doScanMedia = async () => {
     if (!stats || stats.scan_dirs.length === 0) {
-      msgApi.warning("请先添加扫描目录");
+      message.warning("请先添加扫描目录");
       return;
     }
     setScanning(true);
     try {
       const s = await invoke<LibraryStats>("library_scan_media");
       setStats(s);
-      msgApi.success(`扫描完成！共 ${s.total_media} 个媒体项`);
+      message.success(`扫描完成！共 ${s.total_media} 个媒体项`);
       refreshMedia();
     } catch (e: any) {
-      msgApi.error("扫描失败: " + e);
+      message.error("扫描失败: " + e);
     } finally {
       setScanning(false);
     }
@@ -261,17 +261,17 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
 
   const doScanBooks = async () => {
     if (!stats || stats.scan_dirs.length === 0) {
-      msgApi.warning("请先添加扫描目录");
+      message.warning("请先添加扫描目录");
       return;
     }
     setScanningBooks(true);
     try {
       const s = await invoke<LibraryStats>("library_scan_books");
       setStats(s);
-      msgApi.success(`扫描完成！共 ${s.total_library} 个图书项`);
+      message.success(`扫描完成！共 ${s.total_library} 个图书项`);
       refreshBooks();
     } catch (e: any) {
-      msgApi.error("扫描失败: " + e);
+      message.error("扫描失败: " + e);
     } finally {
       setScanningBooks(false);
     }
@@ -282,7 +282,7 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
       await invoke("library_toggle_favorite", { id });
       refreshMedia();
     } catch (e: any) {
-      msgApi.error(e);
+      message.error(e);
     }
   };
 
@@ -316,7 +316,6 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
       styles={embedded ? { body: { height: "calc(100% - 0px)", overflow: "auto" } } : undefined}
       wrapClassName={embedded ? "library-embedded-modal" : undefined}
     >
-      {msgContext}
 
       {/* 顶部统计 */}
       {stats && (

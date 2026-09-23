@@ -7,7 +7,6 @@ import {
   Input,
   Slider,
   Typography,
-  message,
   Table,
   Tag,
   Row,
@@ -16,6 +15,7 @@ import {
   Progress,
   Card,
   Radio,
+  App as AntdApp,
 } from "antd";
 import {
   MergeCellsOutlined,
@@ -67,8 +67,8 @@ interface PdfToolsProps {
 }
 
 export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) {
+  const { message } = AntdApp.useApp();
   const [tab, setTab] = useState("merge");
-  const [msgApi, msgContext] = message.useMessage();
 
   // ====== Merge Tab ======
   const [mergeFiles, setMergeFiles] = useState<string[]>([]);
@@ -185,10 +185,10 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
         inputPaths: mergeFiles,
         outputPath: outPath,
       });
-      msgApi.success(`合并完成！共 ${count} 页，输出: ${outPath}`);
+      message.success(`合并完成！共 ${count} 页，输出: ${outPath}`);
       setMergeFiles([]);
     } catch (e: any) {
-      msgApi.error("合并失败: " + e);
+      message.error("合并失败: " + e);
     } finally {
       setBusy(false);
     }
@@ -221,9 +221,9 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
         outputDir: outDir,
         pageRanges: ranges,
       });
-      msgApi.success(`拆分完成！生成 ${outputs.length} 个文件于: ${outDir}`);
+      message.success(`拆分完成！生成 ${outputs.length} 个文件于: ${outDir}`);
     } catch (e: any) {
-      msgApi.error("拆分失败: " + e);
+      message.error("拆分失败: " + e);
     } finally {
       setBusy(false);
     }
@@ -244,9 +244,9 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
         opacity: wmOpacity / 100,
       });
       setWmOut(outPath);
-      msgApi.success(`已为 ${pages} 页添加水印`);
+      message.success(`已为 ${pages} 页添加水印`);
     } catch (e: any) {
-      msgApi.error("添加水印失败: " + e);
+      message.error("添加水印失败: " + e);
     } finally {
       setBusy(false);
     }
@@ -267,20 +267,20 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
       setExtSkipped(report.skipped);
       if (report.images.length === 0) {
         // 文字版 PDF 本来就没有位图，说"完成"会让人以为功能坏了
-        msgApi.info(
+        message.info(
           report.skipped.length
             ? `没有图片可保存，${report.skipped.length} 张解码失败`
             : "这份 PDF 里没有嵌入位图"
         );
       } else if (report.skipped.length) {
-        msgApi.warning(
+        message.warning(
           `已提取 ${report.images.length} 张，${report.skipped.length} 张跳过（见下方原因）`
         );
       } else {
-        msgApi.success(`提取完成！共 ${report.images.length} 张图片`);
+        message.success(`提取完成！共 ${report.images.length} 张图片`);
       }
     } catch (e: any) {
-      msgApi.error("提取失败: " + e);
+      message.error("提取失败: " + e);
     } finally {
       setBusy(false);
     }
@@ -325,10 +325,10 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
       });
       setCompReport(report);
       const summary = compressSummary(report);
-      if (summary.kind === "info") msgApi.info(summary.text);
-      else msgApi.success(summary.text);
+      if (summary.kind === "info") message.info(summary.text);
+      else message.success(summary.text);
     } catch (e: any) {
-      msgApi.error("压缩失败: " + e);
+      message.error("压缩失败: " + e);
     } finally {
       setBusy(false);
     }
@@ -354,7 +354,6 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
       footer={null}
       destroyOnClose
     >
-      {msgContext}
       <Tabs
         activeKey={tab}
         onChange={setTab}
@@ -546,7 +545,7 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                           icon={<FolderOpenOutlined />}
                           onClick={() =>
                             invoke("reveal_in_finder", { path: extImages[0] }).catch((err) =>
-                              msgApi.error("打开 Finder 失败: " + err)
+                              message.error("打开 Finder 失败: " + err)
                             )
                           }
                         >
@@ -565,7 +564,7 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                             title={p}
                             onClick={() =>
                               invoke("reveal_in_finder", { path: p }).catch((err) =>
-                                msgApi.error("打开 Finder 失败: " + err)
+                                message.error("打开 Finder 失败: " + err)
                               )
                             }
                           >
@@ -692,7 +691,7 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                         style={{ marginLeft: 8 }}
                         onClick={() =>
                           invoke("reveal_in_finder", { path: compResultPath }).catch((err) =>
-                            msgApi.error("打开 Finder 失败: " + err)
+                            message.error("打开 Finder 失败: " + err)
                           )
                         }
                       >

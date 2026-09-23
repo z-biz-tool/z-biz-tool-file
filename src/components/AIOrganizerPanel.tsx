@@ -13,7 +13,7 @@ import {
   Input,
   Form,
   Select,
-  message,
+  App as AntdApp,
 } from "antd";
 import type { TableProps } from "antd";
 import {
@@ -38,6 +38,7 @@ const { TabPane } = Tabs;
 
 // 智能整理面板组件
 export function AIOrganizerPanel() {
+  const { message } = AntdApp.useApp();
   const [activeTab, setActiveTab] = useState("organize");
   const [organizeProgress, setOrganizeProgress] = useState(0);
   const [isOrganizing, setIsOrganizing] = useState(false);

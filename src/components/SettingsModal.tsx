@@ -7,7 +7,6 @@ import {
   Select,
   Slider,
   Button,
-  message,
   App as AntdApp,
 } from "antd";
 import {
@@ -68,7 +67,7 @@ const PROVIDER_PRESETS: Record<string, { base_url: string; model: string; key_la
 };
 
 export default function SettingsModal({ open, onClose }: Props) {
-  const { modal } = AntdApp.useApp();
+  const { message, modal } = AntdApp.useApp();
   const [config, setConfig] = useState<LlmConfig>(DEFAULT_CONFIG);
   const [configPath, setConfigPath] = useState<string>("");
   const [loading, setLoading] = useState(false);

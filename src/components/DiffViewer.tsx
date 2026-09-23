@@ -5,7 +5,6 @@ import {
   Space,
   Input,
   Typography,
-  message,
   Tabs,
   Card,
   Row,
@@ -13,6 +12,7 @@ import {
   Statistic,
   Tag,
   Table,
+  App as AntdApp,
 } from "antd";
 import {
   SwapOutlined,
@@ -58,8 +58,8 @@ interface DiffViewerProps {
 }
 
 export default function DiffViewer({ open, onClose, initialLeft, initialRight }: DiffViewerProps) {
+  const { message } = AntdApp.useApp();
   const [tab, setTab] = useState<"file" | "dir">("file");
-  const [msgApi, msgContext] = message.useMessage();
 
   // 文件对比
   const [leftFile, setLeftFile] = useState<string | null>(initialLeft || null);
@@ -104,13 +104,13 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
         newPath: rightFile,
       });
       setDiffResult(result);
-      msgApi.success(`对比完成：+${result.added} / -${result.removed}`);
+      message.success(`对比完成：+${result.added} / -${result.removed}`);
     } catch (e: any) {
-      msgApi.error("对比失败: " + e);
+      message.error("对比失败: " + e);
     } finally {
       setDiffLoading(false);
     }
-  }, [leftFile, rightFile, msgApi]);
+  }, [leftFile, rightFile]);
 
   const doDirDiff = useCallback(async () => {
     if (!leftDir || !rightDir) {
@@ -124,15 +124,15 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
         rightDir,
       });
       setDirDiff(result);
-      msgApi.success(
+      message.success(
         `对比完成：+${result.added_files.length} / -${result.removed_files.length} / ~${result.modified_files.length}`
       );
     } catch (e: any) {
-      msgApi.error("对比失败: " + e);
+      message.error("对比失败: " + e);
     } finally {
       setDirLoading(false);
     }
-  }, [leftDir, rightDir, msgApi]);
+  }, [leftDir, rightDir]);
 
   // 导出 diff
   const exportDiff = () => {
@@ -164,7 +164,6 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
       footer={null}
       destroyOnClose
     >
-      {msgContext}
       <Tabs
         activeKey={tab}
         onChange={(k) => setTab(k as "file" | "dir")}

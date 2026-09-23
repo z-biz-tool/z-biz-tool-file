@@ -4,7 +4,6 @@ import {
   Button,
   Space,
   Typography,
-  message,
   Progress,
   Alert,
   Card,
@@ -12,6 +11,7 @@ import {
   Statistic,
   Row,
   Col,
+  App as AntdApp,
 } from "antd";
 import {
   CloudDownloadOutlined,
@@ -64,12 +64,12 @@ const formatSize = (b: number) => {
 };
 
 export default function Updater({ open, onClose }: UpdaterProps) {
+  const { message } = AntdApp.useApp();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadedPath, setDownloadedPath] = useState<string | null>(null);
-  const [msgApi, msgContext] = message.useMessage();
 
   const checkUpdate = async () => {
     setChecking(true);
@@ -77,12 +77,12 @@ export default function Updater({ open, onClose }: UpdaterProps) {
       const s = await invoke<UpdateStatus>("updater_check");
       setStatus(s);
       if (s.has_update) {
-        msgApi.success(`发现新版本 v${s.latest_version}`);
+        message.success(`发现新版本 v${s.latest_version}`);
       } else {
-        msgApi.info("已是最新版本");
+        message.info("已是最新版本");
       }
     } catch (e: any) {
-      msgApi.error("检查更新失败: " + e);
+      message.error("检查更新失败: " + e);
     } finally {
       setChecking(false);
     }
@@ -90,7 +90,7 @@ export default function Updater({ open, onClose }: UpdaterProps) {
 
   const downloadUpdate = async () => {
     if (!status?.matched_asset) {
-      msgApi.warning("未找到匹配当前平台的安装包");
+      message.warning("未找到匹配当前平台的安装包");
       return;
     }
     setDownloading(true);
@@ -109,9 +109,9 @@ export default function Updater({ open, onClose }: UpdaterProps) {
       clearInterval(interval);
       setDownloadProgress(100);
       setDownloadedPath(result.file_path);
-      msgApi.success(`已下载 v${result.version}，大小 ${formatSize(result.file_size)}`);
+      message.success(`已下载 v${result.version}，大小 ${formatSize(result.file_size)}`);
     } catch (e: any) {
-      msgApi.error("下载失败: " + e);
+      message.error("下载失败: " + e);
     } finally {
       setDownloading(false);
     }
@@ -120,9 +120,9 @@ export default function Updater({ open, onClose }: UpdaterProps) {
   const openInstaller = async () => {
     try {
       const msg = await invoke<string>("updater_open_install_guide");
-      msgApi.info(msg);
+      message.info(msg);
     } catch (e: any) {
-      msgApi.error("打开失败: " + e);
+      message.error("打开失败: " + e);
     }
   };
 
@@ -146,7 +146,6 @@ export default function Updater({ open, onClose }: UpdaterProps) {
       footer={null}
       destroyOnClose
     >
-      {msgContext}
       <Space direction="vertical" style={{ width: "100%" }} size={16}>
         {/* 当前版本 vs 最新版本 */}
         {status && (

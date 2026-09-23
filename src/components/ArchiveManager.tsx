@@ -3,7 +3,6 @@ import {
   Modal,
   Table,
   Button,
-  message,
   Spin,
   Tabs,
   Space,
@@ -13,6 +12,7 @@ import {
   InputNumber,
   theme,
   Tag,
+  App as AntdApp,
 } from "antd";
 import {
   FolderOutlined,
@@ -64,6 +64,7 @@ export default function ArchiveManager({
   archivePath,
   onRefresh,
 }: ArchiveManagerProps) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
   const [tab, setTab] = useState<"compress" | "extract">(archivePath ? "extract" : "compress");
   const [loading, setLoading] = useState(false);

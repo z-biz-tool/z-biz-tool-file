@@ -8,7 +8,7 @@ import {
   InputNumber,
   Space,
   Typography,
-  message,
+  App as AntdApp,
 } from "antd";
 import { invoke } from "@tauri-apps/api/core";
 import type { FileEntry } from "../stores/fileStore";
@@ -80,6 +80,7 @@ function escapeRegExp(str: string): string {
 }
 
 export default function BatchRename({ open, onClose, onRefresh, files }: Props) {
+  const { message } = AntdApp.useApp();
   const [mode, setMode] = useState<RenameMode>("find_replace");
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");

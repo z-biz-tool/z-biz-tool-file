@@ -6,7 +6,6 @@ import {
   Select,
   Input,
   Typography,
-  message,
   Card,
   Row,
   Col,
@@ -14,6 +13,7 @@ import {
   Alert,
   Spin,
   Progress,
+  App as AntdApp,
 } from "antd";
 import {
   FileSearchOutlined,
@@ -47,7 +47,7 @@ interface OcrToolProps {
 }
 
 export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
-  const [msgApi, msgContext] = message.useMessage();
+  const { message } = AntdApp.useApp();
   const [imagePath, setImagePath] = useState<string | null>(initialPath || null);
   const [languages, setLanguages] = useState<OcrLanguage[]>([]);
   const [selectedLang, setSelectedLang] = useState("chi_sim+eng");
@@ -75,13 +75,13 @@ export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
       });
       if (sel && typeof sel === "string") setImagePath(sel);
     } catch (e: any) {
-      msgApi.error("选择失败: " + e);
+      message.error("选择失败: " + e);
     }
   };
 
   const doOcr = async () => {
     if (!imagePath) {
-      msgApi.warning("请选择图片");
+      message.warning("请选择图片");
       return;
     }
     setRunning(true);
@@ -94,9 +94,9 @@ export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
       setText(result.text);
       setConfidence(result.confidence);
       setDuration(result.duration_ms);
-      msgApi.success(`识别完成，耗时 ${result.duration_ms}ms`);
+      message.success(`识别完成，耗时 ${result.duration_ms}ms`);
     } catch (e: any) {
-      msgApi.error("OCR 失败: " + e);
+      message.error("OCR 失败: " + e);
       setText("识别失败：" + e);
     } finally {
       setRunning(false);
@@ -105,14 +105,14 @@ export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
 
   const copyText = () => {
     navigator.clipboard.writeText(text).then(
-      () => msgApi.success("已复制"),
-      () => msgApi.error("复制失败")
+      () => message.success("已复制"),
+      () => message.error("复制失败")
     );
   };
 
   const exportText = () => {
     if (!text) {
-      msgApi.warning("暂无内容");
+      message.warning("暂无内容");
       return;
     }
     const stem = imagePath?.split("/").pop()?.replace(/\.[^.]+$/, "") || "ocr";
@@ -139,7 +139,6 @@ export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
       footer={null}
       destroyOnClose
     >
-      {msgContext}
       <Space direction="vertical" style={{ width: "100%" }} size={12}>
         {tesseractOk === false && (
           <Alert
