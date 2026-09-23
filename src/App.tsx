@@ -110,6 +110,7 @@ import {
 import Omnibar from "./_shared/Omnibar";
 import { MediaGallery } from "./components/MediaGallery";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
+import { parentOfPath } from "./utils/parentDir";
 
 /**
  * 可拖拽列宽的表头单元格。
@@ -812,15 +813,17 @@ function AppShellInner() {
       }] : []),
       ...(isImage || isVideo ? [{
         key: "media-library", label: isVideo ? "加入视频库" : "加入图片库", icon: <PictureOutlined />, onClick: () => {
+          // 媒体库吃的是目录：原来直接把 record.path 交出去，画廊就去 list_directory 一个文件，
+          // 开出来是一座空馆，用户只会看到"该目录下没有图片文件"。工具栏那三条传的就是 currentPath
           setMediaLibraryType(isVideo ? "video" : "image");
-          setMediaLibraryPath(record.path);
+          setMediaLibraryPath(parentOfPath(record.path));
           setMediaLibraryOpen(true);
         },
       }] : []),
       ...(isAudio ? [{
         key: "audio-library", label: "加入音乐库", icon: <AudioOutlined />, onClick: () => {
           setMediaLibraryType("audio");
-          setMediaLibraryPath(record.path);
+          setMediaLibraryPath(parentOfPath(record.path));
           setMediaLibraryOpen(true);
         },
       }] : []),
