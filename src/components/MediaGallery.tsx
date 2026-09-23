@@ -12,6 +12,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { formatFileSize } from "../stores/fileStore";
 import { toMediaItems, type MediaItem, type MediaType } from "../utils/mediaType";
 import { buildMediaMenu, type MediaActions } from "../utils/mediaMenu";
+import { mediaKeyAction, nextSelectedIndex } from "../utils/mediaKeys";
 import {
   gridStyle,
   listGridStyle,
@@ -556,12 +557,52 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     );
   }
 
+  const selectedIndex = mediaFiles.findIndex((f) => f.path === selectedPath);
+
+  /**
+   * 键盘口径与主列表对齐：Enter 打开、⌘⌫/Delete 移到回收站、←/→ 换选中。
+   * 没有选中项时"打开/删除"什么都不做也不吃掉按键；Esc 只在有选中时清选中并挡住冒泡，
+   * 没选中就让它去关弹窗 —— 和 Finder 的习惯一致。
+   */
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const action = mediaKeyAction(e);
+    if (!action) return;
+    if (action === "clear") {
+      if (selectedIndex < 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      setSelectedPath(null);
+      return;
+    }
+    const one = mediaFiles[selectedIndex];
+    if (action === "open") {
+      if (!one) return;
+      e.preventDefault();
+      handleOpen(one);
+      return;
+    }
+    if (action === "delete") {
+      if (!one || !actions.onDelete) return;
+      e.preventDefault();
+      actions.onDelete(one);
+      return;
+    }
+    e.preventDefault();
+    const moved = mediaFiles[nextSelectedIndex(selectedIndex, mediaFiles.length, action)];
+    if (moved) setSelectedPath(moved.path);
+  };
+
   return (
     <div
+      tabIndex={0}
+      role="listbox"
+      aria-label="媒体库"
+      onKeyDown={onKeyDown}
       style={{
         height: "100%",
         overflow: "auto",
         padding: "8px",
+        outline: "none",
       }}
     >
       {viewMode === "list" ? renderList() : renderGrid()}
