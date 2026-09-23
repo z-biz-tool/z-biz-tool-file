@@ -1881,16 +1881,26 @@ pub fn quick_look_preview(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 只有 macOS 的 `open -R` 有"定位并选中"这层语义。
+///
+/// Windows 的 `explorer /select,"path"` 要求整串是**一个** argv（std 的转义会把里面的
+/// 引号拆坏，路径带空格时正好退化成"打开一个随机目录"），Linux 的 xdg-open 根本没有
+/// 选中概念 —— 这两个平台维持"打开父目录"。
+#[cfg(target_os = "macos")]
+const REVEAL_SELECTS_ITEM: bool = true;
+#[cfg(not(target_os = "macos"))]
+const REVEAL_SELECTS_ITEM: bool = false;
+
 /// 在 Finder 中显示文件
 #[tauri::command]
 pub fn reveal_in_finder(path: &str) -> Result<(), String> {
-    // 只能打开目录，所以文件要先落到父目录；这里同时挡掉受保护目录
-    let target = external_open_target(path, true)?;
+    // 挡受保护目录这一步不分平台都要过；能选中时就不用退到父目录
+    let target = external_open_target(path, !REVEAL_SELECTS_ITEM)?;
 
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(&target)
+            .args(["-R", &target])
             .spawn()
             .map_err(|e| format!("打开 Finder 失败: {}", e))?;
         Ok(())
@@ -3177,7 +3187,7 @@ mod sync_tests {
 /// `Command`/`opener` 的一律是它返回的 canonical 字符串，原始入参在函数里不再被用到。
 #[cfg(test)]
 mod external_open_tests {
-    use super::external_open_target;
+    use super::{external_open_target, REVEAL_SELECTS_ITEM};
     use crate::test_bridge::TempDir;
     use std::fs;
 
@@ -3258,6 +3268,24 @@ mod external_open_tests {
             external_open_target(sub.to_str().unwrap(), true).unwrap(),
             sub.canonicalize().unwrap().to_str().unwrap()
         );
+    }
+
+    /// `open -R` 自己会定位到父目录并把那一项选中，所以 macOS 上 `reveal_in_finder`
+    /// 必须把**文件本身**交给它；一旦哪天有人把 `REVEAL_SELECTS_ITEM` 翻成 false，
+    /// argv 就变成 `open -R <父目录>` —— 表现是"在 /tmp 里选中 tmp 这个文件夹"，
+    /// 比原来的行为还莫名其妙。这条断言钉的是常量和 argv 形状之间的耦合。
+    #[test]
+    fn reveal_only_falls_back_to_the_parent_when_it_cannot_select() {
+        let dir = TempDir::new("ext-reveal");
+        let file = dir.join("report.txt");
+        fs::write(&file, "hi").unwrap();
+        let parent = dir.canonicalize().unwrap();
+        let got = external_open_target(file.to_str().unwrap(), !REVEAL_SELECTS_ITEM).unwrap();
+        if cfg!(target_os = "macos") {
+            assert_eq!(got, file.canonicalize().unwrap().to_str().unwrap());
+        } else {
+            assert_eq!(got, parent.to_str().unwrap());
+        }
     }
 
     #[test]
