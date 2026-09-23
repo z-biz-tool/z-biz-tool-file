@@ -420,13 +420,41 @@ fn decode_glyphs(
     font: Option<&[u8]>,
     fonts: &HashMap<Vec<u8>, FontMap>,
 ) -> String {
-    if let Some(map) = font.and_then(|name| fonts.get(name)) {
-        let text = map.decode(raw);
-        if !text.is_empty() {
-            return text;
+    let text = if let Some(map) = font.and_then(|name| fonts.get(name)) {
+        let mapped = map.decode(raw);
+        if mapped.is_empty() {
+            decode_pdf_string(raw)
+        } else {
+            mapped
+        }
+    } else {
+        decode_pdf_string(raw)
+    };
+    clean_control_chars(&text)
+}
+
+/// 去掉解出来但不是文字的码位。
+///
+/// 子集字体常把不可见的排版标记（零宽占位之类）映射到 C0 码位，实测一份 WPS 导出的
+/// PDF 里 "AI<0x01>Agent" 就是这样——控制字符进了前端文本面板会显示成破框/截断。
+/// 换行与制表保留，回车归一为换行，其余 C0 和 DEL 丢弃。
+pub(crate) fn clean_control_chars(text: &str) -> String {
+    if !text
+        .chars()
+        .any(|c| c != '\n' && c != '\t' && (c.is_control() || c == '\u{7f}'))
+    {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\n' | '\t' => out.push(ch),
+            '\r' => out.push('\n'),
+            _ if ch.is_control() || ch == '\u{7f}' => {}
+            _ => out.push(ch),
         }
     }
-    decode_pdf_string(raw)
+    out
 }
 
 /// 提取PDF全部文本
@@ -461,7 +489,7 @@ fn info_string(doc: &Document, key: &[u8]) -> Option<String> {
     let dict = info_obj.as_dict().ok()?;
     match dict.get(key).ok()? {
         Object::String(bytes, _) => {
-            let text = decode_pdf_string(bytes);
+            let text = clean_control_chars(&decode_pdf_string(bytes));
             if text.trim().is_empty() {
                 None
             } else {
@@ -1004,5 +1032,84 @@ mod tests {
         let file = write_fixture(&dir, "cmapzip.pdf", &raw_pdf(&objects));
         let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
         assert_eq!(text, "中文");
+    }
+
+    /// 子集字体常把零宽占位之类的排版标记映射到 C0 码位，实测一份 WPS 导出的 PDF 里
+    /// "AI<0x01>Agent" 就是这样。这些码位肉眼看不见，却会让前端文本面板出现破框/截断，
+    /// 所以从真实文件一路走到 extract_pdf_text 验证它们不会外泄。
+    #[test]
+    fn invisible_control_codes_never_reach_the_text_panel() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-ctrl");
+        let soh = char::from(1);
+        let del = char::from(0x7f);
+        let stream = format!(
+            "BT /F1 24 Tf 72 700 Td (AI{soh}Agent{del}) Tj 0 -28 Td (second{soh}line) Tj ET"
+        );
+        let mut objects = page_objects(&stream);
+        objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string());
+        let file = write_fixture(&dir, "ctrl.pdf", &flat_pdf(&objects));
+        assert!(
+            fs::read(&file).unwrap().contains(&1u8),
+            "fixture 必须真的带上控制字符，否则这条测试什么都没测"
+        );
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, format!("AIAgent{}secondline", char::from(10)));
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != char::from(10)),
+            "{:?}",
+            text
+        );
+    }
+
+    /// 走 ToUnicode 映射的分支也要清：映射表本身就可能指向 C0 码位。
+    /// 期望值 "A" 同时证明走的是映射分支（退回 PDF 字符串编码的话整串会被清成空，命令直接报错）。
+    #[test]
+    fn control_codes_from_the_tounicode_map_are_dropped() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-ctrl-cmap");
+        let mut objects = page_objects("BT /F1 24 Tf 72 700 Td <0102> Tj ET");
+        objects.push(
+            "<< /Type /Font /Subtype /TrueType /BaseFont /Test /ToUnicode 6 0 R /Encoding /WinAnsiEncoding >>"
+                .to_string(),
+        );
+        let cmap = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+                    1 begincodespacerange\n<00> <FF>\nendcodespacerange\n\
+                    2 beginbfchar\n<01> <0041>\n<02> <0001>\nendbfchar\nendcmap";
+        objects.push(content_stream(cmap));
+        let file = write_fixture(&dir, "ctrlcmap.pdf", &flat_pdf(&objects));
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, "A");
+    }
+
+    /// 真实语料导出（本地量版用，不参与常规测试）
+    #[test]
+    #[ignore]
+    fn dump_real_corpus() {
+        let list = std::fs::read_to_string("/tmp/pdf_corpus.txt").unwrap();
+        for (idx, path) in list.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let out = match extract_pdf_text(path) {
+                Ok(t) => t,
+                Err(e) => format!("ERR {}", e),
+            };
+            std::fs::write(format!("/tmp/pdfeval3/corpus{:02}.mine.txt", idx), out).unwrap();
+        }
+    }
+
+    /// 换行与制表是内容流自己表达的排版信息，清洗时必须原样保留；回车归一成换行。
+    #[test]
+    fn line_breaks_survive_the_scrub() {
+        let (soh, del, cr, tab, lf) = (
+            char::from(1),
+            char::from(0x7f),
+            char::from(13),
+            char::from(9),
+            char::from(10),
+        );
+        assert_eq!(
+            clean_control_chars(&format!("a{soh}b{del}c{cr}{tab}d")),
+            format!("abc{lf}{tab}d")
+        );
+        // 干净文本走快速路径：内容一字不改
+        let clean = "普通文本 already fine";
+        assert_eq!(clean_control_chars(clean), clean);
     }
 }
