@@ -2,6 +2,7 @@ mod commands;
 mod search;
 mod ebook;
 mod pdf_utils;
+mod pdf_font;
 mod pdf_ops;
 mod image_utils;
 mod convert;

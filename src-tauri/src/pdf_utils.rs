@@ -1,7 +1,9 @@
+use crate::pdf_font::FontMap;
 use crate::pdf_ops::load_doc;
 use crate::path_guard;
 use lopdf::{Document, Object};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// PDF元数据
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,25 +137,27 @@ fn read_hex(buf: &[u8], i: usize) -> Option<(Vec<u8>, usize)> {
 
 /// 从一页（已解码的）内容流里取出可见文本。
 /// 只认展示文本的操作符（Tj、TJ、'、"），并把换行/定位操作符折算成行边界，
-/// 否则整页会挤成一行。
-fn page_text(content: &[u8]) -> String {
+/// 否则整页会挤成一行。`Tf` 决定后续字符串按哪个字体的编码解释。
+fn page_text(content: &[u8], fonts: &HashMap<Vec<u8>, FontMap>) -> String {
     let mut out = String::new();
     // 连续出现的字符串操作数；遇到展示操作符才被消费
     let mut pending: Vec<String> = Vec::new();
+    let mut current_font: Option<Vec<u8>> = None;
+    let mut last_name: Option<Vec<u8>> = None;
     let mut i = 0usize;
 
     while i < content.len() {
         let byte = content[i];
         if byte == b'(' {
             let (raw, next) = read_literal(content, i);
-            pending.push(decode_pdf_string(&raw));
+            pending.push(decode_glyphs(&raw, current_font.as_deref(), fonts));
             i = next;
             continue;
         }
         if byte == b'<' && content.get(i + 1) != Some(&b'<') {
             match read_hex(content, i) {
                 Some((raw, next)) => {
-                    pending.push(decode_pdf_string(&raw));
+                    pending.push(decode_glyphs(&raw, current_font.as_deref(), fonts));
                     i = next;
                     continue;
                 }
@@ -161,16 +165,29 @@ fn page_text(content: &[u8]) -> String {
             }
             continue;
         }
+        if byte == b'/' {
+            let start = i + 1;
+            let mut end = start;
+            while end < content.len() && !is_delimiter(content[end]) {
+                end += 1;
+            }
+            last_name = Some(content[start..end].to_vec());
+            i = end;
+            continue;
+        }
         if is_delimiter(byte) || byte.is_ascii_digit() || byte == b'-' || byte == b'.' || byte == b'+' {
             i += 1;
             continue;
         }
-        // 到这里是一个关键字：可能是操作符，也可能是 /Name 之后的片段
+        // 到这里是一个关键字：操作符，或字体内部编号之类
         let start = i;
         while i < content.len() && !is_delimiter(content[i]) {
             i += 1;
         }
         match &content[start..i] {
+            b"Tf" => {
+                current_font = last_name.take();
+            }
             b"Tj" | b"'" | b"\"" => {
                 if let Some(text) = pending.last() {
                     out.push_str(text);
@@ -194,6 +211,21 @@ fn page_text(content: &[u8]) -> String {
     out
 }
 
+/// 字形码 → 文本：有字体映射就走编码表/CMap，否则退回 PDF 字符串编码启发式。
+fn decode_glyphs(
+    raw: &[u8],
+    font: Option<&[u8]>,
+    fonts: &HashMap<Vec<u8>, FontMap>,
+) -> String {
+    if let Some(map) = font.and_then(|name| fonts.get(name)) {
+        let text = map.decode(raw);
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    decode_pdf_string(raw)
+}
+
 /// 提取PDF全部文本
 #[tauri::command]
 pub fn extract_pdf_text(path: &str) -> Result<String, String> {
@@ -204,7 +236,7 @@ pub fn extract_pdf_text(path: &str) -> Result<String, String> {
         let content = doc
             .get_page_content(id)
             .map_err(|e| format!("读取页面内容失败: {:?}", e))?;
-        let text = page_text(&content);
+        let text = page_text(&content, &crate::pdf_font::font_maps(&doc, id));
         let trimmed = text.trim_matches(|c| c == '\n' || c == ' ');
         if !trimmed.is_empty() {
             pages.push(trimmed.to_string());
@@ -528,6 +560,148 @@ mod tests {
     #[test]
     fn tj_array_concatenates_its_pieces() {
         let stream = b"BT /F1 24 Tf [(He) -500 (llo) ( world)] TJ ET";
-        assert_eq!(page_text(stream).trim(), "Hello world");
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "Hello world");
+    }
+
+    /// 把若干对象拼成可直接 `Document::load` 的 PDF；对象号即数组下标 + 1。
+    fn flat_pdf(objects: &[String]) -> Vec<u8> {
+        raw_pdf(&objects.iter().map(|o| o.as_bytes().to_vec()).collect::<Vec<_>>())
+    }
+
+    /// 字节版对象体，供压缩流这类含二进制的对象使用。
+    fn raw_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+        let mut body = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, text) in objects.iter().enumerate() {
+            offsets.push(body.len());
+            body.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            body.extend_from_slice(text);
+            body.extend_from_slice(b"\nendobj\n");
+        }
+        let start = body.len();
+        let count = objects.len() + 1;
+        body.extend_from_slice(format!("xref\n0 {}\n", count).as_bytes());
+        body.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in offsets {
+            body.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+        }
+        body.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+                count, start
+            )
+            .as_bytes(),
+        );
+        body
+    }
+
+    fn zlib(input: &[u8]) -> Vec<u8> {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+        let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(input).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// 一个 FlateDecode 流对象体；真实 PDF 的 /ToUnicode 几乎都是压缩过的。
+    fn flate_stream(text: &str) -> Vec<u8> {
+        let compressed = zlib(text.as_bytes());
+        let mut body = format!(
+            "<< /Length {} /Filter /FlateDecode >>\nstream\n",
+            compressed.len()
+        )
+        .into_bytes();
+        body.extend_from_slice(&compressed);
+        body.extend_from_slice(b"\nendstream");
+        body
+    }
+
+    fn content_stream(text: &str) -> String {
+        format!("<< /Length {} >>\nstream\n{}\nendstream", text.len(), text)
+    }
+
+    /// Catalog / Pages / Page 三件套，字体固定引用 5 号对象、内容引用 4 号
+    const PAGE_SKELETON: [&str; 3] = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    ];
+
+    fn page_objects(stream: &str) -> Vec<String> {
+        let mut objects: Vec<String> = PAGE_SKELETON.iter().map(|body| body.to_string()).collect();
+        objects.push(content_stream(stream));
+        objects
+    }
+
+    /// license.pdf 的真实问题：MacRoman 的 0xD2/0xD3 是左右双引号，
+    /// 不查编码表就会解成 "ÒLICENSEÓ"。
+    #[test]
+    fn mac_roman_bytes_decode_to_their_real_glyphs() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-macroman");
+        let mut objects = page_objects("BT /F1 24 Tf 72 700 Td (\\322LICENSE\\323) Tj ET");
+        objects.push(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /MacRomanEncoding >>"
+                .to_string(),
+        );
+        let file = write_fixture(&dir, "mac.pdf", &flat_pdf(&objects));
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, "\u{201C}LICENSE\u{201D}");
+    }
+
+    #[test]
+    fn font_differences_override_the_base_encoding() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-diff");
+        let mut objects = page_objects("BT /F1 24 Tf 72 700 Td (AB) Tj ET");
+        objects.push(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Test /Encoding << /BaseEncoding /MacRomanEncoding /Differences [65 /endash 66 /ellipsis] >> >>"
+                .to_string(),
+        );
+        let file = write_fixture(&dir, "diff.pdf", &flat_pdf(&objects));
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, "\u{2013}\u{2026}");
+    }
+
+    #[test]
+    fn tounicode_cmap_wins_over_the_encoding_tables() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-cmap");
+        let mut objects = page_objects("BT /F1 24 Tf 72 700 Td <0102> Tj ET");
+        objects.push(
+            "<< /Type /Font /Subtype /TrueType /BaseFont /Test /ToUnicode 6 0 R /Encoding /WinAnsiEncoding >>"
+                .to_string(),
+        );
+        let cmap = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+                    1 begincodespacerange\n<00> <FF>\nendcodespacerange\n\
+                    2 beginbfchar\n<01> <4E2D>\n<02> <6587>\nendbfchar\nendcmap";
+        objects.push(content_stream(cmap));
+        let file = write_fixture(&dir, "cmap.pdf", &flat_pdf(&objects));
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, "中文");
+    }
+
+    /// 未压缩流没有 /Filter，lopdf 的 `decompressed_content()` 会直接报错，
+    /// 上面那条测试走的是"原文"分支；真实 PDF 走的是压缩分支，两条都得覆盖。
+    #[test]
+    fn tounicode_cmap_works_on_a_flate_compressed_stream() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-cmap-zip");
+        let cmap = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+                    1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n\
+                    2 beginbfchar\n<0001> <4E2D>\n<0002> <6587>\nendbfchar\nendcmap";
+        let mut objects: Vec<Vec<u8>> = page_objects("BT /F1 24 Tf 72 700 Td <00010002> Tj ET")
+            .into_iter()
+            .map(|body| body.into_bytes())
+            .collect();
+        objects.push(
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Test /ToUnicode 6 0 R /Encoding /Identity-H >>"
+                .to_vec(),
+        );
+        let compressed = flate_stream(cmap);
+        assert!(
+            !String::from_utf8_lossy(&compressed).contains("beginbfchar"),
+            "fixture 必须真的压缩过，否则这条测试走不到解压分支"
+        );
+        objects.push(compressed);
+        let file = write_fixture(&dir, "cmapzip.pdf", &raw_pdf(&objects));
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, "中文");
     }
 }

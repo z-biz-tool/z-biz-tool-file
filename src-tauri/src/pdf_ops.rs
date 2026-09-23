@@ -30,7 +30,7 @@ pub(crate) fn load_doc(path: &Path) -> Result<Document, String> {
 
 /// 页面上没有 MediaBox/Resources 时，PDF 允许从 Pages 祖先继承。
 /// 合并、拆分之后祖先链就不存在了，所以要沿 Parent 链把值找出来。
-fn inheritable(doc: &Document, page: ObjectId, key: &[u8]) -> Option<Object> {
+pub(crate) fn inheritable(doc: &Document, page: ObjectId, key: &[u8]) -> Option<Object> {
     let mut current = page;
     for _ in 0..32 {
         let dict = doc.get_object(current).ok().and_then(|o| o.as_dict().ok())?;
