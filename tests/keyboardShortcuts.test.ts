@@ -122,3 +122,31 @@ describe("formatShortcut 与 matchSpec 口径一致", () => {
     expect(formatShortcut(cmdA)).toBe("⌘ + A");
   });
 });
+
+describe("matchSpec：撤销/重做这类同键不同 Shift 的组合必须互斥", () => {
+  beforeEach(() => setPlatform("MacIntel"));
+  afterEach(() => {
+    if (originalNavigator) {
+      Object.defineProperty(globalThis, "navigator", originalNavigator);
+    }
+  });
+
+  // 命中即 return：⌘Z 排在前面，一旦 shift 判定放松一点，⌘⇧Z 就会去执行撤销，
+  // 重做永远点不着 —— 而界面上两个按钮都各有自己的禁用态，看不出问题。
+  const undo: ShortcutSpec = { key: "z", meta: true, handler: () => {} };
+  const redo: ShortcutSpec = { key: "z", meta: true, shift: true, handler: () => {} };
+
+  it("⌘Z 只命中撤销，⌘⇧Z 只命中重做", () => {
+    expect(matchSpec(undo, event({ key: "z", meta: true }))).toBe(true);
+    expect(matchSpec(undo, event({ key: "Z", meta: true, shift: true }))).toBe(false);
+    expect(matchSpec(redo, event({ key: "Z", meta: true, shift: true }))).toBe(true);
+    expect(matchSpec(redo, event({ key: "z", meta: true }))).toBe(false);
+  });
+
+  it("Windows 上走 Ctrl 也一样互斥", () => {
+    setPlatform("Win32");
+    expect(matchSpec(undo, event({ key: "z", ctrl: true }))).toBe(true);
+    expect(matchSpec(undo, event({ key: "Z", ctrl: true, shift: true }))).toBe(false);
+    expect(matchSpec(redo, event({ key: "Z", ctrl: true, shift: true }))).toBe(true);
+  });
+});

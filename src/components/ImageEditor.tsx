@@ -38,6 +38,12 @@ import {
   ZoomOutOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  shortcutHints,
+  useKeyboardShortcuts,
+  type ShortcutSpec,
+} from "../_shared/useKeyboardShortcuts";
+import { hintSuffixOf } from "../_shared/ShortcutHints";
 
 const { Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -419,6 +425,16 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
     ctx?.putImageData(data, 0, 0);
   };
 
+  // 工具栏的 tooltip 一直写着 "撤销 (⌘Z)" / "重做 (⌘⇧Z)"，但整个组件没有一个 keydown 监听：
+  // 按下去什么都不会发生。这里把承诺补上。这两个是编辑器作用域的键位（组件卸载即解绑、
+  // 也不进全局 F1 面板），所以提示从这份 spec 现算，而不是去查 App 的全局注册表。
+  const editorShortcuts: ShortcutSpec[] = [
+    { key: "z", meta: true, handler: undo, description: "撤销", group: "图片编辑" },
+    { key: "z", meta: true, shift: true, handler: redo, description: "重做", group: "图片编辑" },
+  ];
+  useKeyboardShortcuts(editorShortcuts);
+  const editorHint = (desc: string) => hintSuffixOf(shortcutHints(editorShortcuts), desc);
+
   const reset = () => {
     setBrightness(100); setContrast(100); setSaturation(100); setHueRotate(0);
     setBlur(0); setSepia(0); setInvert(0); setExposure(0); setVibrance(0);
@@ -677,10 +693,10 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
           {filePath.split("/").pop()}
         </Text>
         <Space style={{ marginLeft: "auto" }}>
-          <Tooltip title="撤销 (⌘Z)">
+          <Tooltip title={`撤销${editorHint("撤销")}`}>
             <Button icon={<UndoOutlined />} type="text" style={{ color: "#fff" }} onClick={undo} disabled={historyIdx <= 0} />
           </Tooltip>
-          <Tooltip title="重做 (⌘⇧Z)">
+          <Tooltip title={`重做${editorHint("重做")}`}>
             <Button icon={<RedoOutlined />} type="text" style={{ color: "#fff" }} onClick={redo} disabled={historyIdx >= history.length - 1} />
           </Tooltip>
           <Tooltip title="重置">

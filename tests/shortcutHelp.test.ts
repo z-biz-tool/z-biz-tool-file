@@ -189,27 +189,39 @@ describe('结构闸：hint("…") 引用的 description 必须真实存在于注
   // 递归扫 src，别用白名单：写死文件列表的话，下一个新增 hint() 调用的组件会天然在闸外
   // 尾斜杠不能省：URL 的相对解析会丢掉无斜杠路径的最后一段（"../src" → 仓库根）
   const srcRoot = new URL("../src/", import.meta.url);
-  const tsxFiles: string[] = [];
+  const sources: { path: string; text: string }[] = [];
   const walk = (dir: URL) => {
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       const url = new URL(ent.name + (ent.isDirectory() ? "/" : ""), dir);
       if (ent.isDirectory()) walk(url);
-      else if (/\.tsx?$/.test(ent.name)) tsxFiles.push(url.href);
+      else if (/\.tsx?$/.test(ent.name))
+        sources.push({
+          path: decodeURIComponent(url.pathname).split("/src/")[1],
+          text: readFileSync(url, "utf8"),
+        });
     }
   };
   walk(srcRoot);
-  const referenced = tsxFiles.flatMap((href) =>
-    [...readFileSync(new URL(href), "utf8").matchAll(/\bhint\("([^"]*)"\)/g)].map((m) => m[1])
-  );
+  // 两类入口：查全局 Provider 的 hint()，和查组件自己那份 spec 的 xxxHint()
+  // （图片编辑器的 ⌘Z 是组件作用域，不进全局面板，但引用错了一样是谎报键位）
+  const REF = /\b\w*[hH]int\("([^"]*)"\)/g;
+  const referenced = sources.flatMap(({ text }) => [...text.matchAll(REF)].map((m) => m[1]));
+  const unresolved = sources.flatMap(({ path, text }) => {
+    const local = new Set([...text.matchAll(/description:\s*"([^"]+)"/g)].map((m) => m[1]));
+    return [...text.matchAll(REF)]
+      .map((m) => m[1])
+      .filter((d) => !registered.has(d) && !local.has(d))
+      .map((d) => `${path} -> ${d}`);
+  });
 
   it("扫描范围本身要够大，否则正则一失配整条断言就空转", () => {
-    expect(tsxFiles.length).toBeGreaterThan(20);
+    expect(sources.length).toBeGreaterThan(20);
     expect(referenced.length).toBeGreaterThanOrEqual(25);
     expect(registered.size).toBeGreaterThanOrEqual(25);
   });
 
-  it("注册表里能找到每一个被引用的 description", () => {
-    expect(referenced.filter((r) => !registered.has(r))).toEqual([]);
+  it("每一个 hint 引用都能在注册表里解析出来", () => {
+    expect(unresolved).toEqual([]);
   });
 
   it("被引用的 description 在注册表里必须唯一，否则 tooltip 显示哪个键位是看运气", () => {
