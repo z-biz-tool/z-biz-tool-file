@@ -24,7 +24,7 @@ fn describe(what: &str, err: impl std::fmt::Debug) -> String {
     format!("{}: {:?}", what, err)
 }
 
-fn load_doc(path: &Path) -> Result<Document, String> {
+pub(crate) fn load_doc(path: &Path) -> Result<Document, String> {
     Document::load(path).map_err(|e| describe("PDF 解析失败", e))
 }
 
