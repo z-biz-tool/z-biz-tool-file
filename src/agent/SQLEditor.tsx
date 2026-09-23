@@ -1,6 +1,6 @@
 // SQL 编辑器 - 共享组件（无外部编辑器依赖）
 import { useState } from 'react';
-import { Card, Button, Space, Input, message } from 'antd';
+import { Card, Button, Space, Input, App as AntdApp } from 'antd';
 import { PlayCircleOutlined, CopyOutlined, SaveOutlined } from '@ant-design/icons';
 
 interface SQLEditorProps {
@@ -14,6 +14,7 @@ export const SQLEditor: React.FC<SQLEditorProps> = ({
   onChange,
   onExecute,
 }) => {
+  const { message } = AntdApp.useApp();
   const [code, setCode] = useState(value);
   const [isExecuting, setIsExecuting] = useState(false);
 

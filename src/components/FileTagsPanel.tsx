@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Popover, Tag, Input, Button, Space, message, theme } from "antd";
+import { Popover, Tag, Input, Button, Space, theme, App as AntdApp } from "antd";
 import { TagOutlined, PlusOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -23,6 +23,7 @@ const MACOS_COLORS: { name: string; value: string; label: string }[] = [
 ];
 
 export default function FileTagsPanel({ filePath }: Props) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
 
   const [colorTags, setColorTags] = useState<string[]>([]);

@@ -1,4 +1,4 @@
-import { List, Button, message, theme } from "antd";
+import { List, Button, theme, App as AntdApp } from "antd";
 import { FolderOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 import { DragDropTarget } from "./DragDropMove";
@@ -8,6 +8,7 @@ interface Props {
 }
 
 export default function Bookmarks({ onNavigate }: Props) {
+  const { message } = AntdApp.useApp();
   const { bookmarks, currentPath, addBookmark, removeBookmark } = useFileStore();
   const { token } = theme.useToken();
 

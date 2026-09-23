@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Drawer, Descriptions, Button, Spin, message, theme } from "antd";
+import { Drawer, Descriptions, Button, Spin, theme, App as AntdApp } from "antd";
 import { CopyOutlined, DesktopOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime } from "../stores/fileStore";
@@ -39,6 +39,7 @@ function modeToOctal(mode: number): string {
 }
 
 export default function FileProperties({ open, onClose, filePath }: Props) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
 
   const [loading, setLoading] = useState(false);

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Modal, Input, Select, Button, message, theme } from "antd";
+import { Modal, Input, Select, Button, theme, App as AntdApp } from "antd";
 import { invoke } from "@tauri-apps/api/core";
 
 interface Props {
@@ -86,6 +86,7 @@ export default function NewFileTemplate({
   currentPath,
   onRefresh,
 }: Props) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
 
   const [fileName, setFileName] = useState("");

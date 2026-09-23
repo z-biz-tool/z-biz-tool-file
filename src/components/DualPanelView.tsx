@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Input, Button, Breadcrumb, Table, Tooltip, theme, message } from "antd";
+import { Input, Button, Breadcrumb, Table, Tooltip, theme, App as AntdApp } from "antd";
 import type { BreadcrumbProps } from "antd";
 import {
   FolderOutlined,
@@ -38,6 +38,7 @@ const Panel: React.FC<{
   onToggleHidden: () => void;
   syncNavigate?: (path: string) => void;
 }> = ({ panelId, state, setState, onFileOpen, showHidden, onToggleHidden, syncNavigate }) => {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
 
   const loadDirectory = useCallback(

@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { message } from "antd";
+import { App as AntdApp } from "antd";
 import { useFileStore } from "../stores/fileStore";
 import { batchToast, placeBatch } from "../utils/conflictChoice";
 
@@ -53,6 +53,7 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
   style,
   className,
 }) => {
+  const { message } = AntdApp.useApp();
   const [isOver, setIsOver] = useState(false);
   const { clipboard, currentPath, clearClipboard } = useFileStore();
 

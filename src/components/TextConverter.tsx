@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Modal, Input, Radio, message, Typography, Space } from "antd";
+import { Modal, Input, Radio, Typography, Space, App as AntdApp } from "antd";
 import { SwapOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -19,6 +19,7 @@ interface ConvertResult {
 }
 
 export default function TextConverter({ fileName, content, open, onClose }: Props) {
+  const { message } = AntdApp.useApp();
   const [title, setTitle] = useState(fileName.replace(/\.\w+$/, ""));
   const [author, setAuthor] = useState("未知");
   const [format, setFormat] = useState<"epub" | "mobi" | "pdf">("epub");

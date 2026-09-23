@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useFileStore, formatFileSize, type SearchResultItem } from "../stores/fileStore";
 import { EmptyState, LoadingState } from "../_shared";
 import { searchFiles, searchContent, getIndexStats, IndexStats } from "../services/indexService";
-import { message } from "antd";
+import { App as AntdApp } from "antd";
 
 const { Text } = Typography;
 
@@ -45,6 +45,7 @@ function highlightMatch(text: string, query: string): ReactNode {
 }
 
 export default function SearchBar({ rootPath }: SearchBarProps) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<"filename" | "content">("filename");

@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from "react";
-import { theme, Button, Tooltip, message } from "antd";
+import { theme, Button, Tooltip, App as AntdApp } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import { useTheme } from "../_shared";
 
@@ -190,6 +190,7 @@ function escapeHtml(text: string): string {
 }
 
 export default function MarkdownPreview({ content, showCopyButton = true }: MarkdownPreviewProps) {
+  const { message } = AntdApp.useApp();
   const { mode } = useTheme();
   const { token } = theme.useToken();
   const isDark = mode === "dark";
