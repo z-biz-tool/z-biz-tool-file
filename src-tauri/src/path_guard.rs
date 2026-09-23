@@ -12,6 +12,10 @@ pub enum PathError {
     Empty,
     RelativePath,
     Blocked(String),
+    /// 路径（或它指向的东西）不存在。以前这种最常见的失败会掉进 `Invalid`，
+    /// 用户看到的是 `解析失败: /x/y (No such file or directory)` —— 中英混排，
+    /// 而且"解析失败"听起来像应用出了 bug，其实只是文件被删了/改名了。
+    NotFound(String),
     Invalid(String),
 }
 
@@ -21,6 +25,7 @@ impl fmt::Display for PathError {
             PathError::Empty => write!(f, "路径为空"),
             PathError::RelativePath => write!(f, "不允许相对路径或包含 .. 的相对段"),
             PathError::Blocked(p) => write!(f, "命中系统保护目录，禁止操作: {}", p),
+            PathError::NotFound(p) => write!(f, "路径不存在: {}", p),
             PathError::Invalid(p) => write!(f, "解析失败: {}", p),
         }
     }
@@ -55,7 +60,8 @@ const BLOCKED_ANCESTORS: &[&str] = &[
 ///
 /// 设计目标：
 /// - 拒绝空字符串与相对路径（含 `..`）。
-/// - 不要求路径必须存在（写入场景），但如果存在就 canonicalize 解析符号链接。
+/// - 要求目标存在，并且一定走一遍 canonicalize 拆穿符号链接；
+///   "落点还没建出来"的写入场景用 `validate_new_path`，别照抄这里。
 /// - 检查黑名单前缀与祖先段。
 pub fn validate(raw_path: &str) -> Result<PathBuf, PathError> {
     if raw_path.is_empty() {
@@ -71,9 +77,15 @@ pub fn validate(raw_path: &str) -> Result<PathBuf, PathError> {
     }
 
     // 父目录必须存在（canonicalize 要求全部父目录存在）；不存在时直接报 NotFound。
-    // 对尚未创建的写入场景，调用方应使用 `validate_parent_dir`。
+    // 对尚未创建的写入场景，调用方应使用 `validate_new_path`。
     let canonical = p.canonicalize().map_err(|e| {
-        PathError::Invalid(format!("{} ({})", raw_path, e))
+        // "东西不在"是最常见、也最该说人话的一种失败：它不该和"这条路径我们看不懂"
+        // 共用一条中英混排的 `解析失败: … (No such file or directory)`
+        if e.kind() == std::io::ErrorKind::NotFound {
+            PathError::NotFound(raw_path.to_string())
+        } else {
+            PathError::Invalid(format!("{} ({})", raw_path, e))
+        }
     })?;
 
     check_blocked(&canonical)?;
@@ -153,11 +165,10 @@ pub fn validate_new_path(raw_path: &str) -> Result<PathBuf, PathError> {
 /// 与直接 `validate` 相比省掉调用方各写一遍的 `exists()` 检查，也避免某个模块
 /// 只记得校验存在性、忘了黑名单，导致 blocklist 形同虚设。
 pub fn readable(raw: &str) -> Result<PathBuf, String> {
-    let p = validate(raw).map_err(|e| e.to_string())?;
-    if !p.exists() {
-        return Err(format!("路径不存在: {}", raw));
-    }
-    Ok(p)
+    // 这里不再补一次 `exists()`：canonicalize 能成功就说明整条链都在（指向丢失的
+    // 符号链接会 ENOENT，也算不在），原来那个分支永远走不到，现在由 NotFound
+    // 在 validate 里把同一句话说清楚。
+    validate(raw).map_err(|e| e.to_string())
 }
 
 /// 命令入口用：写一个可能还不存在的落点（另存为、导出、生成缩略图…）。
@@ -267,6 +278,45 @@ mod tests {
         let res = validate(f.to_str().unwrap());
         let _ = fs::remove_file(&f);
         assert!(res.is_ok(), "got {:?}", res);
+    }
+
+    /// 文件不见了是用户最常撞到的一种失败，它不该长得像应用自己的 bug。
+    #[test]
+    fn a_missing_path_says_so_instead_of_blaming_the_parser() {
+        let dir = crate::test_bridge::TempDir::new("pg-gone");
+        let missing = dir.join("nope.txt");
+        let raw = missing.to_str().unwrap();
+        assert_eq!(
+            validate(raw).unwrap_err(),
+            PathError::NotFound(raw.to_string())
+        );
+        assert_eq!(
+            validate(raw).unwrap_err().to_string(),
+            format!("路径不存在: {}", raw)
+        );
+        // readable() 是所有命令入口的那句话：不能再冒出"解析失败"或系统英文
+        let msg = readable(raw).unwrap_err();
+        assert!(msg.starts_with("路径不存在: "), "{}", msg);
+        assert!(
+            !msg.contains("解析失败") && !msg.contains("No such file"),
+            "{}",
+            msg
+        );
+        // 少一级父目录也是同一句话，别只测"文件本身不在"
+        assert!(readable(dir.join("nope/deeper.txt").to_str().unwrap())
+            .unwrap_err()
+            .starts_with("路径不存在: "));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_counts_as_missing() {
+        // 指向丢了的地方 —— canonicalize 给 ENOENT，所以它和"没这个文件"同一句话；
+        // 这一条是给 readable() 里删掉的那次 exists() 复查兜底的：删了也不能改变语义
+        let dir = crate::test_bridge::TempDir::new("pg-dangling");
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("link")).unwrap();
+        let err = validate(dir.join("link").to_str().unwrap()).unwrap_err();
+        assert!(matches!(err, PathError::NotFound(_)), "{:?}", err);
     }
 
     #[test]

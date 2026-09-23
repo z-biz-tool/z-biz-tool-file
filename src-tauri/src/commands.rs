@@ -3294,11 +3294,8 @@ mod external_open_tests {
         let gone = dir.join("gone.txt");
         let err = external_open_target(gone.to_str().unwrap(), false).unwrap_err();
         assert!(
-            // 注意：这里拿到的是 canonicalize 的 NotFound（"解析失败 … No such file or
-            // directory"），`readable()` 里那句"路径不存在"其实到不了 —— validate 先 canonicalize
-            // 就已经失败了。措辞要改，但"不存在的目标绝不 spawn"这条底线已经钉住。
-            err.contains("gone.txt") && !err.contains("保护"),
-            "不存在的目标应报找不到，而不是别的: {}",
+            err.contains("路径不存在") && !err.contains("解析失败"),
+            "不存在的目标要说\"路径不存在\"，别把 canonicalize 的英文错误码丢给用户: {}",
             err
         );
         // 相对路径以前是被 opener::open 当成"相对工作目录"直接打开的
