@@ -1,4 +1,5 @@
 mod commands;
+mod conflict;
 mod search;
 mod ebook;
 mod pdf_utils;
@@ -48,6 +49,7 @@ pub fn run() {
             commands::delete_file,
             commands::move_file,
             commands::copy_file,
+            conflict::occupied_names,
             commands::create_file,
             commands::create_directory,
             commands::batch_rename,

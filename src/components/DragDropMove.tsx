@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { message } from "antd";
-import { invoke } from "@tauri-apps/api/core";
 import { useFileStore } from "../stores/fileStore";
+import { batchToast, placeBatch } from "../utils/conflictChoice";
 
 export interface DragItem {
   path: string;
@@ -86,21 +86,13 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
         try {
           const paths: string[] = JSON.parse(pathsData);
           const operation = e.dataTransfer?.getData("application/x-z-tool-operation") || "cut";
-          let count = 0;
-          for (const src of paths) {
-            if (src === destDir) continue;
-            if (destDir.startsWith(src + "/")) continue;
-            if (operation === "copy") {
-              await invoke("copy_file", { srcPath: src, destDir });
-            } else {
-              await invoke("move_file", { srcPath: src, destDir });
-            }
-            count++;
-          }
-          if (count > 0) {
-            message.success(`${operation === "copy" ? "已复制" : "已移动"} ${count} 项到 ${targetLabel || destDir}`);
-            onDrop?.();
-          }
+          const mode: "copy" | "move" = operation === "copy" ? "copy" : "move";
+          const done = await placeBatch(destDir, paths.map((src) => ({ src, mode })));
+          if (!done) return;
+          const toast = batchToast(done, mode === "copy" ? "已复制" : "已移动", targetLabel || destDir);
+          if (!toast) return;
+          message[toast.kind](toast.text);
+          if (toast.refresh) onDrop?.();
           return;
         } catch (err) {
           message.error("拖拽操作失败: " + err);
@@ -113,17 +105,15 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
       if (internalData) {
         try {
           const items: DragItem[] = JSON.parse(internalData);
-          let moved = 0;
-          for (const item of items) {
-            if (item.path === destDir) continue;
-            if (destDir.startsWith(item.path + "/")) continue;
-            await invoke("move_file", { srcPath: item.path, destDir });
-            moved += 1;
-          }
-          if (moved > 0) {
-            message.success(`已移动 ${moved} 项到 ${targetLabel || destDir}`);
-            onDrop?.();
-          }
+          const done = await placeBatch(
+            destDir,
+            items.map((item) => ({ src: item.path, mode: "move" as const }))
+          );
+          if (!done) return;
+          const toast = batchToast(done, "已移动", targetLabel || destDir);
+          if (!toast) return;
+          message[toast.kind](toast.text);
+          if (toast.refresh) onDrop?.();
           return;
         } catch {
           // ignore
@@ -133,19 +123,19 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
       // 3. 来自剪贴板（用户先复制/剪切，然后用拖拽进行粘贴）
       if (clipboard.length > 0) {
         try {
-          let count = 0;
-          for (const item of clipboard) {
-            if (item.path === destDir) continue;
-            if (destDir.startsWith(item.path + "/")) continue;
-            if (item.operation === "copy") {
-              await invoke("copy_file", { srcPath: item.path, destDir });
-            } else {
-              await invoke("move_file", { srcPath: item.path, destDir });
-            }
-            count++;
-          }
-          if (count > 0) {
-            message.success(`已粘贴 ${count} 项到 ${targetLabel || destDir}`);
+          const done = await placeBatch(
+            destDir,
+            clipboard.map((item) => ({
+              src: item.path,
+              mode: item.operation === "copy" ? ("copy" as const) : ("move" as const),
+            }))
+          );
+          if (!done) return;
+          const toast = batchToast(done, "已粘贴", targetLabel || destDir);
+          if (!toast) return;
+          message[toast.kind](toast.text);
+          // 用户取消或全被剔掉时剪贴板要留着，稍后还能贴到别处
+          if (toast.refresh) {
             clearClipboard();
             onDrop?.();
           }

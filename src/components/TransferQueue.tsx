@@ -40,6 +40,9 @@ export default function TransferQueue() {
     invoke(command, {
       srcPath: pending.sourcePath,
       destDir: pending.destDir,
+      // 队列在后台一项一项跑，弹框问策略会把"排好队等我回来"变成"卡在第一条"。
+      // 这里显式写死 rename：宁可目标目录多出一份"xxx 副本"，也不悄悄盖掉已有文件。
+      conflict: "rename",
     })
       .then(() => {
         updateStatus(pending.id, "done");

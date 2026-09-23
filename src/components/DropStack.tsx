@@ -8,7 +8,8 @@ import {
   FileOutlined,
   FolderOutlined,
 } from "@ant-design/icons";
-import { invoke } from "@tauri-apps/api/core";
+import { batchToast, placeBatch } from "../utils/conflictChoice";
+
 interface StackItem {
   path: string;
   name: string;
@@ -102,16 +103,15 @@ export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
     if (stack.length === 0 || !currentPath) return;
     setLoading(true);
     try {
-      let count = 0;
-      for (const item of stack) {
-        if (item.path === currentPath) continue;
-        await invoke("copy_file", { srcPath: item.path, destDir: currentPath });
-        count++;
-      }
-      if (count > 0) {
-        message.success(`已复制 ${count} 项到当前目录`);
-        onRefresh();
-      }
+      const done = await placeBatch(
+        currentPath,
+        stack.map((item) => ({ src: item.path, mode: "copy" as const }))
+      );
+      if (!done) return; // 取消：堆里的东西留着，换个目录还能再贴
+      const toast = batchToast(done, "已复制", currentPath);
+      if (!toast) return;
+      message[toast.kind](toast.text);
+      if (toast.refresh) onRefresh();
     } catch (err) {
       message.error("复制失败: " + err);
     } finally {
@@ -123,15 +123,15 @@ export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
     if (stack.length === 0 || !currentPath) return;
     setLoading(true);
     try {
-      let count = 0;
-      for (const item of stack) {
-        if (item.path === currentPath) continue;
-        if (currentPath.startsWith(item.path + "/")) continue;
-        await invoke("move_file", { srcPath: item.path, destDir: currentPath });
-        count++;
-      }
-      if (count > 0) {
-        message.success(`已移动 ${count} 项到当前目录`);
+      const done = await placeBatch(
+        currentPath,
+        stack.map((item) => ({ src: item.path, mode: "move" as const }))
+      );
+      if (!done) return;
+      const toast = batchToast(done, "已移动", currentPath);
+      if (!toast) return;
+      message[toast.kind](toast.text);
+      if (toast.refresh) {
         setStack([]);
         onRefresh();
       }

@@ -55,6 +55,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
+import { batchToast, placeBatch } from "./utils/conflictChoice";
 import type { HashTarget } from "./utils/batchHash";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
@@ -578,18 +579,25 @@ function AppShellInner() {
   const handlePaste = useCallback(async () => {
     if (clipboard.length === 0 || !currentPath) return;
     try {
-      for (const item of clipboard) {
-        if (item.operation === "copy") {
-          await invoke("copy_file", { srcPath: item.path, destDir: currentPath });
-        } else {
-          await invoke("move_file", { srcPath: item.path, destDir: currentPath });
-        }
+      const done = await placeBatch(
+        currentPath,
+        clipboard.map((item) => ({
+          src: item.path,
+          mode: item.operation === "copy" ? ("copy" as const) : ("move" as const),
+        }))
+      );
+      // 用户在冲突框里点了取消：一个字节都不动，剪贴板也留着，稍后还能贴到别处
+      if (!done) return;
+      const toast = batchToast(done, "已粘贴", currentPath);
+      if (!toast) return;
+      message[toast.kind](toast.text);
+      if (toast.refresh) {
+        clearClipboard();
+        loadDirectory(currentPath);
       }
-      message.success(`已粘贴 ${clipboard.length} 项`);
-      clearClipboard();
-      loadDirectory(currentPath);
     } catch (err) {
       message.error("粘贴失败: " + err);
+      loadDirectory(currentPath); // 半途失败也要重扫，否则列表还指着已经搬走的项
     }
   }, [clipboard, currentPath, clearClipboard, loadDirectory, message]);
 
@@ -1004,16 +1012,18 @@ function AppShellInner() {
         onClick: () => {
           (async () => {
             const target = records[0].path;
-            for (let i = 1; i < records.length; i++) {
-              try {
-                await invoke("move_file", { srcPath: records[i].path, destDir: target });
-              } catch (e) {
-                message.error(`移动 ${records[i].name} 失败: ${e}`);
-              }
-            }
+            const done = await placeBatch(
+              target,
+              records.slice(1).map((r) => ({ src: r.path, mode: "move" as const }))
+            );
+            if (!done) return;
+            const toast = batchToast(done, "已合并入", records[0].name);
+            if (toast) message[toast.kind](toast.text);
             loadDirectory(currentPath);
-            message.success("目录合并完成");
-          })();
+          })().catch((e) => {
+            message.error("合并失败: " + e);
+            loadDirectory(currentPath);
+          });
         },
       }] : []),
       { type: "divider" as const },

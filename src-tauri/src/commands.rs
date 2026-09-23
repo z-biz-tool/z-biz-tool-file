@@ -378,6 +378,7 @@ pub fn move_file(
     if !dest_canonical.is_dir() {
         return Err(format!("目标不是目录: {}", dest_dir));
     }
+    crate::conflict::displacement_guard(&src_canonical, &dest_canonical, "移动")?;
 
     let file_name = src_canonical
         .file_name()
@@ -465,6 +466,8 @@ pub fn copy_file(
     if !dest_canonical.is_dir() {
         return Err(format!("目标不是目录: {}", dest_dir));
     }
+    // 复制也拦：往自己里面复制不会像移动那样丢原件，但副本里会长出一层套一层的自己
+    crate::conflict::displacement_guard(&src_canonical, &dest_canonical, "复制")?;
 
     let file_name = src_canonical
         .file_name()
