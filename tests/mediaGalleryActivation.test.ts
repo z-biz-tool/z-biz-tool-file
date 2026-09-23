@@ -67,3 +67,37 @@ describe("媒体库卡片的激活方式", () => {
     expect(SRC).toMatch(/useEffect\(\(\) => \{\s*setSelectedPath\(null\)/);
   });
 });
+
+describe("媒体库键盘导航：上下方向键按列走", () => {
+  it("listbox 容器必须挂上 ref，否则 ResizeObserver 找不到元素", () => {
+    expect(SRC).toMatch(/<div\s+ref=\{containerRef\}[\s\S]*?role="listbox"/);
+  });
+
+  it("必须用 ResizeObserver 实时算列数（不能猜步长）", () => {
+    expect(SRC).toMatch(/new ResizeObserver\(compute\)/);
+    expect(SRC).toMatch(/ro\.observe\(el\)/);
+    // 卸载时要 disconnect，否则切馆后旧的 observer 还在监听没用的元素
+    expect(SRC).toMatch(/return\s*\(\)\s*=>\s*ro\.disconnect\(\)/);
+  });
+
+  it("nextSelectedIndex 调用必须传 columns 参数", () => {
+    expect(SRC).toMatch(/nextSelectedIndex\(selectedIndex, mediaFiles\.length, action, columns\)/);
+  });
+
+  it("列数只有画廊 + image/video 才算；音频和列表视图固定 1", () => {
+    // viewMode !== "gallery" 或 mediaType === "audio" 时直接 setColumns(1)
+    expect(SRC).toMatch(/if\s*\(viewMode\s*!==\s*"gallery"\s*\|\|\s*mediaType\s*===\s*"audio"\)/);
+    expect(SRC).toMatch(/setColumns\(1\)/);
+  });
+
+  it("键盘动作映射必须支持 ArrowUp / ArrowDown", () => {
+    // MediaGallery 路径里没有 Arrow 字面值（走的是 mediaKeyAction 纯函数），
+    // 但这条规则两件事必须钉住：(a) 纯函数映射的源文件支持 ↑/↓ (b) 调用方没把它过滤掉。
+    const KEYS = readFileSync(`${ROOT}/src/utils/mediaKeys.ts`, "utf8");
+    // 形如 if (e.key === "ArrowUp") return "up";
+    expect(KEYS).toMatch(/e\.key\s*===\s*"ArrowUp"[\s\S]{0,40}return\s+"up"/);
+    expect(KEYS).toMatch(/e\.key\s*===\s*"ArrowDown"[\s\S]{0,40}return\s+"down"/);
+    // 组件侧 onKeyDown 必须把 action 透传给 nextSelectedIndex（不能再写"只接 prev/next"）
+    expect(SRC).toMatch(/nextSelectedIndex\(selectedIndex, mediaFiles\.length, action, columns\)/);
+  });
+});

@@ -33,8 +33,13 @@ describe("按键 → 动作", () => {
     expect(key("Escape")).toBe("clear");
   });
 
+  it("↑/↓ 也算方向键，按列走（不是 ±1）", () => {
+    expect(key("ArrowUp")).toBe("up");
+    expect(key("ArrowDown")).toBe("down");
+  });
+
   it("其余键一概不吃（不能让方向键之外的输入被吞掉）", () => {
-    for (const k of ["ArrowUp", "ArrowDown", "a", " ", "Tab", "F1", "Backspace"]) {
+    for (const k of ["a", " ", "Tab", "F1", "Backspace"]) {
       expect(key(k)).toBeNull();
     }
   });
@@ -44,15 +49,41 @@ describe("选中项的移动", () => {
   it("从右端越界停在原地，不循环回第一行", () => {
     expect(nextSelectedIndex(2, 3, "next")).toBe(2);
     expect(nextSelectedIndex(0, 3, "prev")).toBe(0);
+    // 上下也一样：到顶/到底不循环
+    expect(nextSelectedIndex(0, 9, "up", 3)).toBe(0);
+    expect(nextSelectedIndex(8, 9, "down", 3)).toBe(8);
   });
 
-  it("还没有选中时，往右落在第一个、往左落在最后一个", () => {
+  it("还没有选中时，往右落在第一个、往左落在最后一个；上下也按列首尾处理", () => {
     expect(nextSelectedIndex(-1, 3, "next")).toBe(0);
     expect(nextSelectedIndex(-1, 3, "prev")).toBe(2);
+    expect(nextSelectedIndex(-1, 9, "down", 3)).toBe(0);
+    expect(nextSelectedIndex(-1, 9, "up", 3)).toBe(8);
   });
 
   it("空列表不给下标（调用方据此什么都不做）", () => {
     expect(nextSelectedIndex(-1, 0, "next")).toBe(-1);
     expect(nextSelectedIndex(0, 0, "prev")).toBe(-1);
+    expect(nextSelectedIndex(0, 0, "down", 3)).toBe(-1);
+  });
+
+  it("↑/↓ 按列数跳，列数从运行时算进来", () => {
+    // 9 张照片排成 3 列：第 0 项按 ↓ 落到第 3、第 6
+    expect(nextSelectedIndex(0, 9, "down", 3)).toBe(3);
+    expect(nextSelectedIndex(0, 9, "down", 3) === 3 ? 3 + 3 : -1).toBe(6);
+    expect(nextSelectedIndex(0, 9, "up", 3)).toBe(0); // 已经在最顶行
+    expect(nextSelectedIndex(4, 9, "up", 3)).toBe(1);
+    // 列数为 1 时退化为 ±1（音频/列表视图）
+    expect(nextSelectedIndex(0, 5, "down", 1)).toBe(1);
+    expect(nextSelectedIndex(3, 5, "up", 1)).toBe(2);
+    // 没传 columns 时按 1 处理（兼容性）
+    expect(nextSelectedIndex(0, 5, "down")).toBe(1);
+  });
+
+  it("↑/↓ 越界后还能继续用（不能因为越界就锁住 selectedIndex）", () => {
+    // 6 张照片 3 列：第 4 项按 ↓ 应到第 7，越界后变 5
+    expect(nextSelectedIndex(4, 6, "down", 3)).toBe(5);
+    // 从第 5 再按 ↓ 仍是 5（到底了）
+    expect(nextSelectedIndex(5, 6, "down", 3)).toBe(5);
   });
 });

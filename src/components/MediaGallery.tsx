@@ -3,7 +3,7 @@
  * 包括：照片馆、音乐馆、视频馆等专用视图
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Spin, theme, Dropdown } from "antd";
 import { PictureOutlined, VideoCameraOutlined, AudioOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,6 +14,7 @@ import { toMediaItems, type MediaItem, type MediaType } from "../utils/mediaType
 import { buildMediaMenu, type MediaActions } from "../utils/mediaMenu";
 import { mediaKeyAction, nextSelectedIndex } from "../utils/mediaKeys";
 import {
+  gridMinWidth,
   gridStyle,
   listGridStyle,
   type MediaGallerySize,
@@ -395,6 +396,42 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
   const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // 网格里的"几列"是运行时宽度决定的，不能猜：上下方向键按列走，
+  // 猜出来的步长会让选中卡跳到完全无关的另一张，比没支持更坏。
+  // ResizeObserver 直接读外层 listbox 节点的 clientWidth。
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [columns, setColumns] = useState(1);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    // 只有 image/video 的画廊视图才有"列数"可言。其它版式（音频画廊、列表视图）
+    // 都是单列行：audio 的卡片本就垂直堆叠，listGridStyle 的 gridTemplateColumns
+    // 是列内分布，行的 grid item 还是单列。
+    if (viewMode !== "gallery" || mediaType === "audio") {
+      setColumns(1);
+      return;
+    }
+    const compute = () => {
+      const cw = el.clientWidth;
+      // gridStyle 里 padding=16、gap=16；与 CSS 同步，否则差一格 step 错位
+      const minCol = gridMinWidth(mediaType, size);
+      const usable = Math.max(0, cw - 32);
+      const step = minCol + 16;
+      if (step <= 0) {
+        setColumns(1);
+        return;
+      }
+      const next = Math.max(1, Math.floor(usable / step));
+      setColumns((prev) => (prev === next ? prev : next));
+    };
+    compute();
+    // ResizeObserver 在主视图/分栏拖拽时反复触发 —— 这里 setState 已经有去重，
+    // 但 observer 本身必须存在，否则 grid 列数变了方向键还在用旧的。
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [viewMode, mediaType, size, directory]);
 
   useEffect(() => {
     setSelectedPath(null); // 换目录/换馆之后，上一张的选中环没有意义，还可能指着一个不存在的路径
@@ -588,12 +625,13 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
       return;
     }
     e.preventDefault();
-    const moved = mediaFiles[nextSelectedIndex(selectedIndex, mediaFiles.length, action)];
+    const moved = mediaFiles[nextSelectedIndex(selectedIndex, mediaFiles.length, action, columns)];
     if (moved) setSelectedPath(moved.path);
   };
 
   return (
     <div
+      ref={containerRef}
       tabIndex={0}
       role="listbox"
       aria-label="媒体库"
