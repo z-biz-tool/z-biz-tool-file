@@ -430,19 +430,22 @@ fn decode_glyphs(
     } else {
         decode_pdf_string(raw)
     };
-    clean_control_chars(&text)
+    scrub_invisible(&text)
 }
 
-/// 去掉解出来但不是文字的码位。
+/// 去掉解出来但读者看不见的码位。
 ///
 /// 子集字体常把不可见的排版标记（零宽占位之类）映射到 C0 码位，实测一份 WPS 导出的
-/// PDF 里 "AI<0x01>Agent" 就是这样——控制字符进了前端文本面板会显示成破框/截断。
-/// 换行与制表保留，回车归一为换行，其余 C0 和 DEL 丢弃。
-pub(crate) fn clean_control_chars(text: &str) -> String {
-    if !text
-        .chars()
-        .any(|c| c != '\n' && c != '\t' && (c.is_control() || c == '\u{7f}'))
-    {
+/// PDF 里 "AI<0x01>Agent" 就是这样，软连字符也一样——它们进了前端文本面板只会变成
+/// 破框、凭空多出的破折号或看似截断的空洞。
+///
+/// 换行与制表保留（那是内容流自己表达的排版），回车归一为换行；其余 C0、DEL、
+/// 软连字符丢弃。 bidi/连字这类影响字形拼接的 Cf 标记保留，删了会改坏阿拉伯文排版。
+pub(crate) fn scrub_invisible(text: &str) -> String {
+    let dirty = |c: char| {
+        (c.is_control() || matches!(c, '\u{7f}' | '\u{ad}')) && !matches!(c, '\n' | '\t')
+    };
+    if !text.chars().any(dirty) {
         return text.to_string();
     }
     let mut out = String::with_capacity(text.len());
@@ -450,7 +453,7 @@ pub(crate) fn clean_control_chars(text: &str) -> String {
         match ch {
             '\n' | '\t' => out.push(ch),
             '\r' => out.push('\n'),
-            _ if ch.is_control() || ch == '\u{7f}' => {}
+            _ if dirty(ch) => {}
             _ => out.push(ch),
         }
     }
@@ -489,7 +492,7 @@ fn info_string(doc: &Document, key: &[u8]) -> Option<String> {
     let dict = info_obj.as_dict().ok()?;
     match dict.get(key).ok()? {
         Object::String(bytes, _) => {
-            let text = clean_control_chars(&decode_pdf_string(bytes));
+            let text = scrub_invisible(&decode_pdf_string(bytes));
             if text.trim().is_empty() {
                 None
             } else {
@@ -1080,20 +1083,6 @@ mod tests {
         assert_eq!(text, "A");
     }
 
-    /// 真实语料导出（本地量版用，不参与常规测试）
-    #[test]
-    #[ignore]
-    fn dump_real_corpus() {
-        let list = std::fs::read_to_string("/tmp/pdf_corpus.txt").unwrap();
-        for (idx, path) in list.lines().filter(|l| !l.trim().is_empty()).enumerate() {
-            let out = match extract_pdf_text(path) {
-                Ok(t) => t,
-                Err(e) => format!("ERR {}", e),
-            };
-            std::fs::write(format!("/tmp/pdfeval3/corpus{:02}.mine.txt", idx), out).unwrap();
-        }
-    }
-
     /// 换行与制表是内容流自己表达的排版信息，清洗时必须原样保留；回车归一成换行。
     #[test]
     fn line_breaks_survive_the_scrub() {
@@ -1104,12 +1093,16 @@ mod tests {
             char::from(9),
             char::from(10),
         );
+        let soft_hyphen = '\u{ad}';
         assert_eq!(
-            clean_control_chars(&format!("a{soh}b{del}c{cr}{tab}d")),
-            format!("abc{lf}{tab}d")
+            scrub_invisible(&format!("a{soh}b{del}c{cr}{tab}d{soft_hyphen}e")),
+            format!("abc{lf}{tab}de")
         );
+        // 影响字形拼接的 Cf 标记不能删：阿拉伯文的数字前缀标记要原样留着
+        let arabic = '\u{600}';
+        assert_eq!(scrub_invisible(&format!("{arabic}١")), format!("{arabic}١"));
         // 干净文本走快速路径：内容一字不改
         let clean = "普通文本 already fine";
-        assert_eq!(clean_control_chars(clean), clean);
+        assert_eq!(scrub_invisible(clean), clean);
     }
 }
