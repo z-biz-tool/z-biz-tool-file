@@ -54,15 +54,10 @@ interface FileStore {
   // 选中的文件
   selectedFile: FileEntry | null;
   // 搜索关键词
-  searchQuery: string;
   // 搜索结果
-  searchResults: SearchResultItem[];
   // 是否正在搜索
-  isSearching: boolean;
   // 搜索模式：filename | content
-  searchMode: "filename" | "content";
   // 搜索根路径
-  searchRoot: string;
   // 是否显示隐藏文件
   showHidden: boolean;
   // 剪贴板
@@ -77,8 +72,6 @@ interface FileStore {
   // 文件标签/备注（path → tag）
   tagsByPath: Record<string, { color: string; label: string; note: string }>;
   // AI 功能相关状态
-  aiLastSearch: string;
-  aiSearchResults: Array<{ path: string; score: number; summary?: string }>;
   // 媒体库状态
   mediaViewMode: MediaViewMode;
   mediaGallerySize: MediaGallerySize;
@@ -89,15 +82,10 @@ interface FileStore {
   // 设置选中文件
   setSelectedFile: (file: FileEntry | null) => void;
   // 设置搜索关键词
-  setSearchQuery: (query: string) => void;
   // 设置搜索结果
-  setSearchResults: (results: SearchResultItem[]) => void;
   // 设置搜索状态
-  setIsSearching: (searching: boolean) => void;
   // 设置搜索模式
-  setSearchMode: (mode: "filename" | "content") => void;
   // 设置搜索根路径
-  setSearchRoot: (path: string) => void;
   // 设置是否显示隐藏文件
   setShowHidden: (show: boolean) => void;
   // 设置剪贴板
@@ -120,8 +108,6 @@ interface FileStore {
   setTag: (path: string, tag: { color: string; label: string; note: string }) => Promise<void>;
   removeTag: (path: string) => Promise<void>;
   // AI 功能状态更新
-  setAiLastSearch: (query: string) => void;
-  setAiSearchResults: (results: Array<{ path: string; score: number; summary?: string }>) => void;
   // 媒体库状态更新
   setMediaViewMode: (mode: "gallery" | "list") => void;
   setMediaGallerySize: (size: "small" | "medium" | "large") => void;
@@ -131,11 +117,6 @@ export const useFileStore = create<FileStore>((set) => ({
   currentPath: "",
   fileList: [],
   selectedFile: null,
-  searchQuery: "",
-  searchResults: [],
-  isSearching: false,
-  searchMode: "filename",
-  searchRoot: "",
   showHidden: false,
   clipboard: [],
   bookmarks: JSON.parse(localStorage.getItem("z-tool-bookmarks") || "[]") as BookmarkItem[],
@@ -144,8 +125,6 @@ export const useFileStore = create<FileStore>((set) => ({
   activeTabId: null,
   tagsByPath: {} as Record<string, { color: string; label: string; note: string }>,
   // AI 功能相关状态
-  aiLastSearch: "",
-  aiSearchResults: [],
   // 媒体库状态
   mediaViewMode: "gallery",
   mediaGallerySize: "medium",
@@ -153,11 +132,6 @@ export const useFileStore = create<FileStore>((set) => ({
   setCurrentPath: (path) => set({ currentPath: path }),
   setFileList: (list) => set({ fileList: list }),
   setSelectedFile: (file) => set({ selectedFile: file }),
-  setSearchQuery: (query) => set({ searchQuery: query }),
-  setSearchResults: (results) => set({ searchResults: results }),
-  setIsSearching: (searching) => set({ isSearching: searching }),
-  setSearchMode: (mode) => set({ searchMode: mode }),
-  setSearchRoot: (path) => set({ searchRoot: path }),
   setShowHidden: (show) => set({ showHidden: show }),
   setClipboard: (items, operation) =>
     set({
@@ -281,8 +255,6 @@ export const useFileStore = create<FileStore>((set) => ({
     });
   },
   // AI 功能状态更新
-  setAiLastSearch: (query) => set({ aiLastSearch: query }),
-  setAiSearchResults: (results) => set({ aiSearchResults: results }),
   // 媒体库状态更新
   setMediaViewMode: (mode) => set({ mediaViewMode: mode }),
   setMediaGallerySize: (size) => set({ mediaGallerySize: size }),
