@@ -56,6 +56,7 @@ import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
 import { batchToast, placeBatch } from "./utils/conflictChoice";
+import { openRejectText, resolveOpen, resolveRenameTarget } from "./utils/openBehavior";
 import type { HashTarget } from "./utils/batchHash";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
@@ -761,6 +762,44 @@ function AppShellInner() {
     setRenameModal({ visible: false, path: "", oldName: "" });
   }, [renameModal.path, newName, currentPath, loadDirectory, message]);
 
+  /**
+   * 打开：目录进入、文件交给默认应用。
+   * 双面板视图一直就是这么做的，主表格却只认目录 —— 双击文件没有任何反应，
+   * 用户只能右键找"用默认应用打开"。
+   */
+  const handleOpen = useCallback(
+    (entries: FileEntry[]) => {
+      const action = resolveOpen(entries);
+      if (action.kind === "none") {
+        // 多选不逐个 open：一次 Enter 弹出几十个外部应用窗口不是用户想要的
+        message.warning(openRejectText(action.reason));
+        return;
+      }
+      if (action.kind === "navigate") {
+        navigateTo(action.path);
+        return;
+      }
+      invoke("open_with_default_app", { path: action.path }).catch((err) =>
+        message.error("打开失败: " + err),
+      );
+    },
+    [message, navigateTo],
+  );
+
+  /** 重命名：目录也要能改名（原先的 Enter 分支写死了 !is_dir） */
+  const handleRenameOne = useCallback(
+    (entries: FileEntry[]) => {
+      const target = resolveRenameTarget(entries);
+      if (!target) {
+        message.warning(entries.length ? "一次只能重命名一项" : "请先选中要重命名的项目");
+        return;
+      }
+      setRenameModal({ visible: true, path: target.path, oldName: target.name });
+      setNewName(target.name);
+    },
+    [message],
+  );
+
   // 单文件右键菜单
   const singleContextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
     const lowerName = record.name.toLowerCase();
@@ -781,9 +820,13 @@ function AppShellInner() {
     const isText = /\.(txt|md|markdown|json|ya?ml|toml|xml|html?|css|scss|less|sass|js|jsx|ts|tsx|vue|svelte|py|rs|go|java|kt|swift|c|h|cc|cpp|hpp|sh|bash|zsh|sql|log|conf|ini|csv|tsv)$/i.test(lowerName);
 
     const items: MenuProps["items"] = [
-      { key: "open", label: "用默认应用打开", icon: <RocketOutlined />, onClick: () => {
-        invoke("open_with_default_app", { path: record.path }).catch((err) => message.error("打开失败: " + err));
-      }},
+      {
+        key: "open",
+        // 目录交给系统 open 会在 Finder 里再开一个窗口 —— 在文件管理器里"打开"应该是走过去
+        label: isDir ? "打开" : "用默认应用打开",
+        icon: <RocketOutlined />,
+        onClick: () => handleOpen([record]),
+      },
       ...(!isDir ? [{
         key: "quicklook", label: "Quick Look 预览", icon: <EyeOutlined />, onClick: () => {
           invoke("quick_look_preview", { path: record.path }).catch((err) => message.error("Quick Look 失败: " + err));
@@ -840,10 +883,7 @@ function AppShellInner() {
       { type: "divider" as const },
       { key: "copy", label: "复制 (⌘+C)", icon: <CopyOutlined />, onClick: () => handleCopy([record]) },
       { key: "cut", label: "剪切 (⌘+X)", icon: <ScissorOutlined />, onClick: () => handleCut([record]) },
-      { key: "rename", label: "重命名", icon: <EditOutlined />, onClick: () => {
-        setRenameModal({ visible: true, path: record.path, oldName: record.name });
-        setNewName(record.name);
-      }},
+      { key: "rename", label: "重命名 (F2)", icon: <EditOutlined />, onClick: () => handleRenameOne([record]) },
       { key: "copy-path", label: "复制完整路径", icon: <CopyFilled />, onClick: () => {
         navigator.clipboard.writeText(record.path);
         message.success("已复制路径");
@@ -875,7 +915,7 @@ function AppShellInner() {
     ];
 
     return items;
-  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message, tagsByPath, openTab]);
+  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message, tagsByPath, openTab, handleOpen, handleRenameOne]);
 
   // 多选右键菜单（基于 selectedRowKeys）
   const multiContextMenuItems = useCallback((records: FileEntry[]): MenuProps["items"] => {
@@ -1098,16 +1138,16 @@ function AppShellInner() {
             draggable
             onDragStart={(e) => handleRowDragStart(e, record)}
             onDragEnd={handleRowDragEnd}
-            // 单击选中、双击打开 —— 跟 macOS Finder 一致
+            // 单击选中、双击打开 —— 跟 macOS Finder 一致（文件也终于能双击打开了）
             // cell 上不放 onClick，避免和行级 onClick（handleRowClick）重复触发
-            onDoubleClick={() => record.is_dir && navigateTo(record.path)}
+            onDoubleClick={() => handleOpen([record])}
             style={{
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
               gap: 6,
             }}
-            title={`${visual.label}${tag?.label ? ` · 🏷 ${tag.label}` : ""}${tag?.note ? ` · 📝 ${tag.note}` : ""} · 拖拽以移动到其他目录；双击打开文件夹`}
+            title={`${visual.label}${tag?.label ? ` · 🏷 ${tag.label}` : ""}${tag?.note ? ` · 📝 ${tag.note}` : ""} · 拖拽以移动到其他目录；双击打开`}
           >
             {/* 标签色块（用户自定义的，优先级高于类型色条） */}
             {tagColor && (
@@ -1185,7 +1225,7 @@ function AppShellInner() {
       onHeaderCell: () => ({ "data-column-key": "modified" } as React.ThHTMLAttributes<HTMLTableHeaderCellElement>),
       render: (modified: number) => formatTime(modified),
     },
-  ], [selectedFile, handleRowDragStart, handleRowDragEnd, navigateTo, columnWidths]);
+  ], [selectedFile, handleRowDragStart, handleRowDragEnd, navigateTo, handleOpen, columnWidths]);
 
   // 快速过滤后的 fileList（用于表格）
   const filteredFileList = useMemo(
@@ -1286,13 +1326,10 @@ function AppShellInner() {
     { key: "Delete", handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站" },
     { key: "Backspace", meta: true, shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中" },
     { key: "Delete", shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中" },
-    { key: "Enter", handler: () => {
-      // 重命名快捷键：选中文件时按 Enter 打开重命名
-      if (selectedFile && !selectedFile.is_dir) {
-        setRenameModal({ visible: true, path: selectedFile.path, oldName: selectedFile.name });
-        setNewName(selectedFile.name);
-      }
-    }, allowInInput: false, description: "重命名选中文件" },
+    // Enter 一直是"改文件名"，但只对单个文件生效：选中目录按 Enter 什么都没有发生，
+    // 想改文件夹名也只能右键。现在 Enter 与双击同义，重命名让给 F2（两平台通用）。
+    { key: "Enter", handler: () => handleOpen(selectedFiles), allowInInput: false, description: "打开选中项（目录进入 / 文件用默认应用）" },
+    { key: "F2", handler: () => handleRenameOne(selectedFiles), allowInInput: false, description: "重命名选中项" },
     { key: "Escape", handler: () => {
       // 关闭最上层弹窗
       if (renameModal.visible) { setRenameModal({ visible: false, path: "", oldName: "" }); setNewName(""); }
@@ -1314,6 +1351,7 @@ function AppShellInner() {
     openTab, closeTab, activeTabId,
     // 新增的 ⌘A / Delete 系：漏了会让闭包拿到首帧的列表和选择集
     filteredFileList, setSelectedRowKeys, handleDeleteMany,
+    handleOpen, handleRenameOne,
     renameModal.visible, createModal.visible, batchRenameOpen, propertiesOpen,
     dualPanelOpen, duplicateFinderOpen, hashCalcOpen, dirSyncOpen, zipBrowserOpen,
     newFileTemplateOpen, terminalVisible,
@@ -1824,9 +1862,7 @@ function AppShellInner() {
                       //   点击：单选 ｜ ⌘+点击：toggle ｜ Shift+点击：区间
                       onRow={(record) => ({
                         onClick: (e) => handleRowClick(e, record),
-                        onDoubleClick: () => {
-                          if (record.is_dir) navigateTo(record.path);
-                        },
+                        onDoubleClick: () => handleOpen([record]),
                       })}
                       rowClassName={(record) =>
                         selectedRowKeys.includes(record.path) ? "z-tool-row-selected" : ""
@@ -1894,9 +1930,7 @@ function AppShellInner() {
                           setSelectedRowKeys([entry.path]);
                         }
                       }}
-                      onDoubleClick={(entry) => {
-                        if (entry.is_dir) navigateTo(entry.path);
-                      }}
+                      onDoubleClick={(entry) => handleOpen([entry])}
                       onDragStart={(entry, e) => handleRowDragStart(e, entry)}
                       onDragEnd={handleRowDragEnd}
                     />
