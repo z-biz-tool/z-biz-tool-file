@@ -1651,6 +1651,53 @@ fn to_secs(t: std::time::SystemTime) -> u64 {
         .unwrap_or(0)
 }
 
+/// 读满 buf，可能提前 EOF；返回实际读到的字节数。
+fn read_fill<R: IoRead>(r: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut total = 0;
+    while total < buf.len() {
+        match r.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
+}
+
+/// 分块流式比内容，任一块不同立即收手（两侧长度不同时，先读完的一侧会在下一轮
+/// 交出 0 字节而另一侧还有，因而同样落到 `false`）。
+/// 打不开也返回 `false` —— 宁可多报一条 modified，也不能把读不到的文件说成一致。
+fn same_content(a: &Path, b: &Path) -> bool {
+    const CHUNK: usize = 64 * 1024;
+    let (fa, fb) = match (fs::File::open(a), fs::File::open(b)) {
+        (Ok(x), Ok(y)) => (x, y),
+        _ => return false,
+    };
+    let (mut ra, mut rb) = (fa, fb);
+    let mut buf_a = vec![0u8; CHUNK];
+    let mut buf_b = vec![0u8; CHUNK];
+    loop {
+        let na = match read_fill(&mut ra, &mut buf_a) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let nb = match read_fill(&mut rb, &mut buf_b) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if na != nb {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+        if buf_a[..na] != buf_b[..na] {
+            return false;
+        }
+    }
+}
+
 /// 比较两个目录，返回扁平的差异列表（源在左、目标在右）。
 ///
 /// 判定沿用 rsync 的粗粒度口径：大小或修改时间任一不同即视为"已修改"。
@@ -1684,15 +1731,22 @@ pub fn compare_directories(
                 left_size: Some(*lsize),
                 right_size: None,
             }),
-            Some((rsize, rmtime)) if (lsize, lmtime) != (rsize, rmtime) => entries.push(SyncDiffEntry {
-                name: rel.clone(),
-                status: SyncDiffStatus::Modified,
-                left_modified: Some(to_secs(*lmtime)),
-                right_modified: Some(to_secs(*rmtime)),
-                left_size: Some(*lsize),
-                right_size: Some(*rsize),
-            }),
-            Some(_) => {}
+            Some((rsize, rmtime)) => {
+                // 元数据一致不等于内容一致：容器/网络文件系统（CI 的 ubuntu runner 实测如此）
+                // 的 mtime 精度只到秒，同尺寸、同一秒写入的两份不同内容会被判成"相同"，
+                // 于是同步永远漏掉它。所以元数据说"一样"时，再真比一次内容。
+                let meta_same = lsize == rsize && lmtime == rmtime;
+                if !meta_same || !same_content(&left_path.join(rel), &right_path.join(rel)) {
+                    entries.push(SyncDiffEntry {
+                        name: rel.clone(),
+                        status: SyncDiffStatus::Modified,
+                        left_modified: Some(to_secs(*lmtime)),
+                        right_modified: Some(to_secs(*rmtime)),
+                        left_size: Some(*lsize),
+                        right_size: Some(*rsize),
+                    });
+                }
+            }
         }
     }
     for (rel, (rsize, rmtime)) in &right {
@@ -2900,6 +2954,43 @@ mod sync_tests {
         let got = pairs(&compare(&l, &r));
         assert_eq!(got.len(), 1, "同尺寸不同内容必须算差异，实得 {:?}", got);
         assert_eq!(got[0].1, "modified");
+    }
+
+    /// 把 mtime 定死到同一时刻。本机 APFS 有亚秒精度，不对齐就打不到"元数据一致"
+    /// 这条分支 —— 而 CI 的 ubuntu runner 上所有写入都是这个状态，那才是红三条腿的真实条件。
+    fn align_mtime(paths: &[PathBuf], at: std::time::SystemTime) {
+        for p in paths {
+            let f = fs::OpenOptions::new().write(true).open(p).unwrap();
+            f.set_times(fs::FileTimes::new().set_modified(at)).unwrap();
+        }
+    }
+
+    #[test]
+    fn compare_falls_back_to_content_when_metadata_is_identical() {
+        let dir = case("content-fallback");
+        let (l, r) = (dir.join("src"), dir.join("dst"));
+        write(&l.join("diff.txt"), "aaaa");
+        write(&r.join("diff.txt"), "bbbb");
+        write(&l.join("same.txt"), "keep");
+        write(&r.join("same.txt"), "keep");
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        align_mtime(
+            &[
+                l.join("diff.txt"),
+                r.join("diff.txt"),
+                l.join("same.txt"),
+                r.join("same.txt"),
+            ],
+            at,
+        );
+
+        // 元数据两侧完全一致：内容不同要报出来，内容相同不能进表
+        // （否则大目录比对会把整棵树倒进差异列表）。
+        assert_eq!(
+            pairs(&compare(&l, &r)),
+            vec![("diff.txt".to_string(), "modified")],
+            "元数据一致时必须以内容为准"
+        );
     }
 
     #[test]
