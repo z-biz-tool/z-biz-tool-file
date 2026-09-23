@@ -7,25 +7,10 @@ import { useState, useEffect, useMemo } from "react";
 import { Spin, theme, Image, Dropdown, type MenuProps } from "antd";
 import { PictureOutlined, VideoCameraOutlined, AudioOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
-import { getFileType, type FileEntry } from "../stores/fileStore";
+import type { FileEntry } from "../stores/fileStore";
 import { getFileTypeVisual } from "../utils/fileTypeIcon";
 import { convertFileSrc } from "@tauri-apps/api/core";
-
-// 媒体类型枚举
-export type MediaType = "image" | "video" | "audio";
-
-interface MediaItem {
-  path: string;
-  name: string;
-  type: MediaType;
-  thumbnail?: string;
-  metadata?: {
-    duration?: string;
-    resolution?: string;
-    size?: number;
-    date?: string;
-  };
-}
+import { toMediaItems, type MediaItem, type MediaType } from "../utils/mediaType";
 
 interface MediaGalleryProps {
   directory: string;
@@ -37,38 +22,7 @@ interface MediaGalleryProps {
 // 获取媒体文件列表
 async function fetchMediaFiles(directory: string, type: MediaType): Promise<MediaItem[]> {
   try {
-    const files = await invoke<FileEntry[]>("list_directory", { path: directory });
-    
-    const mediaItems: MediaItem[] = [];
-    
-    for (const file of files) {
-      if (!file.is_dir) {
-        const fileType = getFileType(file.name);
-        let mediaType: MediaType | null = null;
-        
-        if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"].includes(fileType)) {
-          mediaType = "image";
-        } else if (["mp4", "webm", "ogg", "mov", "avi", "mkv"].includes(fileType)) {
-          mediaType = "video";
-        } else if (["mp3", "wav", "flac", "aac", "m4a", "wma"].includes(fileType)) {
-          mediaType = "audio";
-        }
-        
-        if (mediaType && mediaType === type) {
-          mediaItems.push({
-            path: file.path,
-            name: file.name,
-            type: mediaType,
-            metadata: {
-              size: file.size,
-              date: new Date(file.modified * 1000).toLocaleDateString(),
-            },
-          });
-        }
-      }
-    }
-    
-    return mediaItems;
+    return toMediaItems(await invoke<FileEntry[]>("list_directory", { path: directory }), type);
   } catch (error) {
     console.error(`Failed to fetch ${type} files:`, error);
     return [];
