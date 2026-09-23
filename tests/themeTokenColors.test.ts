@@ -21,6 +21,7 @@ const BANNED = [
   /color:\s*"#(?:888|999|777|666|555|444)"/,
   /background:\s*"#(?:fafafa|f5f5f5|f0f0f0)"/,
   /1px solid #(?:e8e8e8|f0f0f0|eee)\b/,
+  /linear-gradient\([^)]*#(?:ffffff|fff\b|f8fafd)/,
 ];
 const THEMED = /isDark|===\s*"dark"|themeDark|token\./;
 const ALLOW_FILES = new Set<string>([]);
@@ -34,10 +35,13 @@ function hits(): string[] {
     // ROOT 没有结尾斜杠，slice 出来会带一个前导 "/" —— 不剥掉的话豁免清单永远对不上
     const rel = file.slice(ROOT.length).replace(/^\/+/, "");
     if (ALLOW_FILES.has(rel)) continue;
-    readFileSync(file, "utf8")
-      .split("\n")
-      .forEach((line, i) => {
-        if (THEMED.test(line) || line.includes("var(--ant-")) return;
+    const lines = readFileSync(file, "utf8").split("\n");
+    lines.forEach((line, i) => {
+        if (line.includes("var(--ant-")) return;
+        // 三元分支常常写成 background: mode === "dark" ? … / … "#ffffff" 两行，
+        // 只看当前行会把"已经分主题"的那半误判成违规 —— 往前看两行
+        const window = lines.slice(Math.max(0, i - 2), i + 1).join(" ");
+        if (THEMED.test(window)) return;
         if (BANNED.some((re) => re.test(line))) out.push(`${rel}:${i + 1}`);
       });
   }
@@ -49,6 +53,7 @@ describe("亮色字面量", () => {
     // 判定式失配的话"零违规"是假的，所以先自证规则在干活
     expect(BANNED.some((re) => re.test('background: "#fafafa"'))).toBe(true);
     expect(BANNED.some((re) => re.test('color: "#888"'))).toBe(true);
+    expect(BANNED.some((re) => re.test("background: 'linear-gradient(135deg, #ffffff 0%, #f8fafd 100%)'"))).toBe(true);
     expect(THEMED.test('const bg = isDark ? "#1a1a1a" : "#ffffff";')).toBe(true);
     expect(THEMED.test("  color: token.colorTextSecondary,")).toBe(true);
   });

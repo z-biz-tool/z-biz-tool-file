@@ -121,10 +121,11 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
       style={{
         display: "flex",
         alignItems: "center",
-        background: "linear-gradient(180deg, #f8fafd 0%, #eef2f7 100%)",
-        borderBottom: "1px solid rgba(0,0,0,0.06)",
+        // 标签条原来是写死的亮白渐变 + 黑边：深色主题下它在工具栏上方横着一条白条
+        background: "var(--ant-color-bg-layout)",
+        borderBottom: "1px solid var(--ant-color-border-secondary)",
         paddingLeft: 4,
-        boxShadow: "0 2px 4px rgba(0,0,0,0.02)",
+        boxShadow: "0 2px 4px var(--ant-color-fill-secondary)",
       }}
     >
       {/* v5 的 cardGutter 在 v6 已被移除（tsc：Property 'cardGutter' does not exist）。

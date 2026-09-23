@@ -238,10 +238,11 @@ const Omnibar: FC<OmnibarProps> = ({
         alignItems: 'center',
         gap: 10,
         padding: '8px 14px',
-        background: 'linear-gradient(135deg, #ffffff 0%, #f8fafd 100%)',
+        // 原来是写死的亮白渐变 + 黑边黑阴影：深色主题下这条路径栏是一块刺眼的白条
+        background: 'var(--ant-color-bg-layout)',
         borderRadius: 12,
-        border: '1px solid rgba(0,0,0,0.06)',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+        border: '1px solid var(--ant-color-border-secondary)',
+        boxShadow: '0 2px 8px var(--ant-color-fill-secondary)',
         transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
       }}
       onMouseEnter={(e) => {
