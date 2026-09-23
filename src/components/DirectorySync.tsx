@@ -20,6 +20,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { formatFileSize } from "../stores/fileStore";
+import { buildSyncPlan, pickSyncable, syncPlanSummary, type SyncDirection } from "../utils/syncPlan";
 
 interface Props {
   open: boolean;
@@ -42,8 +43,6 @@ interface SyncResult {
   errors: string[];
 }
 
-type SyncDirection = "left_to_right" | "right_to_left";
-
 const STATUS_MAP: Record<
   DiffEntry["status"],
   { label: string; color: string }
@@ -59,21 +58,13 @@ function formatTimestamp(ts: number | null): string {
 }
 
 /** 当前方向下会被同步的条目：以源为准，对侧独有的文件不动 */
-function pickSyncable(
-  entries: DiffEntry[],
-  direction: SyncDirection
-): DiffEntry[] {
-  const wanted: DiffEntry["status"] =
-    direction === "left_to_right" ? "only_left" : "only_right";
-  return entries.filter((e) => e.status === wanted || e.status === "modified");
-}
 
 export default function DirectorySync({
   open,
   onClose,
   currentPath,
 }: Props) {
-  const { message } = AntdApp.useApp();
+  const { message, modal } = AntdApp.useApp();
   const { token } = theme.useToken();
   const [leftDir, setLeftDir] = useState(currentPath);
   const [rightDir, setRightDir] = useState("");
@@ -137,24 +128,34 @@ export default function DirectorySync({
   }, [leftDir, rightDir]);
 
   const handleSync = useCallback(async () => {
-    const toSync = pickSyncable(diffEntries, syncDirection);
-    if (toSync.length === 0) {
+    const plan = buildSyncPlan(diffEntries, syncDirection, leftDir.trim(), rightDir.trim());
+    if (plan.total === 0) {
       message.info("没有需要同步的文件");
       return;
     }
-    const [sourceDir, targetDir] =
-      syncDirection === "left_to_right"
-        ? [leftDir.trim(), rightDir.trim()]
-        : [rightDir.trim(), leftDir.trim()];
+    // 这是全站唯一一个会覆盖别的文件的按钮，而方向是个随手可切的开关：
+    // 点下去之前必须把"从哪到哪、几项、其中几项会被盖掉"摊开确认一次。
+    const go = await new Promise<boolean>((resolve) => {
+      modal.confirm({
+        title: `同步 ${plan.total} 项？`,
+        content: syncPlanSummary(plan),
+        okText: "同步",
+        okType: "danger",
+        cancelText: "取消",
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!go) return;
 
     setSyncing(true);
     let copied = 0;
     try {
       // 一条命令交给后端：嵌套子目录、覆盖同名、逐项失败都不该由前端循环拼出来
       const res = await invoke<SyncResult>("sync_directories", {
-        sourceDir,
-        targetDir,
-        names: toSync.map((e) => e.name),
+        sourceDir: plan.sourceDir,
+        targetDir: plan.targetDir,
+        names: plan.names,
       });
       copied = res.copied;
       if (res.copied > 0) {
@@ -171,7 +172,7 @@ export default function DirectorySync({
 
     // 重新比较以刷新结果：同步成功的那几项应当从列表里消失
     if (copied > 0) handleCompare();
-  }, [diffEntries, syncDirection, leftDir, rightDir, handleCompare]);
+  }, [diffEntries, syncDirection, leftDir, rightDir, handleCompare, message, modal]);
 
   const columns = [
     {
