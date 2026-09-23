@@ -135,16 +135,145 @@ fn read_hex(buf: &[u8], i: usize) -> Option<(Vec<u8>, usize)> {
     Some((out, end + 1))
 }
 
+/// 3×3 仿射矩阵的 6 个分量，沿用 PDF 的行向量写法 `[a b c d e f]`：
+/// 点 (x,y) → (a·x + c·y + e, b·x + d·y + f)。
+#[derive(Clone, Copy)]
+struct Affine([f32; 6]);
+
+impl Affine {
+    const IDENTITY: Affine = Affine([1., 0., 0., 1., 0., 0.]);
+
+    /// 先作用 `self` 再作用 `other`；Td/cm 这类"前乘"操作都走这里。
+    fn then(self, other: Affine) -> Affine {
+        let [a, b, c, d, e, f] = self.0;
+        let [oa, ob, oc, od, oe, of] = other.0;
+        Affine([
+            a * oa + b * oc,
+            a * ob + b * od,
+            c * oa + d * oc,
+            c * ob + d * od,
+            e * oa + f * oc + oe,
+            e * ob + f * od + of,
+        ])
+    }
+
+    fn translate(tx: f32, ty: f32) -> Affine {
+        Affine([1., 0., 0., 1., tx, ty])
+    }
+}
+
+/// 一页内容流当前的文本/图形状态。折行判定要靠它：
+/// 只有基线真的移动了才算换行，否则同一行的分片段会被拆成一堆碎行。
+#[derive(Clone, Copy)]
+struct TextState {
+    /// 文本行矩阵（Tm/Td/TD/T* 累积出来的）
+    line: Affine,
+    /// 当前变换矩阵，`cm` 会改写它；q/Q 与文本状态一起保存/恢复
+    ctm: Affine,
+    leading: f32,
+    size: f32,
+}
+
+impl TextState {
+    fn new() -> Self {
+        Self {
+            line: Affine::IDENTITY,
+            ctm: Affine::IDENTITY,
+            leading: 0.,
+            size: 0.,
+        }
+    }
+
+    /// 当前文本行原点落到设备坐标后的位置，以及一个文字单位在设备下的长度。
+    fn cursor(&self) -> ((f32, f32), f32) {
+        let eff = self.line.then(self.ctm);
+        let [a, b, _, _, x, y] = eff.0;
+        let unit = (a * a + b * b).sqrt();
+        // 竖排（旋转约 90°）时行与行沿 x 排布，"跨行/行内"两个方向要互换
+        let (across, along) = if b.abs() > a.abs() { (x, y) } else { (y, x) };
+        // 字高必须按 size × unit 算：Apple 许可证这类生产者写 `10 0 0 10 x y Tm /F 1 Tf`，
+        // 字号是 1 而缩放藏在矩阵里。直接给字号设下限会把阈值放大十倍，整段文字糊成一行。
+        ((across, along), self.size.max(1.) * unit)
+    }
+}
+
+/// 上一段画下去的字落在哪里，外加这一行迄今的最大字高。
+#[derive(Clone, Copy)]
+struct LastDraw {
+    /// "跨行"方向坐标（横排即基线 y）：与上一段比，差出半个字高就算另起一行
+    across: f32,
+    /// "行内"方向坐标（横排即 x）：明显倒退说明回到了行首或换了一栏
+    prev: f32,
+    /// 阈值按整行最大字高算：7pt 上标抬升 3.6pt 不该自成一行的
+    /// （BERT[1] 会被切成三行），而 10pt 正文 12pt 的行距又必须断开
+    height: f32,
+}
+
+/// 把一段文字接到 `out` 末尾：基线移动超过阈值才补换行。
+/// 行内不插空格——中文按字绘制，插空格会把句子切断（空格本身由内容流里的 `( )` 提供）。
+fn append_text(
+    out: &mut String,
+    state: &TextState,
+    line: &mut Option<LastDraw>,
+    text: &str,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let ((across, along), height) = state.cursor();
+    let broke = match *line {
+        Some(anchor) => {
+            let limit = anchor.height.max(height);
+            (across - anchor.across).abs() > limit * 0.5 || along - anchor.prev < -limit
+        }
+        None => false,
+    };
+    if broke && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(text);
+    *line = match *line {
+        Some(anchor) if !broke => Some(LastDraw {
+            across,
+            prev: along,
+            height: anchor.height.max(height),
+        }),
+        _ => Some(LastDraw {
+            across,
+            prev: along,
+            height,
+        }),
+    };
+}
+
 /// 从一页（已解码的）内容流里取出可见文本。
-/// 只认展示文本的操作符（Tj、TJ、'、"），并把换行/定位操作符折算成行边界，
-/// 否则整页会挤成一行。`Tf` 决定后续字符串按哪个字体的编码解释。
+/// 展示文本的操作符（Tj、TJ、'、"）负责输出，定位操作符（Td、TD、T*、Tm、TL、cm）
+/// 只更新文本状态，画字时再按基线是否移动决定折行。`Tf` 决定后续字符串按哪个字体的编码解释。
 fn page_text(content: &[u8], fonts: &HashMap<Vec<u8>, FontMap>) -> String {
     let mut out = String::new();
     // 连续出现的字符串操作数；遇到展示操作符才被消费
     let mut pending: Vec<String> = Vec::new();
+    // 数字操作数，按算符取用（Td 取末尾两个、Tm 取末尾六个）
+    let mut operands: Vec<f32> = Vec::new();
+    let mut state = TextState::new();
+    // q/Q 保存恢复的是整个图形状态，文本矩阵也在其中
+    let mut stack: Vec<TextState> = Vec::new();
+    // 当前行的锚点（画字时更新）
+    let mut line: Option<LastDraw> = None;
     let mut current_font: Option<Vec<u8>> = None;
     let mut last_name: Option<Vec<u8>> = None;
     let mut i = 0usize;
+
+    // 取末尾 n 个数字；数量不足（畸形流）时返回 None，保持原状态不动
+    macro_rules! tail {
+        ($n:expr) => {
+            if operands.len() >= $n {
+                Some([operands[operands.len() - $n], operands[operands.len() - 1]])
+            } else {
+                None
+            }
+        };
+    }
 
     while i < content.len() {
         let byte = content[i];
@@ -175,7 +304,19 @@ fn page_text(content: &[u8], fonts: &HashMap<Vec<u8>, FontMap>) -> String {
             i = end;
             continue;
         }
-        if is_delimiter(byte) || byte.is_ascii_digit() || byte == b'-' || byte == b'.' || byte == b'+' {
+        if byte.is_ascii_digit() || byte == b'-' || byte == b'+' || byte == b'.' {
+            let start = i;
+            while i < content.len() && matches!(content[i], b'0'..=b'9' | b'.' | b'-' | b'+') {
+                i += 1;
+            }
+            if let Ok(value) = std::str::from_utf8(&content[start..i]) {
+                if let Ok(number) = value.parse::<f32>() {
+                    operands.push(number);
+                }
+            }
+            continue;
+        }
+        if is_delimiter(byte) {
             i += 1;
             continue;
         }
@@ -184,29 +325,91 @@ fn page_text(content: &[u8], fonts: &HashMap<Vec<u8>, FontMap>) -> String {
         while i < content.len() && !is_delimiter(content[i]) {
             i += 1;
         }
-        match &content[start..i] {
+        let op = &content[start..i];
+        match op {
             b"Tf" => {
                 current_font = last_name.take();
+                // `/F1 12 Tf` 里只有字号是数字，字体名走 /Name 分支，
+                // 按"末尾两个数字"取操作数会一个都取不到，字高永远停在默认值。
+                if let Some([_, size]) = tail!(1) {
+                    state.size = size;
+                }
             }
-            b"Tj" | b"'" | b"\"" => {
-                if let Some(text) = pending.last() {
-                    out.push_str(text);
+            b"Tj" => {
+                if let Some(text) = pending.pop() {
+                    append_text(&mut out, &state, &mut line, &text);
+                }
+                pending.clear();
+            }
+            b"'" | b"\"" => {
+                // 两者都隐含一次 T*：先换行再画字
+                let moved = Affine::translate(0., -state.leading).then(state.line);
+                state.line = moved;
+                if let Some(text) = pending.pop() {
+                    append_text(&mut out, &state, &mut line, &text);
                 }
                 pending.clear();
             }
             b"TJ" => {
-                for text in pending.drain(..) {
-                    out.push_str(&text);
+                let texts: Vec<String> = pending.drain(..).collect();
+                let joined = texts.concat();
+                append_text(&mut out, &state, &mut line, &joined);
+            }
+            b"Td" => {
+                if let Some([tx, ty]) = tail!(2) {
+                    let moved = Affine::translate(tx, ty).then(state.line);
+                    state.line = moved;
+                }
+                pending.clear();
+            }
+            b"TD" => {
+                if let Some([tx, ty]) = tail!(2) {
+                    state.leading = -ty;
+                    let moved = Affine::translate(tx, ty).then(state.line);
+                    state.line = moved;
+                }
+                pending.clear();
+            }
+            b"T*" => {
+                let moved = Affine::translate(0., -state.leading).then(state.line);
+                state.line = moved;
+                pending.clear();
+            }
+            b"TL" => {
+                if let Some([_, leading]) = tail!(1) {
+                    state.leading = leading;
                 }
             }
-            b"Td" | b"TD" | b"T*" | b"ET" => {
-                pending.clear();
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
+            b"Tm" => {
+                if operands.len() >= 6 {
+                    let six = &operands[operands.len() - 6..];
+                    state.line = Affine([six[0], six[1], six[2], six[3], six[4], six[5]]);
                 }
+                pending.clear();
+            }
+            b"BT" => {
+                state.line = Affine::IDENTITY;
+                pending.clear();
+            }
+            b"cm" => {
+                if operands.len() >= 6 {
+                    let six = &operands[operands.len() - 6..];
+                    let step = Affine([six[0], six[1], six[2], six[3], six[4], six[5]]);
+                    state.ctm = step.then(state.ctm);
+                }
+            }
+            b"q" => stack.push(state),
+            b"Q" => {
+                if let Some(saved) = stack.pop() {
+                    state = saved;
+                }
+            }
+            b"ET" => {
+                pending.clear();
             }
             _ => {}
         }
+        operands.clear();
     }
     out
 }
@@ -561,6 +764,104 @@ mod tests {
     fn tj_array_concatenates_its_pieces() {
         let stream = b"BT /F1 24 Tf [(He) -500 (llo) ( world)] TJ ET";
         assert_eq!(page_text(stream, &HashMap::new()).trim(), "Hello world");
+    }
+
+/// `Tf` 只有字号是数字（字体名走 /Name）。取"末尾两个数字"会一个都取不到，
+    /// 字高停在默认值，上标这种 3.6pt 的抬升就被当成了换行。
+    #[test]
+    fn font_size_from_tf_drives_the_break_threshold() {
+        let joined =
+            b"BT /F1 10 Tf 1 0 0 1 340 458 Tm (model BERT) Tj ET                BT /F2 7 Tf 1 0 0 1 365 461.955 Tm ([1]) Tj ET                BT /F1 10 Tf 1 0 0 1 374 458 Tm (, and on) Tj ET";
+        assert_eq!(page_text(joined, &HashMap::new()).trim(), "model BERT[1], and on");
+    }
+
+    /// Apple 许可证的真实写法：`10 0 0 10 40 374 Tm /TT2 1 Tf`，字号 1、缩放在矩阵里。
+    /// 字高必须按 size × 矩阵缩放算，给字号设下限会把阈值放大十倍，整段糊成一行。
+    #[test]
+    fn font_size_scaled_in_the_matrix_is_not_overestimated() {
+        let stream = b"BT 10 0 0 10 40 386 Tm /TT2 1 Tf (Line one) Tj ET \
+                       BT 10 0 0 10 40 374 Tm /TT2 1 Tf (Line two) Tj ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "Line one\nLine two");
+        let same = b"BT 10 0 0 10 40 374 Tm /TT2 1 Tf (So) Tj ET \
+                     BT 10 0 0 10 60 374 Tm /TT2 1 Tf (ft) Tj ET";
+        assert_eq!(page_text(same, &HashMap::new()).trim(), "Soft");
+    }
+
+    /// 真实生产者会把一行拆成若干片段、只用 Td 沿 x 推进来排版。
+    /// 旧实现见 Td 就折行，把 "SOFTWARE LICENSE" 切成一堆两三字的碎行。
+    #[test]
+    fn pieces_sharing_a_baseline_join_into_one_line() {
+        let stream = b"BT /F1 24 Tf 72 700 Td (SOFT) Tj 30 0 Td (WARE) Tj 24 0 Td ( LICENSE) Tj ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "SOFTWARE LICENSE");
+    }
+
+    /// 基线抖动（浮点定位、0.5pt 以内的偏移）不算换行
+    #[test]
+    fn sub_point_baseline_noise_stays_on_the_same_line() {
+        let stream = b"BT /F1 24 Tf 72 700 Td (Wi) Tj 12 0.4 Td (dth) Tj ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "Width");
+    }
+
+    /// 基线真的移动了才折行：阈值取字高的 30%，24pt 字体下 28pt 的行距必须断开
+    #[test]
+    fn a_real_baseline_step_breaks_the_line() {
+        let stream = b"BT /F1 24 Tf 72 700 Td (first) Tj 0 -28 Td (second) Tj ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "first\nsecond");
+    }
+
+    /// ' 与 " 隐含一次 T*：先按 leading 移到下一行，再画字
+    #[test]
+    fn quote_operators_imply_a_line_move() {
+        let stream = b"BT /F1 12 Tf 14 TL 72 700 Td (one) Tj (two) ' (three) \" ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "one\ntwo\nthree");
+    }
+
+    /// TD 除了移动还设定 leading（取 -ty），后续 T* 要用它
+    #[test]
+    fn td_sets_the_leading_used_by_star() {
+        let stream = b"BT /F1 12 Tf 72 700 TD (a) Tj 0 -20 TD (b) Tj T* (c) Tj T* (d) Tj ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "a\nb\nc\nd");
+    }
+
+    /// Tm 直接给定文本矩阵；同一基线上换字体/换矩阵不该拆行
+    #[test]
+    fn tm_positions_the_baseline() {
+        let joined = b"BT /F1 12 Tf 1 0 0 1 72 700 Tm (Left ) Tj ET \
+                       BT 1 0 0 1 120 700 Tm (Right) Tj ET";
+        assert_eq!(page_text(joined, &HashMap::new()).trim(), "Left Right");
+        let broken = b"BT /F1 12 Tf 1 0 0 1 72 700 Tm (a) Tj ET \
+                       BT 1 0 0 1 72 680 Tm (b) Tj ET";
+        assert_eq!(page_text(broken, &HashMap::new()).trim(), "a\nb");
+    }
+
+    /// 整页常包在 q … cm … Q 里（如从别处合并进来的页面）。
+    /// 不跟踪 CTM 就看不到 cm 造成的位移，两行会被并成一行。
+    #[test]
+    fn ctm_translation_moves_the_baseline_too() {
+        let stream = b"BT /F1 24 Tf 72 700 Td (Line1) Tj ET \
+                       q 1 0 0 1 0 -30 cm BT 72 700 Td (Line2) Tj ET Q";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "Line1\nLine2");
+        // 只有 x 位移时仍算同一行
+        let side = b"BT /F1 24 Tf 72 700 Td (So) Tj ET \
+                     q 1 0 0 1 30 0 cm BT 72 700 Td (ft) Tj ET Q";
+        assert_eq!(page_text(side, &HashMap::new()).trim(), "Soft");
+    }
+
+    /// Q 之后要回到保存前的矩阵，否则后面的行会带着上一次的位移
+    #[test]
+    fn restore_state_puts_the_baseline_back() {
+        let stream = b"BT /F1 24 Tf 72 700 Td (A) Tj ET q 1 0 0 1 0 -30 cm \
+                       BT 72 700 Td (B) Tj ET Q BT 72 700 Td (C) Tj ET";
+        assert_eq!(page_text(stream, &HashMap::new()).trim(), "A\nB\nC");
+    }
+
+    /// 行内不该插空格：空格由内容流自己画。中文逐字绘制时插空格会把句子切断。
+    #[test]
+    fn no_space_is_invented_between_same_line_pieces() {
+        let stream = b"BT /F1 24 Tf 72 700 Td (\\344\\275\\240) Tj 12 0 Td (\\345\\245\\275) Tj ET";
+        let text = page_text(stream, &HashMap::new());
+        assert_eq!(text, "你好");
+        assert!(!text.contains(' '), "{:?}", text);
     }
 
     /// 把若干对象拼成可直接 `Document::load` 的 PDF；对象号即数组下标 + 1。
