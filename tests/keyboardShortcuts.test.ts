@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   formatShortcut,
   isActivationKeyOnControl,
+  blocksGlobalShortcut,
   matchSpec,
   type ShortcutSpec,
 } from "../src/_shared/useKeyboardShortcuts";
@@ -18,6 +19,7 @@ type Bits = {
   ctrl?: boolean;
   shift?: boolean;
   alt?: boolean;
+  prevented?: boolean;
 };
 
 const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
@@ -38,6 +40,9 @@ function event(bits: Bits) {
     ctrlKey: !!bits.ctrl,
     shiftKey: !!bits.shift,
     altKey: !!bits.alt,
+    // 组件（React 的 root 容器监听）比 window 先跑；它 preventDefault 之后
+    // 原生事件上这个标记就是 true —— 全局这层要看它让路
+    defaultPrevented: !!bits.prevented,
   } as unknown as KeyboardEvent;
 }
 
@@ -229,5 +234,29 @@ describe("isActivationKeyOnControl：Enter/Space 归聚焦的控件，不归全�
     // 真浏览器里事件也可能以 window 为 target（程序化 dispatch）。
     expect(isActivationKeyOnControl(null, event({ key: "Enter" }))).toBe(false);
     expect(isActivationKeyOnControl({ tagName: "WINDOW" } as unknown as EventTarget, event({ key: "Enter" }))).toBe(false);
+  });
+});
+
+/**
+ * blocksGlobalShortcut：组件已经处理掉的那一下按键，全局快捷键不再重复做。
+ *
+ * 媒体库（照片馆）那圈容器自己处理 Enter / ⌘⌫ / ←→，而 React 的监听挂在 root 容器上、
+ * 比 window 先跑 —— 不让路的话一次 ⌘⌫ 会同时弹"画廊选中的那一张"和"主列表选中项"两个确认框。
+ */
+describe("blocksGlobalShortcut：已被组件处理的按键要让路", () => {
+  const plain = { closest: () => null } as unknown as EventTarget;
+
+  it("preventDefault 过的按键不再跑第二遍", () => {
+    expect(blocksGlobalShortcut(plain, event({ key: "Backspace", meta: true, prevented: true }))).toBe(true);
+    expect(blocksGlobalShortcut(plain, event({ key: "Enter", prevented: true }))).toBe(true);
+    // 没被处理过的才照常走全局
+    expect(blocksGlobalShortcut(plain, event({ key: "Backspace", meta: true }))).toBe(false);
+    expect(blocksGlobalShortcut(plain, event({ key: "k", meta: true }))).toBe(false);
+  });
+
+  it("未被处理但仍属于聚焦控件的 Enter，仍旧按老规则让路", () => {
+    const btn = { closest: (sel: string) => (sel.includes("button") ? ({} as Element) : null) } as unknown as EventTarget;
+    expect(blocksGlobalShortcut(btn, event({ key: "Enter" }))).toBe(true);
+    expect(blocksGlobalShortcut(btn, event({ key: "Delete" }))).toBe(false);
   });
 });

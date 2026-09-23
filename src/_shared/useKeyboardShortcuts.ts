@@ -48,6 +48,20 @@ const ACTIVATABLE_SELECTOR = "button, a[href], [role='button']";
  * 导出仅为可单测：node 环境没有 DOM，这里只依赖 closest()，因此对 target 做鸭子类型判断，
  * 不引用 Element/document（那两个全局在 node 里根本不存在，写了就是 ReferenceError）。
  */
+/**
+ * 全局快捷键要不要让路：两种"这一次按键已经有人在处理了"的情况。
+ *
+ * 1) 聚焦控件的 Enter/Space（见上）；
+ * 2) 事件已经被组件自己 preventDefault —— 例如媒体库（照片馆）那圈容器自己处理
+ *    Enter / ⌘⌫ / ←→，React 的监听挂在 root 容器上，比 window 这一层先跑；
+ *    不让路的话一次 ⌘⌫ 会同时弹"画廊那一张"和"主列表选中项"两个确认框，
+ *    一次 Enter 会打开两个不同的东西。
+ */
+export function blocksGlobalShortcut(target: EventTarget | null, e: KeyboardEvent): boolean {
+  if (e.defaultPrevented) return true;
+  return isActivationKeyOnControl(target, e);
+}
+
 export function isActivationKeyOnControl(target: EventTarget | null, e: KeyboardEvent): boolean {
   if (e.metaKey || e.ctrlKey || e.altKey) return false;
   if (e.key !== "Enter" && e.key !== " ") return false;
@@ -92,7 +106,7 @@ export function useKeyboardShortcuts(specs: ShortcutSpec[], enabled: boolean = t
     const onKey = (e: KeyboardEvent) => {
       const inEditable = isEditableTarget(e.target);
       // 这一下按键是"激活聚焦控件"的（例如光标在关闭标签按钮上按 Enter），交给浏览器
-      if (isActivationKeyOnControl(e.target, e)) return;
+      if (blocksGlobalShortcut(e.target, e)) return;
       for (const spec of specs) {
         if (!matchSpec(spec, e)) continue;
         if (inEditable && !spec.allowInInput) continue;
