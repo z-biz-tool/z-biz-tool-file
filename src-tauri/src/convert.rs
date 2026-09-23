@@ -190,13 +190,28 @@ pub fn text_to_epub(title: String, author: String, content: String, dest_path: S
     })
 }
 
+/// 把 dest_path 换到另一种扩展名的同名兄弟路径。
+///
+/// 只在**结尾**换：`dest.replace(".pdf", ".epub")` 会把路径里每一处 ".pdf" 都改掉
+/// （`/tmp/v.pdf.d/cache/report.pdf` 会被写歪），而存盘对话框没补扩展名时
+/// `.pdf` 根本不存在，替换等于没做 —— 于是 EPUB 的字节写进了一个以 .pdf 结尾的路径，
+/// 提示里还说"已生成 EPUB 文件: xxx.pdf"。
+fn sibling_with_ext(dest: &str, from_ext: &str, to_ext: &str) -> String {
+    let stem = dest
+        .strip_suffix(&format!(".{}", from_ext))
+        .unwrap_or(dest);
+    format!("{}.{}", stem, to_ext)
+}
+
 /// 文本转PDF (简化版: 先生成EPUB再提示用Calibre转PDF)
 #[tauri::command]
 pub fn text_to_pdf(title: String, content: String, dest_path: String) -> Result<ConvertResult, String> {
-    let epub_path = dest_path.replace(".pdf", ".epub");
+    let epub_path = sibling_with_ext(&dest_path, "pdf", "epub");
     let result = text_to_epub(title.clone(), "未知".to_string(), content, epub_path.clone())?;
     Ok(ConvertResult {
-        success: true,
+        // 内层说什么就是什么：这里写死 success: true 的话，EPUB 那边一旦
+        // 返回 success: false，用户还是会看到一条绿色"成功"提示。
+        success: result.success,
         message: format!("已生成EPUB文件: {}。PDF格式建议使用Calibre从EPUB转换。", epub_path),
         output_path: epub_path,
     })
@@ -206,12 +221,35 @@ pub fn text_to_pdf(title: String, content: String, dest_path: String) -> Result<
 #[tauri::command]
 pub fn text_to_mobi(title: String, author: String, content: String, dest_path: String) -> Result<ConvertResult, String> {
     // MOBI格式非常复杂，先转EPUB
-    let epub_path = dest_path.replace(".mobi", ".epub");
+    let epub_path = sibling_with_ext(&dest_path, "mobi", "epub");
     let result = text_to_epub(title.clone(), author.clone(), content, epub_path.clone())?;
 
     Ok(ConvertResult {
-        success: true,
+        success: result.success,
         message: format!("已生成EPUB文件: {}。MOBI格式建议使用Calibre从EPUB转换。", epub_path),
         output_path: epub_path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sibling_with_ext;
+
+    #[test]
+    fn 只在结尾换扩展名() {
+        assert_eq!(sibling_with_ext("/tmp/report.pdf", "pdf", "epub"), "/tmp/report.epub");
+        // 路径中间长得像 .pdf 的目录段不许被改歪
+        assert_eq!(
+            sibling_with_ext("/tmp/v.pdf.d/cache/report.pdf", "pdf", "epub"),
+            "/tmp/v.pdf.d/cache/report.epub"
+        );
+    }
+
+    #[test]
+    fn 没有扩展名时补一个而不是原样返回() {
+        // 存盘对话框允许用户不打扩展名；这时若按"替换不到就算"，
+        // EPUB 的字节会被写进 report.pdf 这种名字里
+        assert_eq!(sibling_with_ext("/tmp/report", "pdf", "epub"), "/tmp/report.epub");
+        assert_eq!(sibling_with_ext("/tmp/report.txt", "pdf", "epub"), "/tmp/report.txt.epub");
+    }
 }
