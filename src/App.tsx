@@ -81,6 +81,7 @@ import SftpModal from "./components/SftpModal";
 import StorageAnalyzerModal from "./components/StorageAnalyzerModal";
 import TagEditModal, { getTagColor } from "./components/TagEditModal";
 import QuickActionsModal from "./components/QuickActionsModal";
+import ShortcutHelp from "./components/ShortcutHelp";
 import GitStatus from "./components/GitStatus";
 import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
@@ -225,6 +226,7 @@ function AppShellInner() {
   const [storageOpen, setStorageOpen] = useState(false);
   const [tagEditOpen, setTagEditOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   // 媒体库视图状态
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [mediaLibraryType, setMediaLibraryType] = useState<"image" | "video" | "audio">("image");
@@ -1300,36 +1302,37 @@ function AppShellInner() {
     return tab?.kind ?? "directory";
   }, [activeTabId, tabs]);
 
-  // 键盘快捷键
-  useKeyboardShortcuts(useMemo(() => ([
-    { key: "b", meta: true, handler: () => setSiderCollapsed((v) => !v), description: "折叠/展开侧栏" },
-    { key: "\\", meta: true, handler: () => setPreviewVisible((v) => !v), description: "显示/隐藏预览区" },
-    { key: "ArrowLeft", alt: true, handler: goBack, description: "后退" },
-    { key: "ArrowRight", alt: true, handler: goForward, description: "前进" },
-    { key: "ArrowUp", alt: true, handler: goUp, description: "返回上级" },
-    { key: "r", meta: true, handler: () => currentPath && loadDirectory(currentPath), description: "刷新当前目录" },
-    { key: "t", meta: true, handler: () => { openTab(currentPath || homeDirSync()); }, description: "新建标签页" },
-    { key: "w", meta: true, handler: () => { activeTabId && closeTab(activeTabId); }, description: "关闭当前标签页" },
-    { key: "h", meta: true, shift: true, handler: () => setShowHidden(!showHidden), description: "显示/隐藏隐藏文件" },
-    { key: "1", meta: true, handler: () => setViewMode("table"), description: "表格视图" },
-    { key: "2", meta: true, handler: () => setViewMode("list"), description: "列表视图" },
-    { key: "3", meta: true, handler: () => setViewMode("grid"), description: "网格视图" },
-    { key: "4", meta: true, handler: () => setViewMode("column"), description: "分栏视图" },
-    { key: "n", meta: true, shift: true, handler: () => { setCreateModal({ visible: true, type: "file" }); setCreateName(""); }, description: "新建文件" },
-    { key: "n", meta: true, alt: true, handler: () => { setCreateModal({ visible: true, type: "dir" }); setCreateName(""); }, description: "新建文件夹" },
-    { key: "c", meta: true, handler: () => selectedFiles.length > 0 && handleCopy(selectedFiles), description: "复制选中" },
-    { key: "x", meta: true, handler: () => selectedFiles.length > 0 && handleCut(selectedFiles), description: "剪切选中" },
-    { key: "v", meta: true, handler: handlePaste, description: "粘贴" },
-    { key: "a", meta: true, handler: () => setSelectedRowKeys(filteredFileList.map((f) => f.path)), description: "全选当前目录" },
+  // 键盘快捷键。这同一份数组既喂给 hook 也喂给快捷键面板（ShortcutHelp）：
+  // 面板要是另抄一张"功能 → 键位"表，改了键位它就开始教用户按一个不存在的组合键。
+  const shortcutSpecs = useMemo(() => ([
+    { key: "b", meta: true, handler: () => setSiderCollapsed((v) => !v), description: "折叠/展开侧栏", group: "视图" },
+    { key: "\\", meta: true, handler: () => setPreviewVisible((v) => !v), description: "显示/隐藏预览区", group: "视图" },
+    { key: "ArrowLeft", alt: true, handler: goBack, description: "后退", group: "导航" },
+    { key: "ArrowRight", alt: true, handler: goForward, description: "前进", group: "导航" },
+    { key: "ArrowUp", alt: true, handler: goUp, description: "返回上级", group: "导航" },
+    { key: "r", meta: true, handler: () => currentPath && loadDirectory(currentPath), description: "刷新当前目录", group: "导航" },
+    { key: "t", meta: true, handler: () => { openTab(currentPath || homeDirSync()); }, description: "新建标签页", group: "标签页" },
+    { key: "w", meta: true, handler: () => { activeTabId && closeTab(activeTabId); }, description: "关闭当前标签页", group: "标签页" },
+    { key: "h", meta: true, shift: true, handler: () => setShowHidden(!showHidden), description: "显示/隐藏隐藏文件", group: "视图" },
+    { key: "1", meta: true, handler: () => setViewMode("table"), description: "表格视图", group: "视图" },
+    { key: "2", meta: true, handler: () => setViewMode("list"), description: "列表视图", group: "视图" },
+    { key: "3", meta: true, handler: () => setViewMode("grid"), description: "网格视图", group: "视图" },
+    { key: "4", meta: true, handler: () => setViewMode("column"), description: "分栏视图", group: "视图" },
+    { key: "n", meta: true, shift: true, handler: () => { setCreateModal({ visible: true, type: "file" }); setCreateName(""); }, description: "新建文件", group: "文件" },
+    { key: "n", meta: true, alt: true, handler: () => { setCreateModal({ visible: true, type: "dir" }); setCreateName(""); }, description: "新建文件夹", group: "文件" },
+    { key: "c", meta: true, handler: () => selectedFiles.length > 0 && handleCopy(selectedFiles), description: "复制选中", group: "编辑" },
+    { key: "x", meta: true, handler: () => selectedFiles.length > 0 && handleCut(selectedFiles), description: "剪切选中", group: "编辑" },
+    { key: "v", meta: true, handler: handlePaste, description: "粘贴", group: "编辑" },
+    { key: "a", meta: true, handler: () => setSelectedRowKeys(filteredFileList.map((f) => f.path)), description: "全选当前目录", group: "编辑" },
     // 删除走"选中项"而不是"当前行"：选中 50 项按 ⌘⌫ 只干掉 1 项是意外的差别
-    { key: "Backspace", meta: true, handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站" },
-    { key: "Delete", handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站" },
-    { key: "Backspace", meta: true, shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中" },
-    { key: "Delete", shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中" },
+    { key: "Backspace", meta: true, handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站", group: "删除" },
+    { key: "Delete", handler: () => handleDeleteMany(selectedFiles, false), description: "移到回收站", group: "删除" },
+    { key: "Backspace", meta: true, shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中", group: "删除" },
+    { key: "Delete", shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中", group: "删除" },
     // Enter 一直是"改文件名"，但只对单个文件生效：选中目录按 Enter 什么都没有发生，
     // 想改文件夹名也只能右键。现在 Enter 与双击同义，重命名让给 F2（两平台通用）。
-    { key: "Enter", handler: () => handleOpen(selectedFiles), allowInInput: false, description: "打开选中项（目录进入 / 文件用默认应用）" },
-    { key: "F2", handler: () => handleRenameOne(selectedFiles), allowInInput: false, description: "重命名选中项" },
+    { key: "Enter", handler: () => handleOpen(selectedFiles), allowInInput: false, description: "打开选中项（目录进入 / 文件用默认应用）", group: "导航" },
+    { key: "F2", handler: () => handleRenameOne(selectedFiles), allowInInput: false, description: "重命名选中项", group: "文件" },
     { key: "Escape", handler: () => {
       // 关闭最上层弹窗
       if (renameModal.visible) { setRenameModal({ visible: false, path: "", oldName: "" }); setNewName(""); }
@@ -1342,8 +1345,12 @@ function AppShellInner() {
       else if (dirSyncOpen) setDirSyncOpen(false);
       else if (zipBrowserOpen) { setZipBrowserOpen(false); setZipBrowserPath(null); }
       else if (newFileTemplateOpen) setNewFileTemplateOpen(false);
+      else if (shortcutHelpOpen) setShortcutHelpOpen(false);
       else if (terminalVisible) setTerminalVisible(false);
-    }, description: "关闭弹窗" },
+    }, description: "关闭弹窗", group: "通用" },
+    // 26 条注册项都写了 description，却没有任何界面显示过它们；F1 是这个面板的入口，
+    // 顶部工具栏的「?」按钮走的是同一个 state。
+    { key: "F1", handler: () => setShortcutHelpOpen((v) => !v), description: "查看快捷键面板", group: "通用" },
   ]), [
     goBack, goForward, goUp, currentPath, loadDirectory, showHidden, setShowHidden,
     setViewMode, selectedFiles, handleCopy, handleCut, handlePaste, selectedFile, handleDelete,
@@ -1354,8 +1361,9 @@ function AppShellInner() {
     handleOpen, handleRenameOne,
     renameModal.visible, createModal.visible, batchRenameOpen, propertiesOpen,
     dualPanelOpen, duplicateFinderOpen, hashCalcOpen, dirSyncOpen, zipBrowserOpen,
-    newFileTemplateOpen, terminalVisible,
-  ]));
+    newFileTemplateOpen, terminalVisible, shortcutHelpOpen,
+  ]);
+  useKeyboardShortcuts(shortcutSpecs);
 
   // 侧栏：搜索栏 + 收藏夹 + 暂存栈（文件树已移除，路径导航靠面包屑 + 中间列表 + 上级按钮 + 路径输入框）
   const sidebar = (
@@ -1419,6 +1427,14 @@ function AppShellInner() {
           onClick={() => setShowHidden(!showHidden)}
           type={showHidden ? "primary" : "text"}
           aria-label={showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}
+        />
+      </Tooltip>
+      <Tooltip title="快捷键 (F1)" placement="bottom">
+        <Button
+          size="small"
+          icon={<ThunderboltOutlined />}
+          onClick={() => setShortcutHelpOpen(true)}
+          aria-label="快捷键"
         />
       </Tooltip>
     </>
@@ -2219,6 +2235,11 @@ function AppShellInner() {
       <QuickActionsModal
         open={quickActionsOpen}
         onClose={() => setQuickActionsOpen(false)}
+      />
+      <ShortcutHelp
+        open={shortcutHelpOpen}
+        onClose={() => setShortcutHelpOpen(false)}
+        specs={shortcutSpecs}
       />
 
       {/* 传输队列 */}

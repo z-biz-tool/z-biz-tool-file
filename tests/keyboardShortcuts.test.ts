@@ -112,13 +112,13 @@ describe("formatShortcut 与 matchSpec 口径一致", () => {
 
   it("提示写 Ctrl 的平台，实际就要求按下 Ctrl", () => {
     setPlatform("Win32");
-    expect(formatShortcut(cmdA)).toBe("Ctrl + a");
+    expect(formatShortcut(cmdA)).toBe("Ctrl + A");
     expect(matchSpec(cmdA, event({ ctrl: true }))).toBe(true);
     expect(matchSpec(cmdA, event({ meta: true }))).toBe(false);
   });
 
   it("mac 上同一份 spec 显示为 ⌘", () => {
     setPlatform("MacIntel");
-    expect(formatShortcut(cmdA)).toBe("⌘ + a");
+    expect(formatShortcut(cmdA)).toBe("⌘ + A");
   });
 });

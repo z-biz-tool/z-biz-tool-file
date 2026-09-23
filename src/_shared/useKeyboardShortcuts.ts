@@ -17,6 +17,8 @@ export interface ShortcutSpec {
   preventDefault?: boolean;
   /** 描述（用于快捷键面板） */
   description?: string;
+  /** 面板里的分组标题；不写就落到"通用" */
+  group?: string;
 }
 
 /**
@@ -84,7 +86,10 @@ export function useKeyboardShortcuts(specs: ShortcutSpec[], enabled: boolean = t
 export function formatShortcut(spec: ShortcutSpec): string {
   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform);
   const parts: string[] = [];
-  if (spec.meta || spec.ctrl) parts.push(isMac ? "⌘" : "Ctrl");
+  // meta 是"主修饰键"（mac ⌘ / 其他平台 Ctrl），ctrl 是字面 control 键 —— 在 mac 上
+  // 显示成 ⌘ 会让面板直接说谎：按 ⌘ 根本不会触发（matchSpec 要的是 e.ctrlKey）。
+  if (spec.meta) parts.push(isMac ? "⌘" : "Ctrl");
+  else if (spec.ctrl) parts.push(isMac ? "⌃" : "Ctrl");
   if (spec.alt) parts.push(isMac ? "⌥" : "Alt");
   if (spec.shift) parts.push(isMac ? "⇧" : "Shift");
   let key = spec.key;
@@ -96,6 +101,62 @@ export function formatShortcut(spec: ShortcutSpec): string {
   if (key === "Escape") key = "Esc";
   if (key === "Enter") key = "⏎";
   if (key === "Backspace") key = "⌫";
+  // 单个字母显示成大写：工具栏的 tooltip 一直写的是 "刷新 (⌘+R)"，
+  // 面板里再冒出 "⌘ + r" 就成了同一个应用两套写法（matchSpec 本来就不分大小写）
+  if (key.length === 1) key = key.toUpperCase();
   parts.push(key);
   return parts.join(" + ");
+}
+
+export interface ShortcutDocItem {
+  /** 已经按当前平台渲染好的键位，如 "⌘ + ⇧ + N" */
+  keys: string;
+  label: string;
+  group: string;
+}
+
+export interface ShortcutDocGroup {
+  group: string;
+  items: ShortcutDocItem[];
+}
+
+const UNGROUPED = "通用";
+
+/**
+ * 把注册用的 spec 数组渲染成面板要的形状。
+ *
+ * 面板必须吃**同一份** spec 数组，而不是另抄一份说明表：快捷键一旦改了键位、
+ * 删了某条，手写的表就会开始教用户按一个不存在的组合键。没有 description 的
+ * 注册项（比如某些内部开关）不进面板 —— 面板只回答"按这个键会发生什么"。
+ */
+export function describeShortcuts(specs: ShortcutSpec[]): ShortcutDocGroup[] {
+  const byGroup = new Map<string, ShortcutDocItem[]>();
+  for (const spec of specs) {
+    const label = spec.description?.trim();
+    if (!label) continue;
+    const group = spec.group?.trim() || UNGROUPED;
+    const item: ShortcutDocItem = { keys: formatShortcut(spec), label, group };
+    const bucket = byGroup.get(group);
+    if (bucket) bucket.push(item);
+    else byGroup.set(group, [item]);
+  }
+  // Map 保留注册顺序，面板的分组顺序因此和代码里读到的顺序一致
+  return [...byGroup.entries()].map(([group, items]) => ({ group, items }));
+}
+
+/** 按功能名或键位过滤；空查询返回原样（含空组会被丢掉，面板不该显示一个空标题） */
+export function filterShortcutDocs(
+  groups: ShortcutDocGroup[],
+  query: string
+): ShortcutDocGroup[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return groups.filter((g) => g.items.length > 0);
+  return groups
+    .map((g) => ({
+      group: g.group,
+      items: g.items.filter(
+        (i) => i.label.toLowerCase().includes(q) || i.keys.toLowerCase().includes(q)
+      ),
+    }))
+    .filter((g) => g.items.length > 0);
 }
