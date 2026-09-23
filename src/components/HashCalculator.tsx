@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Modal, Select, Button, Input, message, Spin, Table, Typography, theme } from "antd";
+import { Modal, Select, Button, Input, Spin, Table, Typography, theme, App as AntdApp } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import {
   computeHashes,
@@ -27,6 +27,7 @@ const ALGORITHM_OPTIONS = [
 const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 export default function HashCalculator({ open, onClose, filePath, files }: Props) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
   const [algorithm, setAlgorithm] = useState<string>("MD5");
   const [calculating, setCalculating] = useState(false);

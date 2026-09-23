@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Popover, List, Button, Input, message, Tag, theme } from "antd";
+import { Popover, List, Button, Input, Tag, theme, App as AntdApp } from "antd";
 import {
   SaveOutlined,
   DeleteOutlined,
@@ -43,6 +43,7 @@ export default function WorkspaceManager({
   showHidden,
   onRestore,
 }: Props) {
+  const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>(loadWorkspaces);

@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Button, List, Tooltip, message, theme } from "antd";
+import { Button, List, Tooltip, theme, App as AntdApp } from "antd";
 import {
   DeleteOutlined,
   CopyOutlined,
@@ -22,6 +22,7 @@ interface DropStackProps {
 }
 
 export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
+  const { message } = AntdApp.useApp();
   const [stack, setStack] = useState<StackItem[]>([]);
   const [isOver, setIsOver] = useState(false);
   const [loading, setLoading] = useState(false);

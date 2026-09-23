@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Modal, Table, Button, message, Spin, theme } from "antd";
+import { Modal, Table, Button, Spin, theme, App as AntdApp } from "antd";
 import { FolderOutlined, FileOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize } from "../stores/fileStore";
@@ -26,6 +26,7 @@ export default function ZipBrowser({
   currentPath,
   onRefresh,
 }: ZipBrowserProps) {
+  const { message } = AntdApp.useApp();
   const [entries, setEntries] = useState<ZipEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [extracting, setExtracting] = useState(false);
