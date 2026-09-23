@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Modal, Select, Button, Input, Spin, Table, Typography, theme, App as AntdApp } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import {
@@ -42,6 +42,16 @@ export default function HashCalculator({ open, onClose, filePath, files }: Props
   }, [files, filePath]);
 
   const isBatch = targets.length > 1;
+
+  // 面板是常驻挂载的：只靠 handleCalculate 里那句 setRows([]) 的话，
+  // 关掉再对另一个文件打开时，表格里摆的还是上一个文件的摘要行（进度也停在 n/n）。
+  // 换目标与重新打开都算"换了对象"，先把上一批的结果落地清掉。
+  const targetKey = targets.map((t) => t.path).join("\n");
+  useEffect(() => {
+    setRows([]);
+    setResult("");
+    setProgress("");
+  }, [open, targetKey]);
 
   const handleCalculate = async () => {
     if (targets.length === 0) {
