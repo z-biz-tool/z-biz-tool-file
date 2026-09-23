@@ -2248,6 +2248,7 @@ function AppShellInner() {
       <QuickActionsModal
         open={quickActionsOpen}
         onClose={() => setQuickActionsOpen(false)}
+        suggestedPath={selectedFile?.path || currentPath}
       />
       <ShortcutHelp
         open={shortcutHelpOpen}

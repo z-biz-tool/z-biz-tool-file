@@ -145,6 +145,24 @@ describe("antd 静态 API 的使用", () => {
     expect(bad).toEqual([]);
   });
 
+  it("也不许用 window.confirm / alert / prompt 这类原生弹窗", () => {
+    // 原生对话框不吃主题、不跟 locale，还会把 webview 整个卡住；
+    // QuickActionsModal 里"危险操作"的二次确认原本就是 window.confirm，现已换成 context 的 modal.confirm。
+    const bad: string[] = [];
+    for (const p of parsed) {
+      for (const m of p.clean.matchAll(/\bwindow\s*\.\s*(confirm|alert|prompt)\s*\(/g)) {
+        bad.push(at(p.file, p.src, m.index ?? 0));
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("危险操作执行前要有走 context 的确认框", () => {
+    const src = readFileSync(`${ROOT}/src/components/QuickActionsModal.tsx`, "utf8");
+    // 这里要读字符串本体（okType 的值就在字符串里），所以只剥注释、不抹字符串
+    expect(stripComments(src)).toMatch(/modal\.confirm\(\{[\s\S]*?okType: "danger"/);
+  });
+
   it("确认框要的 modal 必须由调用方注入，别在 util 里摸全局", () => {
     // conflictChoice 曾经直接 Modal.confirm(...)：非组件文件拿不到 hook，
     // 所以它的弹窗实例由 placeBatch 的调用方传进来。这里钉住这个形状。

@@ -21,7 +21,10 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { resolveHomeDir } from "../utils/homeDir";
 import {
+  actionResultText,
+  actionSummary,
   loadQuickActions,
+  resolveActionCall,
   saveUserQuickActions,
   type QuickAction,
 } from "../utils/quickActions";
@@ -29,13 +32,15 @@ import {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** 打开时预填的作用对象：一般是当前选中的文件 */
+  suggestedPath?: string;
 }
 
 /** 模式选择器：管理 / 执行 */
 type Mode = "manage" | "run";
 
-export default function QuickActionsModal({ open, onClose }: Props) {
-  const { message } = AntdApp.useApp();
+export default function QuickActionsModal({ open, onClose, suggestedPath = "" }: Props) {
+  const { message, modal } = AntdApp.useApp();
   const [mode, setMode] = useState<Mode>("manage");
   const [actions, setActions] = useState<QuickAction[]>([]);
   const [editing, setEditing] = useState<QuickAction | null>(null);
@@ -46,10 +51,16 @@ export default function QuickActionsModal({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     setActions(loadQuickActions());
-    // 首次打开时把作用路径预填为当前用户主目录
+    // 作用对象要跟"当前选中的那个文件"走。之前只会预填主目录：选中 a.jpg 之后点
+    // 「设为只读」，改的其实是 ~ —— 一个看不见、还很危险的作用域错位。
+    if (suggestedPath) {
+      setTargetPath(suggestedPath);
+      return;
+    }
+    // 没有选中项（比如刚打开还没选）才退回主目录兜底
     if (!targetPath) resolveHomeDir().then(setTargetPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, suggestedPath]);
 
   const persist = (next: QuickAction[]) => {
     setActions(next);
@@ -68,7 +79,8 @@ export default function QuickActionsModal({ open, onClose }: Props) {
     setEditing({
       id: `user-${Date.now()}`,
       name: "新操作",
-      program: "/bin/echo",
+      // 默认给一个白名单里真的放行的程序：/bin/echo 会被后端直接拒掉
+      program: "/usr/bin/open",
       args: ["{path}"],
       enabled: true,
     });
@@ -93,20 +105,47 @@ export default function QuickActionsModal({ open, onClose }: Props) {
 
   const onRun = async (a: QuickAction) => {
     if (a.dangerous) {
-      // 二次确认在 antd Modal.confirm 已覆盖；这里用 window.confirm 简化
-      if (!window.confirm(`⚠️ "${a.name}" 是危险操作，确定要执行吗？`)) return;
+      // 原来是 window.confirm：桌面壳里那是系统级弹窗，不吃主题、语言也不跟站点走，
+      // 而且会把整个 webview 卡住。注释说"antd Modal.confirm 已覆盖"其实没覆盖这一层
+      // （那层只覆盖删除，不覆盖执行），所以这里补上走 App context 的危险确认。
+      const go = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: `执行「${a.name}」？`,
+          content: "这个操作被标记为危险，会直接对目标文件运行命令。",
+          okText: "执行",
+          okType: "danger",
+          cancelText: "取消",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!go) return;
+    }
+    if (!targetPath) {
+      message.warning("还没有作用目标：先在文件列表里选中一项，或在执行页填路径");
+      return;
     }
     setRunning(true);
+    const call = resolveActionCall(a, targetPath);
     try {
-      const r = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
-        "run_shell_command",
-        { program: a.program, args: a.args, filePath: targetPath },
-      );
-      if (r.exit_code === 0) {
-        const out = r.stdout || "(无输出)";
-        message.success(`执行成功，exit 0\n${out.slice(0, 300)}`);
+      if (call.kind === "clipboard") {
+        await navigator.clipboard.writeText(call.text);
+        message.success(actionResultText(call, null));
+      } else if (call.kind === "command") {
+        // 具名命令都带 path_guard，返回值形状各不相同：hash 是字符串，其余可能是空
+        const r = await invoke<string | null>(call.command, call.args);
+        message.success(`${a.name}：${actionResultText(call, r)}`);
       } else {
-        message.error(`exit ${r.exit_code}\n${r.stderr.slice(0, 500)}`);
+        const r = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
+          "run_shell_command",
+          { program: call.program, args: call.args, filePath: targetPath },
+        );
+        if (r.exit_code === 0) {
+          const out = r.stdout || "(无输出)";
+          message.success(`执行成功，exit 0\n${out.slice(0, 300)}`);
+        } else {
+          message.error(`exit ${r.exit_code}\n${r.stderr.slice(0, 500)}`);
+        }
       }
     } catch (err) {
       message.error("执行失败: " + err);
@@ -194,7 +233,7 @@ export default function QuickActionsModal({ open, onClose }: Props) {
               <List.Item.Meta
                 title={
                   <Space>
-                    <code style={{ color: "#1677ff" }}>{a.program}</code>
+                    <code style={{ color: "#1677ff" }}>{actionSummary(a).head}</code>
                     <span>{a.name}</span>
                     {a.builtin && <span style={{ color: "#888", fontSize: 11 }}>内置</span>}
                     {a.dangerous && <span style={{ color: "#f5222d", fontSize: 11 }}>危险</span>}
@@ -202,7 +241,7 @@ export default function QuickActionsModal({ open, onClose }: Props) {
                 }
                 description={
                   <code style={{ fontSize: 11, color: "#666" }}>
-                    {a.args.join(" ")}
+                    {actionSummary(a).detail}
                   </code>
                 }
               />
@@ -263,7 +302,7 @@ export default function QuickActionsModal({ open, onClose }: Props) {
               <Input
                 value={editing.program}
                 onChange={(e) => setEditing({ ...editing, program: e.target.value })}
-                placeholder="/usr/bin/open 或 /bin/bash"
+                placeholder="/usr/bin/open（必须是后端白名单里的绝对路径）"
               />
             </Form.Item>
             <Form.Item label="参数（每行一个，支持 {path} 占位符）">
