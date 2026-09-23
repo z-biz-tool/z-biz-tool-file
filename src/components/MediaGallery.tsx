@@ -65,12 +65,21 @@ async function getVideoThumbnail(path: string): Promise<string | undefined> {
  */
 interface MediaItemCardProps {
   item: MediaItem;
-  onClick: (item: MediaItem) => void;
+  /** 单击只选中，双击才打开 —— 与主列表 onRow.onDoubleClick、文件树、分栏同一口径 */
+  onSelect: (item: MediaItem) => void;
+  onOpen: (item: MediaItem) => void;
+  selected: boolean;
   onContextMenu?: (e: React.MouseEvent) => void;
 }
 
+/** 选中环：三种卡片同构，配色都取主题的 colorPrimary */
+function ringStyle(selected: boolean, color: string): React.CSSProperties {
+  return selected ? { boxShadow: `0 0 0 2px ${color}, 0 0 0 4px rgba(0,0,0,0.15)` } : {};
+}
+
 // 图片项组件
-const ImageItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu }) => {
+const ImageItem: React.FC<MediaItemCardProps> = ({ item, onSelect, onOpen, selected, onContextMenu }) => {
+  const { token } = theme.useToken();
   const [thumbnail, setThumbnail] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
@@ -85,7 +94,8 @@ const ImageItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
 
   return (
     <div
-      onClick={() => onClick(item)}
+      onClick={() => onSelect(item)}
+      onDoubleClick={() => onOpen(item)}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu?.(e);
@@ -98,6 +108,7 @@ const ImageItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
         cursor: "pointer",
         background: "#f0f0f0",
         transition: "transform 0.2s, box-shadow 0.2s",
+        ...ringStyle(selected, token.colorPrimary),
       }}
       title={item.name}
     >
@@ -145,7 +156,8 @@ const ImageItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
 };
 
 // 视频项组件
-const VideoItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu }) => {
+const VideoItem: React.FC<MediaItemCardProps> = ({ item, onSelect, onOpen, selected, onContextMenu }) => {
+  const { token } = theme.useToken();
   const [thumbnail, setThumbnail] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
@@ -160,7 +172,8 @@ const VideoItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
 
   return (
     <div
-      onClick={() => onClick(item)}
+      onClick={() => onSelect(item)}
+      onDoubleClick={() => onOpen(item)}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu?.(e);
@@ -173,6 +186,7 @@ const VideoItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
         cursor: "pointer",
         background: "#000",
         transition: "transform 0.2s, box-shadow 0.2s",
+        ...ringStyle(selected, token.colorPrimary),
       }}
       title={item.name}
     >
@@ -233,10 +247,12 @@ const VideoItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
 };
 
 // 音频项组件
-const AudioItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu }) => {
+const AudioItem: React.FC<MediaItemCardProps> = ({ item, onSelect, onOpen, selected, onContextMenu }) => {
+  const { token } = theme.useToken();
   return (
     <div
-      onClick={() => onClick(item)}
+      onClick={() => onSelect(item)}
+      onDoubleClick={() => onOpen(item)}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu?.(e);
@@ -249,7 +265,7 @@ const AudioItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu 
         borderRadius: 8,
         cursor: "pointer",
         transition: "background 0.2s",
-        background: "transparent",
+        background: selected ? token.colorFillSecondary : "transparent",
       }}
       title={item.name}
     >
@@ -314,8 +330,10 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
   const { token } = theme.useToken();
   const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   useEffect(() => {
+    setSelectedPath(null); // 换目录/换馆之后，上一张的选中环没有意义，还可能指着一个不存在的路径
     if (!directory) {
       // 目录为空时不能把 loading 留在 true：那是个转不完的圈，界面没有任何出口
       setMediaFiles([]);
@@ -334,7 +352,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     };
   }, [directory, mediaType]);
 
-  // 卡片点击与菜单里的"打开"走同一个函数：分两处写迟早只改一处
+  // 卡片双击与菜单里的"打开"走同一个函数：分两处写迟早只改一处
   const handleOpen = (item: MediaItem) => {
     if (onOpen) {
       onOpen(item);
@@ -352,11 +370,19 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     // 会继续留在原地，再点它就是"文件不存在"。
     onDelete: onDelete
       ? (item) =>
-          onDelete(item, () =>
-            setMediaFiles((files) => files.filter((f) => f.path !== item.path))
-          )
+          onDelete(item, () => {
+            setMediaFiles((files) => files.filter((f) => f.path !== item.path));
+            setSelectedPath((cur) => (cur === item.path ? null : cur));
+          })
       : undefined,
   };
+
+  const cardProps = (item: MediaItem) => ({
+    item,
+    selected: selectedPath === item.path,
+    onSelect: (one: MediaItem) => setSelectedPath(one.path),
+    onOpen: handleOpen,
+  });
 
   // 渲染网格
   const renderGrid = () => {
@@ -377,7 +403,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
                 menu={{ items: buildMediaMenu(item, actions) }}
                 trigger={["contextMenu"]}
               >
-                <ImageItem item={item} onClick={handleOpen} />
+                <ImageItem {...cardProps(item)} />
               </Dropdown>
             ))}
           </div>
@@ -399,7 +425,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
                 menu={{ items: buildMediaMenu(item, actions) }}
                 trigger={["contextMenu"]}
               >
-                <VideoItem item={item} onClick={handleOpen} />
+                <VideoItem {...cardProps(item)} />
               </Dropdown>
             ))}
           </div>
@@ -419,7 +445,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
                 menu={{ items: buildMediaMenu(item, actions) }}
                 trigger={["contextMenu"]}
               >
-                <AudioItem item={item} onClick={handleOpen} />
+                <AudioItem {...cardProps(item)} />
               </Dropdown>
             ))}
           </div>
