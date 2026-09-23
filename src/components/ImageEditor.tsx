@@ -819,7 +819,15 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
         </Content>
 
         {/* 右侧属性面板 */}
-        <Sider width={340} theme="light" style={{ background: "#fafafa", borderLeft: "1px solid #e8e8e8", overflow: "auto" }}>
+        <Sider
+          width={340}
+          theme="light"
+          style={{
+            background: "var(--ant-color-bg-layout)",
+            borderLeft: "1px solid var(--ant-color-border-secondary)",
+            overflow: "auto",
+          }}
+        >
           <Tabs
             tabPosition="top"
             size="small"
@@ -871,12 +879,12 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
                           key={f.key}
                           onClick={() => setFilter(f.key)}
                           style={{
-                            border: filter === f.key ? "2px solid #1890ff" : "1px solid #e8e8e8",
+                            border: filter === f.key ? "2px solid var(--ant-color-primary, #1677ff)" : "1px solid var(--ant-color-border-secondary)",
                             borderRadius: 6,
                             padding: 8,
                             cursor: "pointer",
                             textAlign: "center",
-                            background: filter === f.key ? "#e6f7ff" : "#fff",
+                            background: filter === f.key ? "var(--ant-color-primary-bg, #e6f7ff)" : "var(--ant-color-bg-container)",
                           }}
                         >
                           <div style={{ fontSize: 24 }}>{f.emoji}</div>
@@ -1032,8 +1040,15 @@ function ToolButton({
 
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: "#fff", padding: 12, borderRadius: 6, border: "1px solid #f0f0f0" }}>
-      <Text strong style={{ display: "block", marginBottom: 8, fontSize: 12, color: "#666" }}>
+    <div
+      style={{
+        background: "var(--ant-color-bg-container)",
+        padding: 12,
+        borderRadius: 6,
+        border: "1px solid var(--ant-color-border-secondary)",
+      }}
+    >
+      <Text strong style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
         {title}
       </Text>
       {children}
@@ -1075,5 +1090,5 @@ function Info({ label, value, small }: { label: string; value: string; small?: b
 }
 
 function Divider() {
-  return <div style={{ borderTop: "1px solid #e8e8e8", margin: "8px 0" }} />;
+  return <div style={{ borderTop: "1px solid var(--ant-color-border-secondary)", margin: "8px 0" }} />;
 }

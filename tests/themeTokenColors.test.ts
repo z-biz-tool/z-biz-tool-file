@@ -23,7 +23,7 @@ const BANNED = [
   /1px solid #(?:e8e8e8|f0f0f0|eee)\b/,
 ];
 const THEMED = /isDark|===\s*"dark"|themeDark|token\./;
-const ALLOW_FILES = new Set(["src/components/ImageEditor.tsx"]);
+const ALLOW_FILES = new Set<string>([]);
 
 function hits(): string[] {
   const out: string[] = [];
@@ -57,7 +57,9 @@ describe("亮色字面量", () => {
     expect(hits()).toEqual([]);
   });
 
-  it("豁免清单只允许 ImageEditor（要扩得写理由）", () => {
-    expect([...ALLOW_FILES]).toEqual(["src/components/ImageEditor.tsx"]);
+  it("豁免清单保持为空（历史豁免都要还掉）", () => {
+    // ImageEditor 那圈曾经是唯一的豁免：右侧面板从 #fafafa/#fff/#666 改成跟主题之后归还，
+    // 深色下再不会左边深色画布、右边亮白控制台
+    expect([...ALLOW_FILES]).toEqual([]);
   });
 });
