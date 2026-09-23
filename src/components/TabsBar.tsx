@@ -35,6 +35,8 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
   if (tabs.length === 0) return null;
 
   const items = tabs.map((t) => {
+    // 下面 title 的取材规则：目录 tab 用真实 path；library/media 的 path 是伪路径
+    // (library://main)，hover 出来只会让人以为界面坏了，所以退回可见标题同源。
     const title = tabTitle(t);
     return {
       key: t.id,
@@ -73,8 +75,6 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
               whiteSpace: "nowrap",
               maxWidth: 180,
             }}
-            // 伪路径对读者没有任何信息量：hover "图书馆" 标签却弹出 library://main，
-            // 看起来像坏掉了。目录 tab 才 hover 出真实路径。
             title={t.kind === "directory" ? t.path : tabTitle(t)}
           >
             {tabIcon(t.kind)}

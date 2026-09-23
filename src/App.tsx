@@ -1873,12 +1873,12 @@ function AppShellInner() {
           />
         </div>
 
-        {/* 根据当前 active tab 类型决定主内容：directory=文件列表，library=图书馆&媒体库全屏 */}
+        {/* 根据当前 active tab 类型决定主内容：directory=文件列表，library=图书馆&媒体库全屏。
+            嵌入用法全站只有一处，所以 initialTab 显式给 library：LibraryView 缺省是 media，
+            那样标签写着图书馆、点进去却是照片列表，名称与落地页不一致。 */}
         {activeTabKind === "library" ? (
           <div style={{ flex: 1, overflow: "auto", background: "var(--ant-color-bg-layout)" }}>
-            // 这个 tab 从按钮到标题都写着"图书馆"，落地却不能停在媒体库子页：
-// LibraryView 的 initialTab 缺省是 "media"，点"图书馆"看到的却是照片列表。
-<LibraryView open={true} onClose={() => {}} embedded initialTab="library" />
+            <LibraryView open={true} onClose={() => {}} embedded initialTab="library" />
           </div>
         ) : (
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
