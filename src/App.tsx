@@ -600,8 +600,7 @@ function AppShellInner() {
         clipboard.map((item) => ({
           src: item.path,
           mode: item.operation === "copy" ? ("copy" as const) : ("move" as const),
-        }))
-      );
+        })), modal);
       // 用户在冲突框里点了取消：一个字节都不动，剪贴板也留着，稍后还能贴到别处
       if (!done) return;
       const toast = batchToast(done, "已粘贴", currentPath);
@@ -1076,8 +1075,7 @@ function AppShellInner() {
             const target = records[0].path;
             const done = await placeBatch(
               target,
-              records.slice(1).map((r) => ({ src: r.path, mode: "move" as const }))
-            );
+              records.slice(1).map((r) => ({ src: r.path, mode: "move" as const })), modal);
             if (!done) return;
             const toast = batchToast(done, "已合并入", records[0].name);
             if (toast) message[toast.kind](toast.text);

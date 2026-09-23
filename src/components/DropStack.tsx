@@ -22,7 +22,7 @@ interface DropStackProps {
 }
 
 export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
-  const { message } = AntdApp.useApp();
+  const { message, modal } = AntdApp.useApp();
   const [stack, setStack] = useState<StackItem[]>([]);
   const [isOver, setIsOver] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -106,8 +106,7 @@ export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
     try {
       const done = await placeBatch(
         currentPath,
-        stack.map((item) => ({ src: item.path, mode: "copy" as const }))
-      );
+        stack.map((item) => ({ src: item.path, mode: "copy" as const })), modal);
       if (!done) return; // 取消：堆里的东西留着，换个目录还能再贴
       const toast = batchToast(done, "已复制", currentPath);
       if (!toast) return;
@@ -126,8 +125,7 @@ export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
     try {
       const done = await placeBatch(
         currentPath,
-        stack.map((item) => ({ src: item.path, mode: "move" as const }))
-      );
+        stack.map((item) => ({ src: item.path, mode: "move" as const })), modal);
       if (!done) return;
       const toast = batchToast(done, "已移动", currentPath);
       if (!toast) return;

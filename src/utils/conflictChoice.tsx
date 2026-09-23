@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Modal, Radio } from "antd";
+import { Radio } from "antd";
+import type { App as AntdApp } from "antd";
+
+/**
+ * 弹窗必须由调用方把 `App.useApp()` 的 modal 递进来：静态 `Modal.confirm` 走模块级默认配置，
+ * 深色主题下弹出白底黑字的一层，locale 也读不到 —— 和全站其他确认框不是同一个样子。
+ */
+type ModalApi = ReturnType<typeof AntdApp.useApp>["modal"];
 
 /** 与后端 commands.rs 的 ConflictPolicy 一字不差（serde rename_all = lowercase） */
 export type ConflictPolicy = "rename" | "overwrite" | "skip";
@@ -32,7 +39,8 @@ export async function occupiedNames(destDir: string, names: string[]): Promise<s
  */
 export function askConflictPolicy(
   destDir: string,
-  taken: string[]
+  taken: string[],
+  modal: ModalApi
 ): Promise<ConflictPolicy | null> {
   return new Promise((resolve) => {
     if (!taken.length) {
@@ -44,7 +52,7 @@ export function askConflictPolicy(
       .slice(0, 5)
       .map((n) => `· ${n}`)
       .join("\n");
-    Modal.confirm({
+    modal.confirm({
       title: `目标目录里有 ${taken.length} 个同名文件`,
       content: (
         <div>
@@ -146,7 +154,11 @@ export function blocksDisplacement(src: string, destDir: string): boolean {
  * 一次拖拽算一批：动手前探一次同名，撞了才问一次，然后把选择原样交给后端。
  * 返回 null 表示用户取消 —— 这时一个文件都不该动。
  */
-export async function placeBatch(destDir: string, items: BatchItem[]): Promise<BatchResult | null> {
+export async function placeBatch(
+  destDir: string,
+  items: BatchItem[],
+  modal: ModalApi
+): Promise<BatchResult | null> {
   // 拖到自己身上、或拖进自己的子目录，都会把自己搬空，先剔掉
   const eligible = items.filter(({ src }) => !blocksDisplacement(src, destDir));
   const selfSkipped = items.length - eligible.length;
@@ -154,7 +166,7 @@ export async function placeBatch(destDir: string, items: BatchItem[]): Promise<B
   const names = eligible.map(({ src }) => baseName(src)).filter((n) => n.length > 0);
   const taken = await occupiedNames(destDir, names);
   const policy: ConflictPolicy | null = taken.length
-    ? await askConflictPolicy(destDir, taken)
+    ? await askConflictPolicy(destDir, taken, modal)
     : "rename";
   if (!policy) return null;
   let placed = 0;

@@ -53,7 +53,7 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
   style,
   className,
 }) => {
-  const { message } = AntdApp.useApp();
+  const { message, modal } = AntdApp.useApp();
   const [isOver, setIsOver] = useState(false);
   const { clipboard, currentPath, clearClipboard } = useFileStore();
 
@@ -88,7 +88,7 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
           const paths: string[] = JSON.parse(pathsData);
           const operation = e.dataTransfer?.getData("application/x-z-tool-operation") || "cut";
           const mode: "copy" | "move" = operation === "copy" ? "copy" : "move";
-          const done = await placeBatch(destDir, paths.map((src) => ({ src, mode })));
+          const done = await placeBatch(destDir, paths.map((src) => ({ src, mode })), modal);
           if (!done) return;
           const toast = batchToast(done, mode === "copy" ? "已复制" : "已移动", targetLabel || destDir);
           if (!toast) return;
@@ -108,8 +108,7 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
           const items: DragItem[] = JSON.parse(internalData);
           const done = await placeBatch(
             destDir,
-            items.map((item) => ({ src: item.path, mode: "move" as const }))
-          );
+            items.map((item) => ({ src: item.path, mode: "move" as const })), modal);
           if (!done) return;
           const toast = batchToast(done, "已移动", targetLabel || destDir);
           if (!toast) return;
@@ -129,8 +128,7 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
             clipboard.map((item) => ({
               src: item.path,
               mode: item.operation === "copy" ? ("copy" as const) : ("move" as const),
-            }))
-          );
+            })), modal);
           if (!done) return;
           const toast = batchToast(done, "已粘贴", targetLabel || destDir);
           if (!toast) return;

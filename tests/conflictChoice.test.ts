@@ -7,9 +7,16 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("antd", () => ({
-  Modal: { confirm: (options: unknown) => confirmMock(options) },
   Radio: { Group: () => null },
 }));
+
+/**
+ * 确认框现在是"调用方把 App.useApp() 的 modal 递进来"，不再是模块级 Modal.confirm。
+ * 所以测试里传的必须是一个**只有注入路径能碰到**的假实例：一旦有人把 Modal.confirm 塞回去，
+ * confirmMock 一次都不会被调用，下面所有 answer()/取消 用例全会红。
+ */
+const modalStub = { confirm: (options: unknown) => confirmMock(options) } as unknown as
+  Parameters<typeof askConflictPolicy>[2];
 
 import {
   askConflictPolicy,
@@ -70,12 +77,12 @@ describe("occupiedNames", () => {
 
 describe("askConflictPolicy", () => {
   it("不撞名就不打扰用户", async () => {
-    await expect(askConflictPolicy("/tmp/x", [])).resolves.toBe("rename");
+    await expect(askConflictPolicy("/tmp/x", [], modalStub)).resolves.toBe("rename");
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
   it("三个选项都得在，默认落在最安全的「保留两者」", () => {
-    askConflictPolicy("/tmp/x", ["a.pdf"]);
+    askConflictPolicy("/tmp/x", ["a.pdf"], modalStub);
     const options = lastConfirm();
     const wrap = options as unknown as { content: { props: { children: unknown[] } } };
     const radio = (wrap.content.props.children as Array<{ props?: { options?: unknown } }>).find(
@@ -88,7 +95,7 @@ describe("askConflictPolicy", () => {
   });
 
   it("撞名时弹一次，默认保留两者，取消则整批不动", async () => {
-    const pending = askConflictPolicy("/tmp/x", ["a.pdf", "b.pdf"]);
+    const pending = askConflictPolicy("/tmp/x", ["a.pdf", "b.pdf"], modalStub);
     const options = lastConfirm();
     expect(options.title).toContain("2");
     expect(options.okText).toBe("应用");
@@ -97,7 +104,7 @@ describe("askConflictPolicy", () => {
     options.onOk();
     expect(await pending).toBe("rename");
 
-    const cancelled = askConflictPolicy("/tmp/x", ["a.pdf"]);
+    const cancelled = askConflictPolicy("/tmp/x", ["a.pdf"], modalStub);
     lastConfirm().onCancel();
     expect(await cancelled).toBeNull();
   });
@@ -208,9 +215,25 @@ describe("blocksDisplacement", () => {
 });
 
 describe("placeBatch", () => {
+  it("确认框只能走注入的那个实例，不许顺手摸全局 Modal", async () => {
+    // 换一个"只属于这一次调用"的假实例：如果 askConflictPolicy 里残留任何模块级
+    // Modal.confirm，confirmMock（全局那条）就会被打到，而这里要求它一次都不许动。
+    const mine = vi.fn();
+    const writes = stubBackend(["a.pdf"]);
+    const pending = placeBatch("/tmp/dest", items(["/src/a.pdf", "move"]), {
+      confirm: mine,
+    } as unknown as Parameters<typeof placeBatch>[2]);
+    await vi.waitFor(() => expect(mine).toHaveBeenCalledTimes(1));
+    expect(confirmMock).not.toHaveBeenCalled();
+    (mine.mock.calls[0][0] as { onOk: () => void }).onOk();
+    const done = await pending;
+    expect(done).toEqual({ placed: 1, note: conflictNote("rename", 1), selfSkipped: 0 });
+    expect(writes.map((w) => w.cmd)).toEqual(["move_file"]);
+  });
+
   it("取消之后一个文件都不许动", async () => {
     const writes = stubBackend(["a.pdf"]);
-    const pending = placeBatch("/tmp/dest", items(["/src/a.pdf", "move"]));
+    const pending = placeBatch("/tmp/dest", items(["/src/a.pdf", "move"]), modalStub);
     await vi.waitFor(() => expect(confirmMock).toHaveBeenCalled());
     lastConfirm().onCancel();
     expect(await pending).toBeNull();
@@ -221,7 +244,7 @@ describe("placeBatch", () => {
     const writes = stubBackend([]);
     const done = await placeBatch(
       "/tmp/dest",
-      items(["/src/a.pdf", "move"], ["/src/b.txt", "copy"])
+      items(["/src/a.pdf", "move"], ["/src/b.txt", "copy"]), modalStub
     );
     expect(confirmMock).not.toHaveBeenCalled();
     expect(done).toEqual({ placed: 2, note: "", selfSkipped: 0 });
@@ -235,7 +258,7 @@ describe("placeBatch", () => {
 
   it("选「替换」就要真的把 overwrite 传给后端", async () => {
     const writes = stubBackend(["a.pdf"]);
-    const pending = placeBatch("/tmp/dest", items(["/src/a.pdf", "move"]));
+    const pending = placeBatch("/tmp/dest", items(["/src/a.pdf", "move"]), modalStub);
     await answer("overwrite");
     const done = await pending;
     expect(writes[0].args.conflict).toBe("overwrite");
@@ -247,7 +270,7 @@ describe("placeBatch", () => {
     const writes = stubBackend(["a.pdf", "b.pdf"]);
     const pending = placeBatch(
       "/tmp/dest",
-      items(["/src/a.pdf", "move"], ["/src/b.pdf", "move"], ["/src/c.pdf", "move"])
+      items(["/src/a.pdf", "move"], ["/src/b.pdf", "move"], ["/src/c.pdf", "move"]), modalStub
     );
     await answer("skip");
     const done = await pending;
@@ -261,7 +284,7 @@ describe("placeBatch", () => {
     const writes = stubBackend(["whatever"]);
     const done = await placeBatch(
       "/tmp/dest/sub",
-      items(["/tmp/dest", "move"], ["/tmp/dest/sub", "copy"])
+      items(["/tmp/dest", "move"], ["/tmp/dest/sub", "copy"]), modalStub
     );
     expect(done).toEqual({ placed: 0, note: "", selfSkipped: 2 });
     expect(invokeMock).not.toHaveBeenCalled();
@@ -270,7 +293,7 @@ describe("placeBatch", () => {
 
   it("目录尾斜杠也要认成同一个目录，不能当成没冲突", async () => {
     stubBackend([]);
-    const done = await placeBatch("/tmp/dest", items(["/tmp/dest/", "move"]));
+    const done = await placeBatch("/tmp/dest", items(["/tmp/dest/", "move"]), modalStub);
     expect(done).toEqual({ placed: 0, note: "", selfSkipped: 1 });
     expect(invokeMock).not.toHaveBeenCalled();
   });
@@ -279,7 +302,7 @@ describe("placeBatch", () => {
     const writes = stubBackend([]);
     const done = await placeBatch(
       "/tmp/dest/sub",
-      items(["/src/a.pdf", "move"], ["/tmp/dest", "move"], ["/src/b.txt", "copy"])
+      items(["/src/a.pdf", "move"], ["/tmp/dest", "move"], ["/src/b.txt", "copy"]), modalStub
     );
     expect(done).toEqual({ placed: 2, note: "", selfSkipped: 1 });
     // 被剔掉的那条不能只是"不计数"，必须真的没发命令
