@@ -22,7 +22,6 @@ mod video_thumb;
 mod indexer;
 mod atomic_write;
 mod path_guard;
-// mod ai_organizer; // 临时禁用: 旧代码编译错误
 mod ocr;
 mod aria2;
 mod library;
