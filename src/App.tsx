@@ -1876,7 +1876,9 @@ function AppShellInner() {
         {/* 根据当前 active tab 类型决定主内容：directory=文件列表，library=图书馆&媒体库全屏 */}
         {activeTabKind === "library" ? (
           <div style={{ flex: 1, overflow: "auto", background: "var(--ant-color-bg-layout)" }}>
-            <LibraryView open={true} onClose={() => {}} embedded />
+            // 这个 tab 从按钮到标题都写着"图书馆"，落地却不能停在媒体库子页：
+// LibraryView 的 initialTab 缺省是 "media"，点"图书馆"看到的却是照片列表。
+<LibraryView open={true} onClose={() => {}} embedded initialTab="library" />
           </div>
         ) : (
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
