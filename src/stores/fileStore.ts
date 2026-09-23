@@ -73,6 +73,9 @@ interface FileStore {
   tagsByPath: Record<string, { color: string; label: string; note: string }>;
   // AI 功能相关状态
   // 媒体库状态
+  /** 索引被列表对齐改动过的次数：搜索面板靠它刷新「索引已就绪 N 个文件」 */
+  indexEpoch: number;
+  bumpIndexEpoch: () => void;
   mediaViewMode: MediaViewMode;
   mediaGallerySize: MediaGallerySize;
   // 设置当前路径
@@ -126,6 +129,8 @@ export const useFileStore = create<FileStore>((set) => ({
   tagsByPath: {} as Record<string, { color: string; label: string; note: string }>,
   // AI 功能相关状态
   // 媒体库状态
+  indexEpoch: 0,
+  bumpIndexEpoch: () => set((s) => ({ indexEpoch: s.indexEpoch + 1 })),
   mediaViewMode: "gallery",
   mediaGallerySize: "medium",
 

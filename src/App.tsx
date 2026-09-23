@@ -373,6 +373,7 @@ function AppShellInner() {
     // AI 和媒体状态
     mediaViewMode, mediaGallerySize,
     setMediaViewMode, setMediaGallerySize,
+    bumpIndexEpoch,
   } = useFileStore();
 
   // 记忆侧栏折叠状态
@@ -431,7 +432,10 @@ function AppShellInner() {
           path,
           list.map((e) => ({ name: e.name, size: e.size, modified: e.modified })),
           showHidden
-        );
+        ).then((res) => {
+          // 只有真的剔掉/补上东西才敲一次索引版本号；稳态浏览不该惊动搜索面板
+          if (res && (res.dropped > 0 || res.refreshed > 0)) bumpIndexEpoch();
+        });
       })
       .catch((err) => {
         message.error("加载目录失败: " + err);

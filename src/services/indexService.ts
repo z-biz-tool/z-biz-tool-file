@@ -112,17 +112,24 @@ export async function getIndexStats(): Promise<IndexStats> {
  * 搜索结果里还留着已经不存在的条目，点上去是"文件不存在"；反过来新文件搜不到。
  * 失败一律咽掉 —— 这是自我修正，不是用户按下的动作，不该因为索引问题弹错误。
  */
+export interface SyncDirResult {
+  dropped: number;
+  refreshed: number;
+  unchanged: number;
+}
+
 export function syncDirIndex(
   dir: string,
   entries: Array<{ name: string; size: number; modified: number }>,
   listingIncludesHidden: boolean
-): void {
-  invoke("indexer_sync_dir", {
+): Promise<SyncDirResult | null> {
+  return invoke<SyncDirResult>("indexer_sync_dir", {
     dir,
     entries: entries.map(({ name, size, modified }) => ({ name, size, modified })),
     listingIncludesHidden,
   }).catch(() => {
-    /* 索引对齐失败不影响这一页的显示 */
+    // 索引对齐失败不影响这一页的显示，也不该给用户弹错误
+    return null;
   });
 }
 

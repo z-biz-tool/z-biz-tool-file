@@ -56,7 +56,7 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
   const [isIndexing, setIsIndexing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { setSelectedFile, setCurrentPath } = useFileStore();
+  const { setSelectedFile, setCurrentPath, indexEpoch } = useFileStore();
 
   const doSearch = async (searchQuery: string, searchMode: "filename" | "content") => {
     if (!searchQuery.trim() || !rootPath) {
@@ -120,7 +120,9 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
       }
     };
     loadStats();
-  }, []);
+    // 列表对齐会悄悄改索引（删掉已不存在的、补上新的）；不跟着刷新的话，
+    // 面板上那个「索引已就绪 N 个文件」会一直停在旧数字，比没修还容易误导
+  }, [indexEpoch]);
 
   // 防抖搜索
   useEffect(() => {
@@ -139,7 +141,9 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, mode, rootPath]);
+    // indexEpoch 进来是为了：索引刚被自我修正，正在显示的结果就该重查一次，
+    // 否则列表里还挂着已经不存在的路径
+  }, [query, mode, rootPath, indexEpoch]);
 
   // 构建索引
   const buildIndex = async () => {
