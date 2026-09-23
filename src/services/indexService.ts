@@ -114,17 +114,3 @@ function defaultStats(): IndexStats {
   };
 }
 
-/**
- * 自动索引更新（当文件变化时）
- */
-export async function updateFileIndex(path: string): Promise<void> {
-  try {
-    // 使用 Tauri 的文件系统事件监听
-    const { listen } = await import("@tauri-apps/api/event");
-    
-    // 监听文件变化并自动更新索引
-    // 这里可以添加更复杂的逻辑
-  } catch (error) {
-    console.error("Failed to update file index:", error);
-  }
-}

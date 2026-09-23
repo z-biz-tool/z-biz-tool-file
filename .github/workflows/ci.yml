@@ -53,6 +53,11 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --registry=https://registry.npmmirror.com
 
+      # typecheck 之前一直是红的（35~47 条），所以只能不跑；本轮清到 0 之后把它变成门禁，
+      # 否则下次再有人往 string[] 里塞 FileEntry[] 这类事只有真机点进去才发现。
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build frontend
         run: npm run build
 

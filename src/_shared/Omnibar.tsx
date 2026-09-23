@@ -21,7 +21,7 @@ interface OmnibarProps {
   currentPath: string;
   onNavigate: (path: string) => void;
   rootPath: string;
-  onRootNavigate: () => void;
+  onRootNavigate: (path: string) => void;
   onBack: () => void;
   onForward: () => void;
   onUp: () => void;
@@ -125,13 +125,15 @@ const Omnibar: FC<OmnibarProps> = ({
         <Dropdown
           menu={{
             items: [
-              { key: 'home', label: '首页', icon: <HomeOutlined />, onClick: onRootNavigate },
-              { key: 'root', label: '根目录', onClick: () => onNavigate(rootPath) },
+              // onRootNavigate 是要收路径的：之前声明成 () => void 又直接被当无参调用，
+              // App 侧拿到 undefined → setRootPath(undefined)，首页这个芯片就再也点不回来了。
+              // 「根目录」这一项本来就是面包屑第一片（"/"），菜单里不再重复一遍。
+              { key: 'home', label: '首页', icon: <HomeOutlined />, onClick: () => onRootNavigate(rootPath) },
             ],
           }}
         >
           <div
-            onClick={onRootNavigate}
+            onClick={() => onRootNavigate(rootPath)}
             style={{ 
               cursor: 'pointer', 
               padding: '4px 8px', 

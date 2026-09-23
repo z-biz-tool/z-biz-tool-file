@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import {
-  Input, Button, Breadcrumb, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal, Badge,
+  Input, Button, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal, Badge,
 } from "antd";
-import type { MenuProps, BreadcrumbProps } from "antd";
+import type { MenuProps } from "antd";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   SearchOutlined,
-  HomeOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
   ReloadOutlined,
@@ -109,9 +108,8 @@ import {
   ShortcutHintsProvider,
 } from "./_shared/ShortcutHints";
 import Omnibar from "./_shared/Omnibar";
-import { MediaGallery, PhotoGallery, VideoGallery, MusicGallery } from "./components/MediaGallery";
+import { MediaGallery } from "./components/MediaGallery";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
-import AISettingPanel from "./components/AISettingPanel";
 
 /**
  * 可拖拽列宽的表头单元格。
@@ -368,8 +366,6 @@ function AppShellInner() {
     openTab, closeTab, updateActiveTabPath,
     loadAllTags,
     // AI 和媒体状态
-    aiEnabled, aiModel, aiEndpoint,
-    setAiEnabled, setAiModel, setAiEndpoint,
     mediaViewMode, mediaGallerySize,
     setMediaViewMode, setMediaGallerySize,
   } = useFileStore();
@@ -524,56 +520,6 @@ function AppShellInner() {
       const parentPath = "/" + parts.join("/");
       navigateTo(parentPath || "/");
     }
-  }, [currentPath, navigateTo]);
-
-  // 面包屑导航
-  const buildBreadcrumbItems = useCallback((): BreadcrumbProps["items"] => {
-    if (!currentPath) return [];
-    const parts = currentPath.split("/").filter(Boolean);
-    const items: NonNullable<BreadcrumbProps["items"]> = [
-      {
-        title: (
-          <span
-            onClick={() => navigateTo("/", true)}
-            style={{ cursor: "pointer" }}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                navigateTo("/", true);
-              }
-            }}
-          >
-            <HomeOutlined />
-          </span>
-        ),
-      },
-    ];
-    let path = "";
-    parts.forEach((part) => {
-      path += "/" + part;
-      const currentPathCopy = path;
-      items.push({
-        title: (
-          <span
-            onClick={() => navigateTo(currentPathCopy)}
-            style={{ cursor: "pointer" }}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                navigateTo(currentPathCopy);
-              }
-            }}
-          >
-            {part}
-          </span>
-        ),
-      });
-    });
-    return items;
   }, [currentPath, navigateTo]);
 
   // 剪贴板操作
@@ -1654,7 +1600,9 @@ function AppShellInner() {
               size="small"
               icon={<FileZipOutlined />}
               onClick={() => {
-                setArchiveSources(selectedFiles);
+                // 这里要的是路径字符串数组；直接把 FileEntry 塞进去，压缩那半边
+                // 收到的是对象（其他入口都是 record.path）
+                setArchiveSources(selectedFiles.map((f) => f.path));
                 setArchiveMode("compress");
                 setArchiveOpen(true);
               }}

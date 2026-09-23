@@ -77,9 +77,6 @@ interface FileStore {
   // 文件标签/备注（path → tag）
   tagsByPath: Record<string, { color: string; label: string; note: string }>;
   // AI 功能相关状态
-  aiEnabled: boolean;
-  aiModel: string;
-  aiEndpoint: string;
   aiLastSearch: string;
   aiSearchResults: Array<{ path: string; score: number; summary?: string }>;
   // 媒体库状态
@@ -123,9 +120,6 @@ interface FileStore {
   setTag: (path: string, tag: { color: string; label: string; note: string }) => Promise<void>;
   removeTag: (path: string) => Promise<void>;
   // AI 功能状态更新
-  setAiEnabled: (enabled: boolean) => void;
-  setAiModel: (model: string) => void;
-  setAiEndpoint: (endpoint: string) => void;
   setAiLastSearch: (query: string) => void;
   setAiSearchResults: (results: Array<{ path: string; score: number; summary?: string }>) => void;
   // 媒体库状态更新
@@ -150,9 +144,6 @@ export const useFileStore = create<FileStore>((set) => ({
   activeTabId: null,
   tagsByPath: {} as Record<string, { color: string; label: string; note: string }>,
   // AI 功能相关状态
-  aiEnabled: true,
-  aiModel: "default",
-  aiEndpoint: "",
   aiLastSearch: "",
   aiSearchResults: [],
   // 媒体库状态
@@ -290,9 +281,6 @@ export const useFileStore = create<FileStore>((set) => ({
     });
   },
   // AI 功能状态更新
-  setAiEnabled: (enabled) => set({ aiEnabled: enabled }),
-  setAiModel: (model) => set({ aiModel: model }),
-  setAiEndpoint: (endpoint) => set({ aiEndpoint: endpoint }),
   setAiLastSearch: (query) => set({ aiLastSearch: query }),
   setAiSearchResults: (results) => set({ aiSearchResults: results }),
   // 媒体库状态更新

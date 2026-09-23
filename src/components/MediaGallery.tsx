@@ -568,16 +568,3 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     </div>
   );
 };
-
-// 按媒体类型渲染的快捷组件
-export const PhotoGallery: React.FC<Omit<MediaGalleryProps, "mediaType">> = (props) => (
-  <MediaGallery mediaType="image" {...props} />
-);
-
-export const VideoGallery: React.FC<Omit<MediaGalleryProps, "mediaType">> = (props) => (
-  <MediaGallery mediaType="video" {...props} />
-);
-
-export const MusicGallery: React.FC<Omit<MediaGalleryProps, "mediaType">> = (props) => (
-  <MediaGallery mediaType="audio" {...props} />
-);

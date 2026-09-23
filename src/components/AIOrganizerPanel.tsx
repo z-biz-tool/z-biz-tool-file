@@ -7,7 +7,6 @@ import {
   Typography,
   Progress,
   Tag,
-  Modal,
   Space,
   Divider,
   Input,
@@ -26,11 +25,10 @@ import {
   FileZipOutlined,
   CodeOutlined,
   BuildOutlined,
-  DownloadOutlined,
   ScanOutlined,
 } from "@ant-design/icons";
 import { categorizeFile, organizeDirectory, getCategories } from "../services/aiOrganizer";
-import { useFileStore, type FileData } from "../stores/fileStore";
+import { useFileStore, type FileEntry } from "../stores/fileStore";
 import { EmptyState } from "../_shared";
 
 const { Title, Text } = Typography;
@@ -44,7 +42,8 @@ export function AIOrganizerPanel() {
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [organizePlans, setOrganizePlans] = useState<any[]>([]);
   const [categories, setCategories] = useState<Record<string, number>>({});
-  const [selectedFile, setSelectedFile] = useState<FileData | null>(null);
+  // 「选择文件」那颗按钮还是 TODO（只弹一句"待实现"），所以这里目前恒为 null
+  const [selectedFile] = useState<FileEntry | null>(null);
   const [categoryResult, setCategoryResult] = useState<any>(null);
 
   const { currentPath } = useFileStore();

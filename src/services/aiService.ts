@@ -8,12 +8,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import {
-  searchFiles as searchByIndex,
-  searchContent as searchContentByIndex,
-  type FileIndexItem,
-  type ContentIndexItem,
-} from "./indexService";
+import { searchFiles as searchByIndex } from "./indexService";
 
 export interface AISearchResult {
   path: string;
@@ -181,5 +176,3 @@ export async function suggestTags(filePath: string): Promise<string[]> {
   }
 }
 
-// 导出类型
-export type { AISearchResult, FileCategory, AIAction };
