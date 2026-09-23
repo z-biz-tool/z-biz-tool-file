@@ -215,6 +215,7 @@ function AppShellInner() {
   const [autoWatch, setAutoWatch] = useState(true);
   const [terminalVisible, setTerminalVisible] = useState(false);
   const [duplicateFinderOpen, setDuplicateFinderOpen] = useState(false);
+  const [duplicateRoot, setDuplicateRoot] = useState<string | null>(null);
   const [hashCalcOpen, setHashCalcOpen] = useState(false);
   const [hashFiles, setHashFiles] = useState<HashTarget[]>([]);
   const [dirSyncOpen, setDirSyncOpen] = useState(false);
@@ -844,7 +845,7 @@ function AppShellInner() {
         key: "hash", label: "计算哈希", icon: <SafetyCertificateOutlined />, onClick: () => { setSelectedFile(record); setHashFiles([]); setHashCalcOpen(true); },
       }] : []),
       ...(isDir ? [{
-        key: "duplicate-scan", label: "查找重复文件", icon: <CopyOutlined />, onClick: () => { setSelectedFile(record); setDuplicateFinderOpen(true); },
+        key: "duplicate-scan", label: "查找重复文件", icon: <CopyOutlined />, onClick: () => { setSelectedFile(record); setDuplicateRoot(record.path); setDuplicateFinderOpen(true); },
       }, {
         key: "storage-analyze", label: "存储分析", icon: <PieChartOutlined />, onClick: () => { setSelectedFile(record); setStorageOpen(true); },
       }] : []),
@@ -1233,6 +1234,23 @@ function AppShellInner() {
     }
     setSelectionAnchor(record.path);
   }, [filteredFileList, selectionAnchor]);
+
+  /**
+   * 右键即选中（macOS 的习惯）。
+   *
+   * 外层那个 Dropdown 的 menu.items 读的是 selectedFile（`selectedFile ? contextMenuItems(selectedFile) : []`），
+   * 而行上原来只挂了 onClick/onDoubleClick —— 于是要点过一行的右键，弹出来是个零项的空壳，
+   * 看起来就像"这个应用的右键菜单是坏的"。
+   */
+  const selectForContextMenu = useCallback(
+    (record: FileEntry) => {
+      if (selectedFile?.path === record.path && selectedRowKeys.includes(record.path)) return;
+      setSelectedFile(record);
+      setSelectedRowKeys([record.path]);
+      setSelectionAnchor(record.path);
+    },
+    [selectedFile, selectedRowKeys, setSelectedFile, setSelectionAnchor],
+  );
 
   // Virtual Table 要求 scroll.x 必须是数字（"max-content" 会被当作 1px → 行选择列脱位）。
   // 用所有列宽之和 + 安全余量做兜底，让 body 容器有足够空间放下三列数据（行选择列已去掉）。
@@ -1872,6 +1890,7 @@ function AppShellInner() {
                       onRow={(record) => ({
                         onClick: (e) => handleRowClick(e, record),
                         onDoubleClick: () => handleOpen([record]),
+                        onContextMenu: () => selectForContextMenu(record),
                       })}
                       rowClassName={(record) =>
                         selectedRowKeys.includes(record.path) ? "z-tool-row-selected" : ""
@@ -1940,6 +1959,11 @@ function AppShellInner() {
                         }
                       }}
                       onDoubleClick={(entry) => handleOpen([entry])}
+                      // 网格/分栏视图同样要"右键即选中"：菜单项读的是 selectedFile。
+                      // 这里不动 selectedRowKeys（网格的 onClick 也不动），免得把目录塞进批量选择里。
+                      onContextMenu={(entry) => {
+                        if (selectedFile?.path !== entry.path) setSelectedFile(entry);
+                      }}
                       onDragStart={(entry, e) => handleRowDragStart(e, entry)}
                       onDragEnd={handleRowDragEnd}
                     />
@@ -2077,8 +2101,9 @@ function AppShellInner() {
       {/* 重复文件查找 */}
       <DuplicateFinder
         open={duplicateFinderOpen}
-        onClose={() => setDuplicateFinderOpen(false)}
+        onClose={() => { setDuplicateFinderOpen(false); setDuplicateRoot(null); }}
         currentPath={currentPath}
+        initialPath={duplicateRoot}
         onRefresh={() => loadDirectory(currentPath)}
       />
 

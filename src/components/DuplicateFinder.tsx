@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Modal,
   Input,
@@ -28,6 +28,8 @@ interface DuplicateFinderProps {
   open: boolean;
   onClose: () => void;
   currentPath: string;
+  /** 从右键"查找重复文件"带进来的目录；没有就退回当前浏览目录 */
+  initialPath?: string | null;
   onRefresh: () => void;
 }
 
@@ -35,6 +37,7 @@ export default function DuplicateFinder({
   open,
   onClose,
   currentPath,
+  initialPath,
   onRefresh,
 }: DuplicateFinderProps) {
   const { message, modal } = AntdApp.useApp();
@@ -45,14 +48,19 @@ export default function DuplicateFinder({
   const [deleting, setDeleting] = useState(false);
   const { token } = theme.useToken();
 
-  // 每次打开重置
-  const handleAfterOpenChange = (isOpen: boolean) => {
-    if (isOpen) {
-      setDirectory(currentPath);
-      setGroups([]);
-      setSelectedPaths(new Set());
-    }
-  };
+  // 每次打开都重新起算：目录回到这次要查的目标，上一轮的分组和勾选不能留着
+  // （勾着的路径可能根本不在新目录里，删除就是照着旧清单动手）。
+  // 原来挂的是 Modal 的 afterOpenChange —— 那要等开合动画走完才触发，
+  // 用户在看动画的这一帧里看到的还是上一次的目录，且动画被系统关掉时行为不确定。
+  useEffect(() => {
+    if (!open) return;
+    setDirectory(initialPath || currentPath);
+    setGroups([]);
+    setSelectedPaths(new Set());
+    // 只跟 open 对齐：initialPath/currentPath 都在"打开之前"那一次 setState 里定好了，
+    // 再按它们建依赖会在面板开着、浏览目录变化时把用户刚扫出来的结果清掉。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const handleScan = useCallback(async () => {
     if (!directory.trim()) {
@@ -198,7 +206,6 @@ export default function DuplicateFinder({
       onCancel={onClose}
       width={800}
       footer={null}
-      afterOpenChange={handleAfterOpenChange}
     >
       {/* 目录输入 + 扫描按钮 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
