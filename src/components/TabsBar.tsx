@@ -127,6 +127,8 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
         boxShadow: "0 2px 4px rgba(0,0,0,0.02)",
       }}
     >
+      {/* v5 的 cardGutter 在 v6 已被移除（tsc：Property 'cardGutter' does not exist）。
+          之前挂着它没人发现：实测卡片间距 2px（antd 默认 margin），8px 从来没生效过。 */}
       <Tabs
         type="editable-card"
         hideAdd
@@ -146,7 +148,6 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
         items={items}
         style={{ flex: 1, minHeight: 32 }}
         tabBarStyle={{ margin: 0, borderBottom: "none" }}
-        cardGutter={8}
       />
       <Tooltip title={`新建标签页${hint("新建标签页")}`}>
         <Button
