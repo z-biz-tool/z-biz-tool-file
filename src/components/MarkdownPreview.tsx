@@ -277,7 +277,7 @@ export default function MarkdownPreview({ content, showCopyButton = true }: Mark
       {showCopyButton && (
         <div style={copyBtnStyle}>
           <Tooltip title={copied ? "已复制" : "复制源码"}>
-            <Button
+            <Button aria-label="复制 Markdown 源码"
               size="small"
               icon={<CopyOutlined />}
               onClick={handleCopy}

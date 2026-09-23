@@ -139,7 +139,7 @@ export default function FileProperties({ open, onClose, filePath }: Props) {
             <Descriptions.Item label="路径">
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ wordBreak: "break-all", flex: 1 }}>{fileInfo.path}</span>
-                <Button
+                <Button aria-label="复制文件路径"
                   type="text"
                   size="small"
                   icon={<CopyOutlined />}

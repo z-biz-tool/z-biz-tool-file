@@ -153,7 +153,7 @@ export default function WorkspaceManager({
             }}
             onClick={() => handleRestore(ws)}
             actions={[
-              <Button
+              <Button aria-label="删除这个工作区"
                 key="delete"
                 type="text"
                 size="small"
@@ -235,7 +235,7 @@ export default function WorkspaceManager({
       trigger="click"
       placement="bottomRight"
     >
-      <Button size="small" icon={<LayoutOutlined />} type="text" title="工作区管理" />
+      <Button aria-label="工作区管理" size="small" icon={<LayoutOutlined />} type="text" title="工作区管理" />
     </Popover>
   );
 }

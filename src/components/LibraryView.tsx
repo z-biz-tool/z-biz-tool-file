@@ -401,12 +401,12 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                     </Button>
                   </Tooltip>
                   <Button.Group>
-                    <Button
+                    <Button aria-label="网格视图"
                       icon={<AppstoreOutlined />}
                       type={view === "grid" ? "primary" : "default"}
                       onClick={() => setView("grid")}
                     />
-                    <Button
+                    <Button aria-label="列表视图"
                       icon={<BarsOutlined />}
                       type={view === "list" ? "primary" : "default"}
                       onClick={() => setView("list")}
@@ -464,7 +464,7 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                             )}
                           </div>
                           <Space size={4} style={{ marginTop: 4 }}>
-                            <Button
+                            <Button aria-label={item.favorite ? "取消收藏" : "加入收藏"}
                               size="small" type="text"
                               icon={item.favorite ? <HeartFilled style={{ color: "#eb2f96" }} /> : <HeartOutlined />}
                               onClick={() => toggleFav(item.id)}
@@ -522,7 +522,7 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                       {
                         title: "收藏", dataIndex: "favorite", width: 60,
                         render: (f: boolean, r: MediaItem) => (
-                          <Button
+                          <Button aria-label={f ? "取消收藏" : "加入收藏"}
                             type="text" size="small"
                             icon={f ? <HeartFilled style={{ color: "#eb2f96" }} /> : <HeartOutlined />}
                             onClick={() => toggleFav(r.id)}

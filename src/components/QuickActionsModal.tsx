@@ -213,7 +213,7 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
                   checkedChildren="启用"
                   unCheckedChildren="禁用"
                 />,
-                <Button
+                <Button aria-label="编辑这个操作"
                   key="edit"
                   size="small"
                   icon={<EditOutlined />}
@@ -225,7 +225,7 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
                     title="删除这个操作？"
                     onConfirm={() => onDelete(a.id)}
                   >
-                    <Button size="small" danger icon={<DeleteOutlined />} />
+                    <Button aria-label="删除这个操作？" size="small" danger icon={<DeleteOutlined />} />
                   </Popconfirm>
                 ),
               ].filter(Boolean)}

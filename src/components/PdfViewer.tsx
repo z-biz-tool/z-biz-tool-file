@@ -89,7 +89,7 @@ export default function PdfViewer({ filePath }: Props) {
         }}
       >
         <Space size={4}>
-          <Button size="small" icon={<ZoomOutOutlined />} onClick={zoomOut} disabled={zoom <= 50} />
+          <Button aria-label="缩小" size="small" icon={<ZoomOutOutlined />} onClick={zoomOut} disabled={zoom <= 50} />
           <InputNumber
             size="small"
             value={zoom}
@@ -101,12 +101,12 @@ export default function PdfViewer({ filePath }: Props) {
             parser={(v) => Number(v?.replace("%", "")) || 100}
             style={{ width: 72 }}
           />
-          <Button size="small" icon={<ZoomInOutlined />} onClick={zoomIn} disabled={zoom >= 200} />
+          <Button aria-label="放大" size="small" icon={<ZoomInOutlined />} onClick={zoomIn} disabled={zoom >= 200} />
         </Space>
 
         <Space size={4}>
-          <Button size="small" icon={<RotateLeftOutlined />} onClick={rotateLeft} />
-          <Button size="small" icon={<RotateRightOutlined />} onClick={rotateRight} />
+          <Button aria-label="向左旋转" size="small" icon={<RotateLeftOutlined />} onClick={rotateLeft} />
+          <Button aria-label="向右旋转" size="small" icon={<RotateRightOutlined />} onClick={rotateRight} />
         </Space>
 
         {meta && (
@@ -131,7 +131,7 @@ export default function PdfViewer({ filePath }: Props) {
         }}>
           {useIframe ? "文本模式" : "PDF模式"}
         </Button>
-        <Button size="small" icon={<PrinterOutlined />} onClick={handlePrint} />
+        <Button aria-label="打印" size="small" icon={<PrinterOutlined />} onClick={handlePrint} />
       </div>
 
       {/* PDF内容 */}

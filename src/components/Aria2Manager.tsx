@@ -318,10 +318,10 @@ export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
                   render: (_, r: Aria2Task) => (
                     <Space size="small">
                       {r.status === "active" && (
-                        <Button size="small" icon={<PauseOutlined />} onClick={() => pauseTask(r.gid)} />
+                        <Button aria-label="暂停该任务" size="small" icon={<PauseOutlined />} onClick={() => pauseTask(r.gid)} />
                       )}
                       <Popconfirm title="删除此任务？" onConfirm={() => removeTask(r.gid)}>
-                        <Button size="small" danger icon={<DeleteOutlined />} />
+                        <Button aria-label="删除该任务" size="small" danger icon={<DeleteOutlined />} />
                       </Popconfirm>
                     </Space>
                   ),

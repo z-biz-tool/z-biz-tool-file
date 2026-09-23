@@ -124,7 +124,7 @@ export default function OfficePreview({ filePath, fileName }: Props) {
           <span>{fileName}</span>
           <div style={{ flex: 1 }} />
           <Tooltip title="重新转换（清缓存）">
-            <Button
+            <Button aria-label="重新转换（清缓存）"
               size="small"
               type="text"
               icon={<ReloadOutlined />}
@@ -132,7 +132,7 @@ export default function OfficePreview({ filePath, fileName }: Props) {
             />
           </Tooltip>
           <Tooltip title="在 Finder 中显示原文件">
-            <Button
+            <Button aria-label="在 Finder 中显示原文件"
               size="small"
               type="text"
               icon={<FolderOpenOutlined />}

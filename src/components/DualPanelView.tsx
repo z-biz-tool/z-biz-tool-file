@@ -221,7 +221,7 @@ const Panel: React.FC<{
         }}
       >
         <Tooltip title="后退">
-          <Button
+          <Button aria-label="后退"
             size="small"
             icon={<ArrowLeftOutlined />}
             onClick={goBack}
@@ -229,7 +229,7 @@ const Panel: React.FC<{
           />
         </Tooltip>
         <Tooltip title="前进">
-          <Button
+          <Button aria-label="前进"
             size="small"
             icon={<ArrowRightOutlined />}
             onClick={goForward}
@@ -237,7 +237,7 @@ const Panel: React.FC<{
           />
         </Tooltip>
         <Tooltip title="刷新">
-          <Button
+          <Button aria-label="刷新"
             size="small"
             icon={<ReloadOutlined />}
             onClick={() => loadDirectory(state.currentPath)}
@@ -249,7 +249,7 @@ const Panel: React.FC<{
           </Button>
         </Tooltip>
         <Tooltip title={showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}>
-          <Button
+          <Button aria-label={showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}
             size="small"
             icon={showHidden ? <EyeOutlined /> : <EyeInvisibleOutlined />}
             onClick={onToggleHidden}

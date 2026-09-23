@@ -50,7 +50,7 @@ export default function Bookmarks({ onNavigate }: Props) {
               }}
               onClick={() => onNavigate(item.path)}
               actions={[
-                <Button
+                <Button aria-label="移除收藏"
                   key="delete"
                   type="text"
                   size="small"

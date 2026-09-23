@@ -254,6 +254,7 @@ const Omnibar: FC<OmnibarProps> = ({
       {/* 导航控制按钮 */}
       <div style={{ display: 'flex', gap: 2 }}>
         <button
+          aria-label="后退"
           onClick={onBack}
           disabled={historyIndex <= 0}
           style={{
@@ -278,6 +279,7 @@ const Omnibar: FC<OmnibarProps> = ({
         </button>
         
         <button
+          aria-label="前进"
           onClick={onForward}
           disabled={historyIndex >= history.length - 1}
           style={{
@@ -302,6 +304,7 @@ const Omnibar: FC<OmnibarProps> = ({
         </button>
 
         <button
+          aria-label="上级目录"
           onClick={onUp}
           style={{
             padding: '6px 10px',
@@ -329,6 +332,7 @@ const Omnibar: FC<OmnibarProps> = ({
         ].map((m) => (
           <button
             key={m.key}
+            aria-label={m.label}
             onClick={() => setMode(m.key as any)}
             style={{
               padding: '6px 12px',

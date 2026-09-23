@@ -251,7 +251,7 @@ export default function VideoPlayer({ filePath, fileName }: Props) {
           <Button type="text" size="small" icon={<PlayCircleOutlined />} onClick={playPrev} style={{ color: "#fff" }}>
             上一曲
           </Button>
-          <Button
+          <Button aria-label={playing ? "暂停" : "播放"}
             type="text"
             size="small"
             icon={playing ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
@@ -274,7 +274,7 @@ export default function VideoPlayer({ filePath, fileName }: Props) {
           />
 
           <Tooltip title="截图">
-            <Button
+            <Button aria-label="截取当前画面"
               type="text"
               size="small"
               icon={<CameraOutlined />}
@@ -309,7 +309,7 @@ export default function VideoPlayer({ filePath, fileName }: Props) {
           </Tooltip>
 
           <Tooltip title={isFullscreen ? "退出全屏" : "全屏"}>
-            <Button
+            <Button aria-label={isFullscreen ? "退出全屏" : "全屏"}
               type="text"
               size="small"
               icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}

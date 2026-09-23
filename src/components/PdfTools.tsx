@@ -386,7 +386,7 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                         title: "操作",
                         width: 80,
                         render: (_: any, r: any) => (
-                          <Button
+                          <Button aria-label="从队列移除这个文件"
                             type="link" danger size="small"
                             icon={<DeleteOutlined />}
                             onClick={() => setMergeFiles(mergeFiles.filter((_, i) => i !== r.idx - 1))}

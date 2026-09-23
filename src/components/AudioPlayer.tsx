@@ -223,27 +223,27 @@ export default function AudioPlayer({ filePath, fileName }: Props) {
         }}
       >
         <Tooltip title={playModeLabel}>
-          <Button
+          <Button aria-label="切换播放模式"
             type={playMode !== "sequence" ? "primary" : "text"}
             size="small"
             icon={playModeIcon}
             onClick={cyclePlayMode}
           />
         </Tooltip>
-        <Button
+        <Button aria-label="上一首"
           type="text"
           icon={<StepBackwardOutlined style={{ fontSize: 18 }} />}
           onClick={playPrev}
           disabled={playlist.length <= 1}
         />
-        <Button
+        <Button aria-label={playing ? "暂停" : "播放"}
           type="primary"
           shape="circle"
           size="large"
           icon={playing ? <PauseCircleOutlined style={{ fontSize: 28 }} /> : <PlayCircleOutlined style={{ fontSize: 28 }} />}
           onClick={togglePlay}
         />
-        <Button
+        <Button aria-label="下一首"
           type="text"
           icon={<StepForwardOutlined style={{ fontSize: 18 }} />}
           onClick={playNext}

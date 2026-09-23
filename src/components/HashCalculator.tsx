@@ -219,7 +219,7 @@ export default function HashCalculator({ open, onClose, filePath, files }: Props
             readOnly
             value={result}
             suffix={
-              <Button
+              <Button aria-label="复制计算结果"
                 type="text"
                 size="small"
                 icon={<CopyOutlined />}

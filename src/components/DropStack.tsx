@@ -210,7 +210,7 @@ export default function DropStack({ currentPath, onRefresh }: DropStackProps) {
                 }}
                 actions={[
                   <Tooltip key="remove" title="移除">
-                    <Button
+                    <Button aria-label="从暂存栈移除"
                       type="text"
                       size="small"
                       icon={<DeleteOutlined />}

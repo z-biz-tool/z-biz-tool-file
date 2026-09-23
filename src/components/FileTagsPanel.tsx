@@ -165,6 +165,7 @@ export default function FileTagsPanel({ filePath }: Props) {
       placement="bottomLeft"
     >
       <Button
+        aria-label="编辑标签/备注"
         type="text"
         size="small"
         icon={<TagOutlined />}

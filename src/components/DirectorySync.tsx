@@ -249,7 +249,7 @@ export default function DirectorySync({
             onChange={(e) => setLeftDir(e.target.value)}
             placeholder="选择或输入目录路径"
             suffix={
-              <Button
+              <Button aria-label="选择左侧目录"
                 type="text"
                 size="small"
                 icon={<FolderOutlined />}
@@ -266,7 +266,7 @@ export default function DirectorySync({
             onChange={(e) => setRightDir(e.target.value)}
             placeholder="选择或输入目录路径"
             suffix={
-              <Button
+              <Button aria-label="选择右侧目录"
                 type="text"
                 size="small"
                 icon={<FolderOutlined />}

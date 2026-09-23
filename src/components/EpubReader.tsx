@@ -225,14 +225,14 @@ export default function EpubReader({ filePath, fileName }: EpubReaderProps) {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
-              <Button
+              <Button aria-label="上一章"
                 size="small"
                 icon={<LeftOutlined />}
                 disabled={currentChapter === 0}
                 onClick={handlePrev}
               />
               <Progress percent={progress} size="small" style={{ flex: 1, minWidth: 0 }} />
-              <Button
+              <Button aria-label="下一章"
                 size="small"
                 icon={<RightOutlined />}
                 disabled={currentChapter >= chapters.length - 1}

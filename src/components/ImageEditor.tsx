@@ -697,20 +697,20 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
         </Text>
         <Space style={{ marginLeft: "auto" }}>
           <Tooltip title={`撤销${editorHint("撤销")}`}>
-            <Button icon={<UndoOutlined />} type="text" style={{ color: "#fff" }} onClick={undo} disabled={historyIdx <= 0} />
+            <Button aria-label="撤销上一步" icon={<UndoOutlined />} type="text" style={{ color: "#fff" }} onClick={undo} disabled={historyIdx <= 0} />
           </Tooltip>
           <Tooltip title={`重做${editorHint("重做")}`}>
-            <Button icon={<RedoOutlined />} type="text" style={{ color: "#fff" }} onClick={redo} disabled={historyIdx >= history.length - 1} />
+            <Button aria-label="重做" icon={<RedoOutlined />} type="text" style={{ color: "#fff" }} onClick={redo} disabled={historyIdx >= history.length - 1} />
           </Tooltip>
           <Tooltip title="重置">
-            <Button icon={<ReloadOutlined />} type="text" style={{ color: "#fff" }} onClick={reset} />
+            <Button aria-label="恢复原图" icon={<ReloadOutlined />} type="text" style={{ color: "#fff" }} onClick={reset} />
           </Tooltip>
           <Tooltip title="缩小">
-            <Button icon={<ZoomOutOutlined />} type="text" style={{ color: "#fff" }} onClick={() => setZoom((z) => Math.max(10, z - 10))} />
+            <Button aria-label="缩小" icon={<ZoomOutOutlined />} type="text" style={{ color: "#fff" }} onClick={() => setZoom((z) => Math.max(10, z - 10))} />
           </Tooltip>
           <Text style={{ color: "#fff", minWidth: 50, textAlign: "center" }}>{zoom}%</Text>
           <Tooltip title="放大">
-            <Button icon={<ZoomInOutlined />} type="text" style={{ color: "#fff" }} onClick={() => setZoom((z) => Math.min(400, z + 10))} />
+            <Button aria-label="放大" icon={<ZoomInOutlined />} type="text" style={{ color: "#fff" }} onClick={() => setZoom((z) => Math.min(400, z + 10))} />
           </Tooltip>
           <Button icon={<CheckOutlined />} type="primary" onClick={applyCrop} disabled={!cropMode || cropRect.w === 0}>
             应用裁剪
@@ -1017,7 +1017,7 @@ function ToolButton({
 }) {
   return (
     <Tooltip title={tooltip} placement="right">
-      <Button
+      <Button aria-label={tooltip}
         type={active ? "primary" : "text"}
         icon={icon}
         onClick={onClick}
