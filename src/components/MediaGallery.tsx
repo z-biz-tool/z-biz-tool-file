@@ -3,20 +3,22 @@
  * 包括：照片馆、音乐馆、视频馆等专用视图
  */
 
-import { useState, useEffect, useMemo } from "react";
-import { Spin, theme, Image, Dropdown, type MenuProps } from "antd";
+import { useState, useEffect } from "react";
+import { Spin, theme, Dropdown } from "antd";
 import { PictureOutlined, VideoCameraOutlined, AudioOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import type { FileEntry } from "../stores/fileStore";
-import { getFileTypeVisual } from "../utils/fileTypeIcon";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { toMediaItems, type MediaItem, type MediaType } from "../utils/mediaType";
+import { buildMediaMenu } from "../utils/mediaMenu";
 
 interface MediaGalleryProps {
   directory: string;
   mediaType: MediaType;
-  onItemDoubleClick?: (item: MediaItem) => void;
-  onItemRightClick?: (item: MediaItem, e: React.MouseEvent) => void;
+  /** 打开：卡片点击与菜单"打开"是同一条路径 */
+  onOpen?: (item: MediaItem) => void;
+  onReveal?: (item: MediaItem) => void;
+  onDelete?: (item: MediaItem) => void;
 }
 
 // 获取媒体文件列表
@@ -52,26 +54,22 @@ async function getVideoThumbnail(path: string): Promise<string | undefined> {
   }
 }
 
-// 获取音频图标
-function getAudioIcon(metadata?: MediaItem["metadata"]) {
-  return (
-    <div style={{ textAlign: "center", padding: "20px 10px" }}>
-      <AudioOutlined style={{ fontSize: 48, color: "#1677ff" }} />
-      {metadata?.duration && (
-        <div style={{ fontSize: 12, color: "#8c8c8c", marginTop: 4 }}>
-          {metadata.duration}
-        </div>
-      )}
-    </div>
-  );
+/**
+ * 三个卡片组件同构，共用这一份 props。
+ *
+ * onContextMenu 是 Dropdown 注入进来的（rc-trigger 用 cloneElement 传 props，TS 看不见调用点，
+ * 所以只能标成可选），它要的签名是"参数为原生事件"。之前这里声明并按 (item, e) 调用，
+ * 注入的处理器就把 MediaItem 当成事件：clientX 是 undefined、event.preventDefault() 直接抛
+ * TypeError，菜单停在 (0,0)，App 侧回调永远收不到。
+ */
+interface MediaItemCardProps {
+  item: MediaItem;
+  onClick: (item: MediaItem) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }
 
 // 图片项组件
-const ImageItem: React.FC<{
-  item: MediaItem;
-  onClick: (item: MediaItem) => void;
-  onContextMenu: (item: MediaItem, e: React.MouseEvent) => void;
-}> = ({ item, onClick, onContextMenu }) => {
+const ImageItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu }) => {
   const [thumbnail, setThumbnail] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
@@ -89,7 +87,7 @@ const ImageItem: React.FC<{
       onClick={() => onClick(item)}
       onContextMenu={(e) => {
         e.preventDefault();
-        onContextMenu(item, e);
+        onContextMenu?.(e);
       }}
       style={{
         position: "relative",
@@ -146,11 +144,7 @@ const ImageItem: React.FC<{
 };
 
 // 视频项组件
-const VideoItem: React.FC<{
-  item: MediaItem;
-  onClick: (item: MediaItem) => void;
-  onContextMenu: (item: MediaItem, e: React.MouseEvent) => void;
-}> = ({ item, onClick, onContextMenu }) => {
+const VideoItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu }) => {
   const [thumbnail, setThumbnail] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
@@ -168,7 +162,7 @@ const VideoItem: React.FC<{
       onClick={() => onClick(item)}
       onContextMenu={(e) => {
         e.preventDefault();
-        onContextMenu(item, e);
+        onContextMenu?.(e);
       }}
       style={{
         position: "relative",
@@ -238,17 +232,13 @@ const VideoItem: React.FC<{
 };
 
 // 音频项组件
-const AudioItem: React.FC<{
-  item: MediaItem;
-  onClick: (item: MediaItem) => void;
-  onContextMenu: (item: MediaItem, e: React.MouseEvent) => void;
-}> = ({ item, onClick, onContextMenu }) => {
+const AudioItem: React.FC<MediaItemCardProps> = ({ item, onClick, onContextMenu }) => {
   return (
     <div
       onClick={() => onClick(item)}
       onContextMenu={(e) => {
         e.preventDefault();
-        onContextMenu(item, e);
+        onContextMenu?.(e);
       }}
       style={{
         display: "flex",
@@ -316,8 +306,9 @@ function formatFileSize(bytes: number): string {
 export const MediaGallery: React.FC<MediaGalleryProps> = ({
   directory,
   mediaType,
-  onItemDoubleClick,
-  onItemRightClick,
+  onOpen,
+  onReveal,
+  onDelete,
 }) => {
   const { token } = theme.useToken();
   const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
@@ -332,32 +323,17 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     }
   }, [directory, mediaType]);
 
-  const handleItemDoubleClick = (item: MediaItem) => {
-    if (onItemDoubleClick) {
-      onItemDoubleClick(item);
+  // 卡片点击与菜单里的"打开"走同一个函数：分两处写迟早只改一处
+  const handleOpen = (item: MediaItem) => {
+    if (onOpen) {
+      onOpen(item);
     } else {
       // 默认打开方式
       invoke("open_with_default_app", { path: item.path }).catch(console.error);
     }
   };
 
-  const handleItemContextMenu = (item: MediaItem, e: React.MouseEvent) => {
-    if (onItemRightClick) {
-      onItemRightClick(item, e);
-    }
-  };
-
-  // 右键菜单
-  const contextMenu = useMemo((): MenuProps => {
-    return {
-      items: [
-        { key: "open", label: "打开" },
-        { key: "reveal", label: "在 Finder 中显示" },
-        { type: "divider" },
-        { key: "delete", label: "删除" },
-      ],
-    };
-  }, []);
+  const actions = { onOpen, onReveal, onDelete };
 
   // 渲染网格
   const renderGrid = () => {
@@ -372,13 +348,13 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
               padding: 16,
             }}
           >
-            {mediaFiles.map((item, index) => (
-              <Dropdown key={index} menu={contextMenu} trigger={["contextMenu"]}>
-                <ImageItem
-                  item={item}
-                  onClick={handleItemDoubleClick}
-                  onContextMenu={handleItemContextMenu}
-                />
+            {mediaFiles.map((item) => (
+              <Dropdown
+                key={item.path}
+                menu={{ items: buildMediaMenu(item, actions) }}
+                trigger={["contextMenu"]}
+              >
+                <ImageItem item={item} onClick={handleOpen} />
               </Dropdown>
             ))}
           </div>
@@ -394,13 +370,13 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
               padding: 16,
             }}
           >
-            {mediaFiles.map((item, index) => (
-              <Dropdown key={index} menu={contextMenu} trigger={["contextMenu"]}>
-                <VideoItem
-                  item={item}
-                  onClick={handleItemDoubleClick}
-                  onContextMenu={handleItemContextMenu}
-                />
+            {mediaFiles.map((item) => (
+              <Dropdown
+                key={item.path}
+                menu={{ items: buildMediaMenu(item, actions) }}
+                trigger={["contextMenu"]}
+              >
+                <VideoItem item={item} onClick={handleOpen} />
               </Dropdown>
             ))}
           </div>
@@ -414,13 +390,13 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
               flexDirection: "column",
             }}
           >
-            {mediaFiles.map((item, index) => (
-              <Dropdown key={index} menu={contextMenu} trigger={["contextMenu"]}>
-                <AudioItem
-                  item={item}
-                  onClick={handleItemDoubleClick}
-                  onContextMenu={handleItemContextMenu}
-                />
+            {mediaFiles.map((item) => (
+              <Dropdown
+                key={item.path}
+                menu={{ items: buildMediaMenu(item, actions) }}
+                trigger={["contextMenu"]}
+              >
+                <AudioItem item={item} onClick={handleOpen} />
               </Dropdown>
             ))}
           </div>

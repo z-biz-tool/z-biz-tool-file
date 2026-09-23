@@ -695,7 +695,9 @@ function AppShellInner() {
 
   // 删除文件
   const handleDelete = useCallback(
-    (entry: FileEntry, permanent = false) => {
+    // 只读 name/path，所以按这两个字段收：画廊里删一张图时手上只有 MediaItem，
+    // 凑一个 size:0 / modified:0 的假 FileEntry 只会让以后谁多用一个字段时静默拿到 0。
+    (entry: Pick<FileEntry, "name" | "path">, permanent = false) => {
       modal.confirm({
         title: permanent ? "永久删除" : "移到回收站？",
         content: permanent
@@ -2226,26 +2228,20 @@ function AppShellInner() {
             <MediaGallery
               directory={mediaLibraryPath}
               mediaType={mediaLibraryType}
-              onItemDoubleClick={(item) => {
+              onOpen={(item) => {
                 invoke("open_with_default_app", { path: item.path }).catch((err) =>
                   message.error("打开失败: " + err)
                 );
               }}
-              onItemRightClick={(item, e) => {
-                e.preventDefault();
-                const menuItems: MenuProps["items"] = [
-                  { key: "open", label: "打开", onClick: () => invoke("open_with_default_app", { path: item.path }) },
-                  { key: "copy", label: "复制", onClick: () => handleCopy([item]) },
-                  { key: "delete", label: "删除", onClick: () => handleDelete(item) },
-                ];
-                Modal.confirm({
-                  title: "操作确认",
-                  content: `确定要删除「${item.name}」吗？`,
-                  onOk: async () => {
-                    await handleDelete(item, false);
-                  },
-                });
+              onReveal={(item) => {
+                invoke("reveal_in_finder", { path: item.path }).catch((err) =>
+                  message.error("打开 Finder 失败: " + err)
+                );
               }}
+              // 删除只走 handleDelete 一条路：它自带"移到回收站？"确认框（危险操作
+              // 主按钮写明动作），而这里原先额外套了一层写死的 Modal.confirm，等于
+              // 同一次删除两个口径的确认文案，且那层弹窗没走 App 的 modal 实例。
+              onDelete={(item) => handleDelete({ name: item.name, path: item.path })}
             />
           </div>
         </Modal>
