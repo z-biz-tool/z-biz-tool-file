@@ -5,7 +5,12 @@
  * 匹配逻辑却硬比 metaKey，两边互相矛盾且只有 mac 能按出来。
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { formatShortcut, matchSpec, type ShortcutSpec } from "../src/_shared/useKeyboardShortcuts";
+import {
+  formatShortcut,
+  isActivationKeyOnControl,
+  matchSpec,
+  type ShortcutSpec,
+} from "../src/_shared/useKeyboardShortcuts";
 
 type Bits = {
   key?: string;
@@ -148,5 +153,81 @@ describe("matchSpec：撤销/重做这类同键不同 Shift 的组合必须互�
     expect(matchSpec(undo, event({ key: "z", ctrl: true }))).toBe(true);
     expect(matchSpec(undo, event({ key: "Z", ctrl: true, shift: true }))).toBe(false);
     expect(matchSpec(redo, event({ key: "Z", ctrl: true, shift: true }))).toBe(true);
+  });
+});
+
+/**
+ * isActivationKeyOnControl：光标停在按钮上按 Enter 时，全局快捷键必须让路。
+ *
+ * 回归用例是"聚焦标签页关闭按钮按 Enter"：快捷键无条件 preventDefault 把按钮自己的
+ * 激活行为取消掉了，标签没关掉反倒跑了"打开选中项"。
+ * 这里的 node 只测纯判定；"preventDefault 真会吃掉按钮激活、让路后标签真能关掉"
+ * 属于浏览器行为，只能在实盘页面验（见 doc 里记的 dev-server 通道）。
+ */
+describe("isActivationKeyOnControl：Enter/Space 归聚焦的控件，不归全局快捷键", () => {
+  /**
+   * 真实 DOM 里 closest 挂在 Element.prototype 上（不是实例自有属性），签名
+   * (selector) => Element | null，选择器不命中返回 null。node 环境没有 DOM，
+   * 所以按同一形状造：class 方法=原型方法，matches 声明这个节点"是"哪几种选择器。
+   */
+  class FakeNode {
+    closestCalls: string[] = [];
+    matches: string[];
+    constructor(matches: string[]) {
+      this.matches = matches;
+    }
+    closest(selector: string) {
+      this.closestCalls.push(selector);
+      const hit = selector
+        .split(",")
+        .map((s) => s.trim())
+        .some((s) => this.matches.includes(s));
+      return hit ? (this as unknown as Element) : null;
+    }
+  }
+
+  const asTarget = (n: unknown) => n as unknown as EventTarget;
+
+  it("原生 button 上的 Enter 与 Space 让路，字母键不让", () => {
+    const btn = new FakeNode(["button"]);
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "Enter" }))).toBe(true);
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: " " }))).toBe(true);
+    // 字母/功能键不是"点这个控件"的按键，拦下来就等于把快捷键全废了
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "t" }))).toBe(false);
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "Delete" }))).toBe(false);
+    // 字母键在查 DOM 之前就该判掉：一次 keydown 都要 closest 一遍是没必要的开销
+    expect(btn.closestCalls).toHaveLength(2);
+  });
+
+  it("Shift 不算修饰（Shift+Enter 仍会激活按钮），但 ⌘/Ctrl/Alt 一按就是另一回事", () => {
+    const btn = new FakeNode(["button"]);
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "Enter", shift: true }))).toBe(true);
+    // ⌘T / ⌥← 这类组合浏览器不当成点击：光标落在按钮上时它们照样是全局快捷键，
+    // 一旦这里连修饰键一起放过，整个快捷键系统在按钮聚焦时集体失灵。
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "Enter", meta: true }))).toBe(false);
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "Enter", ctrl: true }))).toBe(false);
+    expect(isActivationKeyOnControl(asTarget(btn), event({ key: "Enter", alt: true }))).toBe(false);
+  });
+
+  it("选择器覆盖原生 button / 带 href 的链接 / 自制 role=button，但不含裸 a 与 role=tab", () => {
+    const link = new FakeNode(["a[href]"]);
+    expect(isActivationKeyOnControl(asTarget(link), event({ key: "Enter" }))).toBe(true);
+    // 面包屑那三个自制控件走的是 role=button
+    const crumb = new FakeNode(["[role='button']"]);
+    expect(isActivationKeyOnControl(asTarget(crumb), event({ key: "Enter" }))).toBe(true);
+    // 没有 href 的 a 拿不到焦点也不会被激活；tab 由 rc-tabs 自己管方向键
+    const plain = new FakeNode(["a", "[role='tab']"]);
+    expect(isActivationKeyOnControl(asTarget(plain), event({ key: "Enter" }))).toBe(false);
+    const selector = link.closestCalls[0];
+    for (const token of ["button", "a[href]", "[role='button']"]) {
+      expect(selector.split(",").map((s) => s.trim())).toContain(token);
+    }
+  });
+
+  it("target 没有 closest（window/document 这类）时既不抛也不让路", () => {
+    // node 环境没有 Element 全局，代码里若写 target instanceof Element 会直接 ReferenceError；
+    // 真浏览器里事件也可能以 window 为 target（程序化 dispatch）。
+    expect(isActivationKeyOnControl(null, event({ key: "Enter" }))).toBe(false);
+    expect(isActivationKeyOnControl({ tagName: "WINDOW" } as unknown as EventTarget, event({ key: "Enter" }))).toBe(false);
   });
 });

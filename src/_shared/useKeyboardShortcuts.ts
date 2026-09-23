@@ -32,6 +32,30 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+/** 原生或 ARIA 语义上"可激活"的控件：Enter/Space 会真的触发它们 */
+const ACTIVATABLE_SELECTOR = "button, a[href], [role='button']";
+
+/**
+ * 一次 keydown 是不是"激活当前聚焦的控件"的那一下按键。
+ *
+ * Enter 和 Space 在拿到焦点的 button / 链接 / role=button 上就是"点它"——浏览器把这当作
+ * 这条 keydown 的默认行为。此时全局快捷键再跑一遍，一次按键会做两件事；更糟的是快捷键
+ * 默认无条件 preventDefault，直接取消掉控件自己的激活行为。实测（聚焦标签页的关闭按钮按
+ * Enter）：标签没关，反倒触发了"打开选中项"。
+ *
+ * 带 ⌘/Ctrl/Alt 的组合浏览器不当成点击，所以 ⌘T、⌥← 这类快捷键完全不受影响。
+ *
+ * 导出仅为可单测：node 环境没有 DOM，这里只依赖 closest()，因此对 target 做鸭子类型判断，
+ * 不引用 Element/document（那两个全局在 node 里根本不存在，写了就是 ReferenceError）。
+ */
+export function isActivationKeyOnControl(target: EventTarget | null, e: KeyboardEvent): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (e.key !== "Enter" && e.key !== " ") return false;
+  const el = target as { closest?: (selector: string) => unknown } | null;
+  if (!el || typeof el.closest !== "function") return false;
+  return !!el.closest(ACTIVATABLE_SELECTOR);
+}
+
 /**
  * 判断一次 keydown 是否命中某个 spec。
  *
@@ -67,6 +91,8 @@ export function useKeyboardShortcuts(specs: ShortcutSpec[], enabled: boolean = t
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       const inEditable = isEditableTarget(e.target);
+      // 这一下按键是"激活聚焦控件"的（例如光标在关闭标签按钮上按 Enter），交给浏览器
+      if (isActivationKeyOnControl(e.target, e)) return;
       for (const spec of specs) {
         if (!matchSpec(spec, e)) continue;
         if (inEditable && !spec.allowInInput) continue;
