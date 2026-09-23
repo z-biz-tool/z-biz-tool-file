@@ -430,7 +430,7 @@ fn decode_glyphs(
     } else {
         decode_pdf_string(raw)
     };
-    scrub_invisible(&text)
+    display_text(&text)
 }
 
 /// 去掉解出来但读者看不见的码位。
@@ -441,7 +441,7 @@ fn decode_glyphs(
 ///
 /// 换行与制表保留（那是内容流自己表达的排版），回车归一为换行；其余 C0、DEL、
 /// 软连字符丢弃。 bidi/连字这类影响字形拼接的 Cf 标记保留，删了会改坏阿拉伯文排版。
-pub(crate) fn scrub_invisible(text: &str) -> String {
+fn scrub_invisible(text: &str) -> String {
     let dirty = |c: char| {
         (c.is_control() || matches!(c, '\u{7f}' | '\u{ad}')) && !matches!(c, '\n' | '\t')
     };
@@ -458,6 +458,57 @@ pub(crate) fn scrub_invisible(text: &str) -> String {
         }
     }
     out
+}
+
+/// Kangxi 部首码位（U+2F00–U+2FD5）到正经汉字的映射，数组下标就是码位偏移，共 214 条。
+///
+/// 子集字体会把"文"这种字直接映射到部首码位（实测一份 WPS 导出的 PDF 里有 396 个），
+/// 屏幕上是同一个字形，复制到面板外却搜不到、分词也断在中间。Unicode 把这 214 个码位
+/// 定义为兼容字符，NFKC 归一结果就是下表；部首码位本身没有别的用途，替换不丢信息。
+/// 代价是部首索引页（词典那种）会退化成普通汉字——真实语料里没出现过这种文档。
+const KANGXI_IDEOGRAPH: [char; 214] = [
+    '一', '丨', '丶', '丿', '乙', '亅', '二', '亠',
+    '人', '儿', '入', '八', '冂', '冖', '冫', '几',
+    '凵', '刀', '力', '勹', '匕', '匚', '匸', '十',
+    '卜', '卩', '厂', '厶', '又', '口', '囗', '土',
+    '士', '夂', '夊', '夕', '大', '女', '子', '宀',
+    '寸', '小', '尢', '尸', '屮', '山', '巛', '工',
+    '己', '巾', '干', '幺', '广', '廴', '廾', '弋',
+    '弓', '彐', '彡', '彳', '心', '戈', '戶', '手',
+    '支', '攴', '文', '斗', '斤', '方', '无', '日',
+    '曰', '月', '木', '欠', '止', '歹', '殳', '毋',
+    '比', '毛', '氏', '气', '水', '火', '爪', '父',
+    '爻', '爿', '片', '牙', '牛', '犬', '玄', '玉',
+    '瓜', '瓦', '甘', '生', '用', '田', '疋', '疒',
+    '癶', '白', '皮', '皿', '目', '矛', '矢', '石',
+    '示', '禸', '禾', '穴', '立', '竹', '米', '糸',
+    '缶', '网', '羊', '羽', '老', '而', '耒', '耳',
+    '聿', '肉', '臣', '自', '至', '臼', '舌', '舛',
+    '舟', '艮', '色', '艸', '虍', '虫', '血', '行',
+    '衣', '襾', '見', '角', '言', '谷', '豆', '豕',
+    '豸', '貝', '赤', '走', '足', '身', '車', '辛',
+    '辰', '辵', '邑', '酉', '釆', '里', '金', '長',
+    '門', '阜', '隶', '隹', '雨', '靑', '非', '面',
+    '革', '韋', '韭', '音', '頁', '風', '飛', '食',
+    '首', '香', '馬', '骨', '高', '髟', '鬥', '鬯',
+    '鬲', '鬼', '魚', '鳥', '鹵', '鹿', '麥', '麻',
+    '黃', '黍', '黑', '黹', '黽', '鼎', '鼓', '鼠',
+    '鼻', '齊', '齒', '龍', '龜', '龠',
+];
+
+/// 抽取出来的文本 → 面板可读文本：丢掉看不见的码位，再把兼容字形归一成正经汉字。
+fn display_text(text: &str) -> String {
+    let cleaned = scrub_invisible(text);
+    if !cleaned.chars().any(|c| matches!(c, '\u{2f00}'..='\u{2fd5}')) {
+        return cleaned;
+    }
+    cleaned
+        .chars()
+        .map(|c| match c {
+            '\u{2f00}'..='\u{2fd5}' => KANGXI_IDEOGRAPH[c as usize - 0x2F00],
+            other => other,
+        })
+        .collect()
 }
 
 /// 提取PDF全部文本
@@ -492,7 +543,7 @@ fn info_string(doc: &Document, key: &[u8]) -> Option<String> {
     let dict = info_obj.as_dict().ok()?;
     match dict.get(key).ok()? {
         Object::String(bytes, _) => {
-            let text = scrub_invisible(&decode_pdf_string(bytes));
+            let text = display_text(&decode_pdf_string(bytes));
             if text.trim().is_empty() {
                 None
             } else {
@@ -1081,6 +1132,52 @@ mod tests {
         let file = write_fixture(&dir, "ctrlcmap.pdf", &flat_pdf(&objects));
         let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
         assert_eq!(text, "A");
+    }
+
+    /// WPS/旧排版器的子集字体会把汉字映射到 Kangxi 部首码位：屏幕上是同一个字形，
+    /// 复制出去却搜不到原字。实测一份 PDF 里 396 个字符属于这类码位。
+    #[test]
+    fn kangxi_radical_codes_become_real_han_characters() {
+        let dir = crate::test_bridge::TempDir::new("pdftext-kangxi");
+        let mut objects = page_objects("BT /F1 24 Tf 72 700 Td <010203> Tj ET");
+        objects.push(
+            "<< /Type /Font /Subtype /TrueType /BaseFont /Test /ToUnicode 6 0 R /Encoding /WinAnsiEncoding >>"
+                .to_string(),
+        );
+        // <01>→U+2F42(⽂) <02>→U+2F00(⼀) <03>→U+2F83(⾃)：都是兼容码位
+        let cmap = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n\
+                    1 begincodespacerange\n<00> <FF>\nendcodespacerange\n\
+                    3 beginbfchar\n<01> <2F42>\n<02> <2F00>\n<03> <2F83>\nendbfchar\nendcmap";
+        objects.push(content_stream(cmap));
+        let file = write_fixture(&dir, "kangxi.pdf", &flat_pdf(&objects));
+        let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
+        assert_eq!(text, "文一自");
+        assert!(
+            !text.chars().any(|c| matches!(c, '\u{2f00}'..='\u{2fd5}')),
+            "还留着部首码位: {:?}",
+            text
+        );
+    }
+
+    /// 表是手抄进来的，所以既要能整表自检（每条都落在CJK统一汉字区、顺序不错位），
+    /// 也要在首/中/尾三个点上当场对答案。
+    #[test]
+    fn the_kangxi_table_stays_in_the_ideograph_block() {
+        assert_eq!(KANGXI_IDEOGRAPH.len(), 214);
+        for (offset, target) in KANGXI_IDEOGRAPH.iter().enumerate() {
+            let radical = char::from_u32(0x2F00 + offset as u32).unwrap();
+            assert!(
+                matches!(target, '\u{4e00}'..='\u{9fff}'),
+                "{} 映射到了 {:?}，不在统一汉字区",
+                radical,
+                target
+            );
+        }
+        assert_eq!(display_text(&char::from_u32(0x2F00).unwrap().to_string()), "一");
+        assert_eq!(display_text(&char::from_u32(0x2F42).unwrap().to_string()), "文");
+        assert_eq!(display_text(&char::from_u32(0x2FD5).unwrap().to_string()), "龠");
+        // 正经汉字、以及部首补充区(U+2E80起，不在归一范围)都不该被改动
+        assert_eq!(display_text("本文⻛"), "本文⻛");
     }
 
     /// 换行与制表是内容流自己表达的排版信息，清洗时必须原样保留；回车归一成换行。
