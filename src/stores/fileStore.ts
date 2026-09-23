@@ -246,8 +246,15 @@ export const useFileStore = create<FileStore>((set) => ({
   updateActiveTabPath: (path) => {
     set((s) => {
       if (!s.activeTabId) return s;
+      // 只给目录 tab 记路径。library tab 的 path 是伪路径（tabTitle / tabIcon 靠它），
+      // 一旦被 currentPath 覆写：标签从"图书馆"变成某个目录名，再点回去 switchTab
+      // 认它是目录 tab ⇒ 主内容区从图书馆弹回文件列表，而用户没做过任何切换动作。
+      // 触发时机是关 tab 的修复重渲染：App 的 [currentPath] effect 会在新激活的
+      // 那一刻把 currentPath 记到"当时激活的 tab"上。
       return {
-        tabs: s.tabs.map((t) => (t.id === s.activeTabId ? { ...t, path } : t)),
+        tabs: s.tabs.map((t) =>
+          t.id === s.activeTabId && t.kind === "directory" ? { ...t, path } : t
+        ),
       };
     });
   },

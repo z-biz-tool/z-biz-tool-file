@@ -86,14 +86,24 @@ describe("closeTab / updateActiveTabPath：其余两处写 tabs 的地方不能�
     expect(activeTab()?.path).toBe("/Users/zifang/Movies");
   });
 
-  it("改路径只改 path，kind/meta 原样留着", () => {
-    store().openTab("library://main", "library", { libraryKind: "movie" });
+  it("目录 tab 改路径只改 path，kind 原样留着", () => {
+    store().openTab("/Users/zifang/Downloads");
     store().updateActiveTabPath("/Users/zifang/Desktop");
     expect(activeTab()).toEqual({
       id: expect.any(String),
       path: "/Users/zifang/Desktop",
+      kind: "directory",
+    });
+  });
+
+  it("图书馆 tab 不接目录路径 —— 否则标签改名、切回去的行为也跟着变", () => {
+    const lib = store().openTab("library://main", "library", { libraryKind: "book" });
+    store().updateActiveTabPath("/Users/zifang/Desktop");
+    expect(store().tabs.find((t) => t.id === lib)).toEqual({
+      id: lib,
+      path: "library://main",
       kind: "library",
-      meta: { libraryKind: "movie" },
+      meta: { libraryKind: "book" },
     });
   });
 
