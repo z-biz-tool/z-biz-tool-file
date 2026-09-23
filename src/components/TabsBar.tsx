@@ -73,7 +73,9 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
               whiteSpace: "nowrap",
               maxWidth: 180,
             }}
-            title={t.path}
+            // 伪路径对读者没有任何信息量：hover "图书馆" 标签却弹出 library://main，
+            // 看起来像坏掉了。目录 tab 才 hover 出真实路径。
+            title={t.kind === "directory" ? t.path : tabTitle(t)}
           >
             {tabIcon(t.kind)}
             <span style={{ marginLeft: 4 }}>{title}</span>
