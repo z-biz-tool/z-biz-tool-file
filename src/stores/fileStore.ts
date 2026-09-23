@@ -35,6 +35,16 @@ export interface BookmarkItem {
 // 文件类型分类
 export type FileType = "image" | "video" | "audio" | "text" | "markdown" | "doc" | "epub" | "mobi" | "pdf" | "other";
 
+// 标签页。kind 不能省：activeTabKind / switchTab / TabsBar 的标题与图标都按 kind 分支，
+// 缺 kind 的 tab 会被当成目录 tab，于是 "library://main" 这类伪路径会被拿去加载目录。
+export interface FileTab {
+  id: string;
+  path: string;
+  // directory(目录浏览) / library(图书馆&媒体库) / media(媒体库 - 兼容)
+  kind: "directory" | "library" | "media";
+  meta?: { libraryKind?: string }; // library tab 可指定 book/music/movie...
+}
+
 interface FileStore {
   // 当前路径
   currentPath: string;
@@ -61,13 +71,7 @@ interface FileStore {
   // 文件列表显示模式
   viewMode: "table" | "grid" | "list" | "column";
   // 多标签页
-  // tab 类型:directory(目录浏览) / library(图书馆&媒体库) / media(媒体库 - 兼容)
-  tabs: Array<{
-    id: string;
-    path: string;
-    kind: "directory" | "library" | "media";
-    meta?: { libraryKind?: string };  // library tab 可指定 book/music/movie...
-  }>;
+  tabs: FileTab[];
   activeTabId: string | null;
   // 文件标签/备注（path → tag）
   tagsByPath: Record<string, { color: string; label: string; note: string }>;
@@ -109,11 +113,7 @@ interface FileStore {
   // 设置文件列表显示模式
   setViewMode: (mode: "table" | "grid" | "list" | "column") => void;
   // 多标签操作
-  openTab: (
-    path: string,
-    kind?: "directory" | "library" | "media",
-    meta?: { libraryKind?: string },
-  ) => string; // 返回 tab id
+  openTab: (path: string, kind?: FileTab["kind"], meta?: FileTab["meta"]) => string; // 返回 tab id
   closeTab: (id: string) => void;
   switchTab: (id: string) => void;
   updateActiveTabPath: (path: string) => void;
@@ -145,7 +145,7 @@ export const useFileStore = create<FileStore>((set) => ({
   clipboard: [],
   bookmarks: JSON.parse(localStorage.getItem("z-tool-bookmarks") || "[]") as BookmarkItem[],
   viewMode: "table" as const,
-  tabs: [] as Array<{ id: string; path: string }>,
+  tabs: [] as FileTab[],
   activeTabId: null,
   tagsByPath: {} as Record<string, { color: string; label: string; note: string }>,
   // AI 功能相关状态
@@ -185,12 +185,12 @@ export const useFileStore = create<FileStore>((set) => ({
       return { bookmarks };
     }),
   setViewMode: (mode) => set({ viewMode: mode }),
-  openTab: (path) => {
+  openTab: (path, kind = "directory", meta) => {
     // 始终创建新 tab，不去重。3 个调用点（挂载初始化 / ⌘+T / +按钮）
     // 都期望真的新增，重复打开让用户自己决定要不要关。
     const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     set((s) => ({
-      tabs: [...s.tabs, { id, path }],
+      tabs: [...s.tabs, meta ? { id, path, kind, meta } : { id, path, kind }],
       activeTabId: id,
     }));
     return id;
@@ -216,7 +216,7 @@ export const useFileStore = create<FileStore>((set) => ({
         const home = s.currentPath || "/";
         const homeId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         return {
-          tabs: [{ id: homeId, path: home }],
+          tabs: [{ id: homeId, path: home, kind: "directory" }],
           activeTabId: homeId,
         };
       }
