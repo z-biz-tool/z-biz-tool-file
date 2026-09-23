@@ -5,6 +5,8 @@
  * 确认框只写"确定要同步吗"等于没确认：要说清从哪到哪、几项、其中几项会被盖掉，
  * 而这些数字（尤其"会被盖掉的几项"）必须来自真的 modified 项，不能拿总数凑。
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildSyncPlan, pickSyncable, syncPlanSummary, type SyncDiffEntry } from "../src/utils/syncPlan";
 
@@ -73,5 +75,28 @@ describe("同步计划", () => {
     const text = syncPlanSummary(plan);
     expect(text).not.toContain("undefined");
     expect(text).toContain("（未填）");
+  });
+});
+
+/** 组件侧不许把这条确认删成"点了就走" */
+describe("同步前的危险确认", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("../src/components/DirectorySync.tsx", import.meta.url)),
+    "utf8"
+  );
+
+  it("invoke sync_directories 之前必须先过一道 danger 确认", () => {
+    const at = src.indexOf('"sync_directories"');
+    expect(at, "找不到同步调用").toBeGreaterThan(-1);
+    const before = src.slice(0, at);
+    const gate = before.lastIndexOf("modal.confirm(");
+    expect(gate, "确认框被删了").toBeGreaterThan(-1);
+    expect(before.slice(gate)).toMatch(/okType: "danger"/);
+    expect(before.slice(gate)).toContain("syncPlanSummary(plan)");
+  });
+
+  it("确认框走 App context 的 modal，不是静态 Modal 也不是 window.confirm", () => {
+    expect(src).toMatch(/const \{ message, modal \} = AntdApp\.useApp\(\);/);
+    expect(src).not.toMatch(/window\.confirm\(/);
   });
 });
