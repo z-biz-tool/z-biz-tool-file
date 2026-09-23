@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, type CSSProperties } from "react";
 import { Empty, Tooltip, Button, Modal, Spin, App as AntdApp } from "antd";
 import {
   CopyOutlined,
+  EditOutlined,
   SwapOutlined,
   EyeOutlined,
   CodeOutlined,
@@ -355,6 +356,19 @@ export default function FileContentPreview({
         </>
       )}
       <div style={{ flex: 1 }} />
+      {fileType === "image" && !editingImage && (
+        <Tooltip title="编辑图片（裁剪/旋转/滤镜，导出走 save_image_data）">
+          <Button
+            size="small"
+            type="text"
+            icon={<EditOutlined />}
+            onClick={() => setEditingImage(true)}
+            aria-label="编辑图片"
+          >
+            编辑图片
+          </Button>
+        </Tooltip>
+      )}
       {onCollapse && (
         <Tooltip title={`收起预览${hint("显示/隐藏预览区")}`}>
           <Button

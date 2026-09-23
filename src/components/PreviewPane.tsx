@@ -21,7 +21,15 @@ interface FileInfo {
  * - 选中文件夹：显示基本信息
  * - 选中文件：委托给 FileContentPreview（统一预览逻辑：图片/视频/音频/md/csv/json/yaml/epub/pdf/...）
  */
-export default function PreviewPane({ onCollapse }: { onCollapse?: () => void } = {}) {
+interface PreviewPaneProps {
+  onCollapse?: () => void;
+  /** 图片编辑态由外面控制：右键菜单「图片编辑」要能直接把预览面板推进编辑态 */
+  editingImage?: boolean;
+  onEditImage?: () => void;
+  onExitEditImage?: () => void;
+}
+
+export default function PreviewPane({ onCollapse, editingImage, onEditImage, onExitEditImage }: PreviewPaneProps) {
   const { selectedFile } = useFileStore();
   const [dirInfo, setDirInfo] = useState<FileInfo | null>(null);
   const [dirLoading, setDirLoading] = useState(false);
@@ -77,6 +85,9 @@ export default function PreviewPane({ onCollapse }: { onCollapse?: () => void } 
       showTopbar
       enableMdToggle
       onCollapse={onCollapse}
+      editingImage={editingImage}
+      onEditImage={onEditImage}
+      onExitEditImage={onExitEditImage}
     />
   );
 }

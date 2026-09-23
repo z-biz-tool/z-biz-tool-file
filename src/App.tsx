@@ -245,6 +245,8 @@ function AppShellInner() {
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [mediaLibraryType, setMediaLibraryType] = useState<"image" | "video" | "audio">("image");
   const [mediaLibraryPath, setMediaLibraryPath] = useState<string>("");
+  // 预览面板的图片编辑态（右键「图片编辑」与预览顶栏那颗按钮共用这一个开关）
+  const [previewEditImage, setPreviewEditImage] = useState(false);
   // 当前目录的快速过滤（subsequence 模糊匹配）
   const [quickFilter, setQuickFilter] = useState("");
   const [siderCollapsed, setSiderCollapsed] = useState<boolean>(() => {
@@ -809,7 +811,14 @@ function AppShellInner() {
       ...(isImage ? [{
         key: "ocr", label: "OCR 文字识别", icon: <ScanOutlined />, onClick: () => { setSelectedFile(record); setOcrOpen(true); },
       }, {
-        key: "image-editor", label: "图片编辑", icon: <PictureOutlined />, onClick: () => { message.info("请使用工具栏 [OCR] 进入图片编辑"); },
+        key: "image-editor", label: "图片编辑", icon: <EditOutlined />, onClick: () => {
+          // 之前这里只弹一句"请使用工具栏 [OCR] 进入图片编辑"：OCR 面板里没有图片编辑，
+          // 而默认的表格视图 + 右侧预览也没有任何进编辑的按钮（只有分栏视图的 tab 栏有）
+          setSelectedFile(record);
+          setSelectedRowKeys([record.path]);
+          setPreviewVisible(true);
+          setPreviewEditImage(true);
+        },
       }] : []),
       ...(isImage || isVideo ? [{
         key: "media-library", label: isVideo ? "加入视频库" : "加入图片库", icon: <PictureOutlined />, onClick: () => {
@@ -1283,6 +1292,11 @@ function AppShellInner() {
 
   // 文件对比的两个入参：多选时按列表顺序取前两个；只选一个就当左边，右边留给用户挑。
   // 之前工具栏那条入口开面板永远是从空开始，等于让用户把路径再敲一遍。
+  // 换选中项就退出图片编辑：不退回的话，下一个文件一点开预览就莫名进编辑态
+  useEffect(() => {
+    setPreviewEditImage(false);
+  }, [selectedFile?.path]);
+
   const diffSeeds = {
     left: selectedFiles[0]?.path ?? null,
     right: selectedFiles[1]?.path ?? null,
@@ -2011,7 +2025,12 @@ function AppShellInner() {
                 role="region"
                 aria-label="预览区"
               >
-                <PreviewPane onCollapse={() => setPreviewVisible(false)} />
+                <PreviewPane
+                  onCollapse={() => setPreviewVisible(false)}
+                  editingImage={previewEditImage}
+                  onEditImage={() => setPreviewEditImage(true)}
+                  onExitEditImage={() => setPreviewEditImage(false)}
+                />
               </div>
             </>
           )}
