@@ -17,11 +17,11 @@ import { describe, expect, it } from "vitest";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = readFileSync(`${ROOT}/src/components/MediaGallery.tsx`, "utf8");
 
-const CARDS = ["ImageItem", "VideoItem", "AudioItem"];
+const CARDS = ["ImageItem", "VideoItem", "AudioItem", "ListRow"];
 
 /** 卡片组件自己的函数体（到下一个顶层 const 为止） */
 function bodyOf(name: string): string {
-  const start = SRC.indexOf(`const ${name}: React.FC`);
+  const start = SRC.indexOf(`const ${name}`);
   expect(start, `找不到 ${name}`).toBeGreaterThan(-1);
   const rest = SRC.slice(start);
   const next = rest.slice(1).search(/^const |^\/\/ |^export /m);
@@ -30,7 +30,7 @@ function bodyOf(name: string): string {
 
 describe("媒体库卡片的激活方式", () => {
   it("三张卡片都存在（改动漏掉某一张时，这条先红）", () => {
-    for (const c of CARDS) expect(SRC).toContain(`const ${c}: React.FC`);
+    for (const c of CARDS) expect(SRC).toContain(`const ${c}`);
   });
 
   it("单击走 onSelect，打开走 onDoubleClick", () => {
@@ -50,6 +50,14 @@ describe("媒体库卡片的激活方式", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("两种版式的每一项都过 withMenu —— 列表视图不能悄悄没有右键菜单", () => {
+    const uses = SRC.match(/withMenu\(/g) ?? [];
+    // 网格三种类型 + 列表一种：定义处写成 `withMenu = (`，不计入
+    expect(uses.length).toBe(4);
+    const list = bodyOf("renderList");
+    expect(list).toContain("withMenu(item, <ListRow");
   });
 
   it("选中态要跟着列表走：删掉当前选中的那一张时把环摘掉", () => {

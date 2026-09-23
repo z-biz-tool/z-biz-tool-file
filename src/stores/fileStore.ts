@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { MediaGallerySize, MediaViewMode } from "../utils/mediaLayout";
 
 // 文件条目类型
 export interface FileEntry {
@@ -82,8 +83,8 @@ interface FileStore {
   aiLastSearch: string;
   aiSearchResults: Array<{ path: string; score: number; summary?: string }>;
   // 媒体库状态
-  mediaViewMode: "gallery" | "list";
-  mediaGallerySize: "small" | "medium" | "large";
+  mediaViewMode: MediaViewMode;
+  mediaGallerySize: MediaGallerySize;
   // 设置当前路径
   setCurrentPath: (path: string) => void;
   // 设置文件列表

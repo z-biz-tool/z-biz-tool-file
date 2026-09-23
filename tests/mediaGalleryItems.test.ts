@@ -16,6 +16,7 @@ type MediaType = "image" | "video" | "audio";
 
 let toMediaItem: (file: FileEntry, type: MediaType) => unknown;
 let toMediaItems: (files: FileEntry[], type: MediaType) => { name: string; type: MediaType }[];
+let mediaDate: (epochSeconds: number) => string;
 
 beforeAll(async () => {
   globalThis.localStorage = {
@@ -26,15 +27,32 @@ beforeAll(async () => {
   const mod = await import("../src/utils/mediaType");
   toMediaItem = mod.toMediaItem;
   toMediaItems = mod.toMediaItems;
+  mediaDate = mod.mediaDate;
 });
+
+/** 取本地正午：跨时区不会翻到前一天/后一天，日期断言才是确定的 */
+const localNoon = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime() / 1000;
 
 const entry = (name: string, over: Partial<FileEntry> = {}): FileEntry => ({
   name,
   path: `/data/${name}`,
   is_dir: false,
   size: 1024,
-  modified: 1700000000,
+  modified: localNoon(2023, 11, 15),
   ...over,
+});
+
+describe("mediaDate", () => {
+  // 关键不是格式好看，而是不跟宿主 locale 跑：原来 toLocaleDateString() 在
+  // 同一个时间戳在中文 locale 下是 2023/11/15、英文 locale 下是 11/15/2023。
+  it("固定 YYYY/MM/DD 并补零", () => {
+    expect(mediaDate(localNoon(2023, 11, 5))).toBe("2023/11/05");
+    expect(mediaDate(localNoon(2024, 1, 1))).toBe("2024/01/01");
+  });
+
+  it("坏时间戳不吐出 Invalid Date", () => {
+    expect(mediaDate(Number.NaN)).toBe("");
+  });
 });
 
 describe("toMediaItem", () => {
@@ -43,7 +61,7 @@ describe("toMediaItem", () => {
       path: "/data/a.jpg",
       name: "a.jpg",
       type: "image",
-      metadata: { size: 1024, date: new Date(1700000000 * 1000).toLocaleDateString() },
+      metadata: { size: 1024, date: "2023/11/15" },
     });
   });
 

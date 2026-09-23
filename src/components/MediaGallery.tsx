@@ -9,13 +9,24 @@ import { PictureOutlined, VideoCameraOutlined, AudioOutlined } from "@ant-design
 import { invoke } from "@tauri-apps/api/core";
 import type { FileEntry } from "../stores/fileStore";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { formatFileSize } from "../stores/fileStore";
 import { toMediaItems, type MediaItem, type MediaType } from "../utils/mediaType";
 import { buildMediaMenu, type MediaActions } from "../utils/mediaMenu";
+import {
+  gridStyle,
+  listGridStyle,
+  type MediaGallerySize,
+  type MediaViewMode,
+} from "../utils/mediaLayout";
 
 interface MediaGalleryProps {
   directory: string;
   mediaType: MediaType;
-  /** 打开：卡片点击与菜单"打开"是同一条路径 */
+  /** 画廊=缩略图网格，列表=名称/大小/日期三列。缺省画廊 */
+  viewMode?: MediaViewMode;
+  /** 网格列宽档位；列表视图与音频的单列行用不上 */
+  size?: MediaGallerySize;
+  /** 打开：卡片双击与菜单"打开"是同一条路径 */
   onOpen?: (item: MediaItem) => void;
   onReveal?: (item: MediaItem) => void;
   /** 删除：afterDeleted 只应在"真的删掉了"之后调用，用来把这一张从画廊列表里摘掉 */
@@ -310,19 +321,71 @@ const AudioItem: React.FC<MediaItemCardProps> = ({ item, onSelect, onOpen, selec
   );
 };
 
-// 格式化文件大小
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
+// 列表视图的一行：与卡片共用同一套激活口径（单击选中、双击打开、右键同一份菜单）
+const ListRow: React.FC<MediaItemCardProps & { icon: React.ReactNode }> = ({
+  item,
+  onSelect,
+  onOpen,
+  selected,
+  onContextMenu,
+  icon,
+}) => {
+  const { token } = theme.useToken();
+  return (
+    <div
+      onClick={() => onSelect(item)}
+      onDoubleClick={() => onOpen(item)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu?.(e);
+      }}
+      role="row"
+      aria-selected={selected}
+      title={item.path}
+      style={{
+        ...listGridStyle(),
+        padding: "6px 16px",
+        borderRadius: 6,
+        cursor: "pointer",
+        background: selected ? token.colorFillSecondary : "transparent",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          minWidth: 0,
+          color: token.colorText,
+        }}
+      >
+        <span style={{ color: token.colorPrimary, flex: "0 0 auto" }}>{icon}</span>
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {item.name}
+        </span>
+      </div>
+      <div style={{ textAlign: "right", color: token.colorTextSecondary, fontSize: 12 }}>
+        {item.metadata?.size ? formatFileSize(item.metadata.size) : "-"}
+      </div>
+      <div style={{ textAlign: "right", color: token.colorTextTertiary, fontSize: 12 }}>
+        {item.metadata?.date || "-"}
+      </div>
+    </div>
+  );
+};
 
 // 媒体画廊主组件
 export const MediaGallery: React.FC<MediaGalleryProps> = ({
   directory,
   mediaType,
+  viewMode = "gallery",
+  size = "medium",
   onOpen,
   onReveal,
   onDelete,
@@ -384,50 +447,34 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     onOpen: handleOpen,
   });
 
+  /**
+   * 每一项都从这儿过一遍右键菜单：网格、列表共用同一条接线，
+   * 免得"卡片有菜单、列表没有"这种只在某一种版式下响的口径分叉。
+   */
+  const withMenu = (item: MediaItem, node: React.ReactElement) => (
+    <Dropdown
+      key={item.path}
+      menu={{ items: buildMediaMenu(item, actions) }}
+      trigger={["contextMenu"]}
+    >
+      {node}
+    </Dropdown>
+  );
+
   // 渲染网格
   const renderGrid = () => {
     switch (mediaType) {
       case "image":
         return (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-              gap: 16,
-              padding: 16,
-            }}
-          >
-            {mediaFiles.map((item) => (
-              <Dropdown
-                key={item.path}
-                menu={{ items: buildMediaMenu(item, actions) }}
-                trigger={["contextMenu"]}
-              >
-                <ImageItem {...cardProps(item)} />
-              </Dropdown>
-            ))}
+          <div style={gridStyle("image", size)}>
+            {mediaFiles.map((item) => withMenu(item, <ImageItem {...cardProps(item)} />))}
           </div>
         );
 
       case "video":
         return (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-              gap: 16,
-              padding: 16,
-            }}
-          >
-            {mediaFiles.map((item) => (
-              <Dropdown
-                key={item.path}
-                menu={{ items: buildMediaMenu(item, actions) }}
-                trigger={["contextMenu"]}
-              >
-                <VideoItem {...cardProps(item)} />
-              </Dropdown>
-            ))}
+          <div style={gridStyle("video", size)}>
+            {mediaFiles.map((item) => withMenu(item, <VideoItem {...cardProps(item)} />))}
           </div>
         );
 
@@ -439,18 +486,39 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
               flexDirection: "column",
             }}
           >
-            {mediaFiles.map((item) => (
-              <Dropdown
-                key={item.path}
-                menu={{ items: buildMediaMenu(item, actions) }}
-                trigger={["contextMenu"]}
-              >
-                <AudioItem {...cardProps(item)} />
-              </Dropdown>
-            ))}
+            {mediaFiles.map((item) => withMenu(item, <AudioItem {...cardProps(item)} />))}
           </div>
         );
     }
+  };
+
+  // 渲染列表：名称/大小/修改时间三列，缩略图没加载出来的版式下反而看得清东西
+  const renderList = () => {
+    const icon =
+      mediaType === "image" ? (
+        <PictureOutlined />
+      ) : mediaType === "video" ? (
+        <VideoCameraOutlined />
+      ) : (
+        <AudioOutlined />
+      );
+    return (
+      <div style={{ padding: "8px 0" }} role="table" aria-label={`${mediaType} 列表`}>
+        <div
+          style={{
+            ...listGridStyle(),
+            padding: "4px 16px 8px",
+            color: token.colorTextTertiary,
+            fontSize: 12,
+          }}
+        >
+          <div>名称</div>
+          <div style={{ textAlign: "right" }}>大小</div>
+          <div style={{ textAlign: "right" }}>修改时间</div>
+        </div>
+        {mediaFiles.map((item) => withMenu(item, <ListRow {...cardProps(item)} icon={icon} />))}
+      </div>
+    );
   };
 
   if (loading) {
@@ -496,7 +564,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
         padding: "8px",
       }}
     >
-      {renderGrid()}
+      {viewMode === "list" ? renderList() : renderGrid()}
     </div>
   );
 };

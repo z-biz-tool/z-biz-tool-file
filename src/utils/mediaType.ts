@@ -22,6 +22,20 @@ export interface MediaItem {
 }
 
 /**
+ * 画廊里的日期：固定成 YYYY/MM/DD。
+ *
+ * 原来用 `toLocaleDateString()`（不带 locale），同一批文件在中文系统上列成
+ * "2023/11/15"、在英文系统上列成 "11/15/2023"，CI 的 ubuntu 跑手又是一种。
+ * 日期字符串是要显示给用户看并被断言的，不能跟着宿主 locale 漂。
+ */
+export function mediaDate(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+}
+
+/**
  * 目录条目 → 画廊条目；不属于这个画廊（或是个目录）就返回 null。
  *
  * getFileType 返回的是**类别**（"image" / "video" / "audio" / "text" …），不是扩展名。
@@ -37,7 +51,7 @@ export function toMediaItem(file: FileEntry, type: MediaType): MediaItem | null 
     type,
     metadata: {
       size: file.size,
-      date: new Date(file.modified * 1000).toLocaleDateString(),
+      date: mediaDate(file.modified),
     },
   };
 }

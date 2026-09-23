@@ -110,6 +110,7 @@ import {
 } from "./_shared/ShortcutHints";
 import Omnibar from "./_shared/Omnibar";
 import { MediaGallery, PhotoGallery, VideoGallery, MusicGallery } from "./components/MediaGallery";
+import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import AISettingPanel from "./components/AISettingPanel";
 
 /**
@@ -2203,13 +2204,39 @@ function AppShellInner() {
       {mediaLibraryOpen && (
         <Modal
           title={
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
               {mediaLibraryType === "image" && <PictureOutlined style={{ color: "#1677ff" }} />}
               {mediaLibraryType === "video" && <VideoCameraOutlined style={{ color: "#1677ff" }} />}
               {mediaLibraryType === "audio" && <AudioOutlined style={{ color: "#1677ff" }} />}
               {mediaLibraryType === "image" && "照片馆"}
               {mediaLibraryType === "video" && "视频馆"}
               {mediaLibraryType === "audio" && "音乐馆"}
+              {/* 版式开关放在标题栏：库里几十张图时，唯一能救回屏幕空间的就是切列表 */}
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+                <Segmented
+                  size="small"
+                  value={mediaViewMode}
+                  onChange={(v) => setMediaViewMode(v as MediaViewMode)}
+                  options={[
+                    { label: "画廊", value: "gallery" },
+                    { label: "列表", value: "list" },
+                  ]}
+                  aria-label="切换版式"
+                />
+                <Segmented
+                  size="small"
+                  // 尺寸只作用于网格；音乐馆的画廊本来就是单列行，列表视图也没有列宽可调
+                  disabled={!sizeControlEnabled(mediaViewMode, mediaLibraryType)}
+                  value={mediaGallerySize}
+                  onChange={(v) => setMediaGallerySize(v as MediaGallerySize)}
+                  options={[
+                    { label: "小", value: "small" },
+                    { label: "中", value: "medium" },
+                    { label: "大", value: "large" },
+                  ]}
+                  aria-label="缩略图尺寸"
+                />
+              </div>
             </div>
           }
           open={mediaLibraryOpen}
@@ -2228,6 +2255,8 @@ function AppShellInner() {
             <MediaGallery
               directory={mediaLibraryPath}
               mediaType={mediaLibraryType}
+              viewMode={mediaViewMode}
+              size={mediaGallerySize}
               onOpen={(item) => {
                 invoke("open_with_default_app", { path: item.path }).catch((err) =>
                   message.error("打开失败: " + err)
