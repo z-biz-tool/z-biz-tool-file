@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { FileEntry } from "../stores/fileStore";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { toMediaItems, type MediaItem, type MediaType } from "../utils/mediaType";
-import { buildMediaMenu } from "../utils/mediaMenu";
+import { buildMediaMenu, type MediaActions } from "../utils/mediaMenu";
 
 interface MediaGalleryProps {
   directory: string;
@@ -18,7 +18,8 @@ interface MediaGalleryProps {
   /** 打开：卡片点击与菜单"打开"是同一条路径 */
   onOpen?: (item: MediaItem) => void;
   onReveal?: (item: MediaItem) => void;
-  onDelete?: (item: MediaItem) => void;
+  /** 删除：afterDeleted 只应在"真的删掉了"之后调用，用来把这一张从画廊列表里摘掉 */
+  onDelete?: (item: MediaItem, afterDeleted: () => void) => void;
 }
 
 // 获取媒体文件列表
@@ -315,12 +316,22 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (directory) {
-      fetchMediaFiles(directory, mediaType).then((files) => {
-        setMediaFiles(files);
-        setLoading(false);
-      });
+    if (!directory) {
+      // 目录为空时不能把 loading 留在 true：那是个转不完的圈，界面没有任何出口
+      setMediaFiles([]);
+      setLoading(false);
+      return;
     }
+    // 切馆（照片馆→视频馆）会并发两次拉取，后到的旧响应会把新结果盖掉
+    let alive = true;
+    fetchMediaFiles(directory, mediaType).then((files) => {
+      if (!alive) return;
+      setMediaFiles(files);
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
   }, [directory, mediaType]);
 
   // 卡片点击与菜单里的"打开"走同一个函数：分两处写迟早只改一处
@@ -333,7 +344,19 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     }
   };
 
-  const actions = { onOpen, onReveal, onDelete };
+  const actions: MediaActions = {
+    onOpen,
+    onReveal,
+    // 删除是真异步的（确认框 + invoke），所以由调用方在"确实删掉了"之后回调
+    // afterDeleted —— 主列表会刷新，但画廊自己那份列表不清的话，刚删的那一张
+    // 会继续留在原地，再点它就是"文件不存在"。
+    onDelete: onDelete
+      ? (item) =>
+          onDelete(item, () =>
+            setMediaFiles((files) => files.filter((f) => f.path !== item.path))
+          )
+      : undefined,
+  };
 
   // 渲染网格
   const renderGrid = () => {

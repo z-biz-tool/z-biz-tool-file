@@ -697,7 +697,7 @@ function AppShellInner() {
   const handleDelete = useCallback(
     // 只读 name/path，所以按这两个字段收：画廊里删一张图时手上只有 MediaItem，
     // 凑一个 size:0 / modified:0 的假 FileEntry 只会让以后谁多用一个字段时静默拿到 0。
-    (entry: Pick<FileEntry, "name" | "path">, permanent = false) => {
+    (entry: Pick<FileEntry, "name" | "path">, permanent = false, onDone?: () => void) => {
       modal.confirm({
         title: permanent ? "永久删除" : "移到回收站？",
         content: permanent
@@ -715,6 +715,8 @@ function AppShellInner() {
               await invoke("delete_to_trash", { path: entry.path });
               message.success("已移到回收站");
             }
+            // 调用方（比如画廊）要在这之后才摘掉自己那份列表：删除失败时列表不能骗人
+            onDone?.();
             loadDirectory(currentPath);
           } catch (err) {
             message.error("删除失败: " + err);
@@ -2241,7 +2243,9 @@ function AppShellInner() {
               // 删除只走 handleDelete 一条路：它自带"移到回收站？"确认框（危险操作
               // 主按钮写明动作），而这里原先额外套了一层写死的 Modal.confirm，等于
               // 同一次删除两个口径的确认文案，且那层弹窗没走 App 的 modal 实例。
-              onDelete={(item) => handleDelete({ name: item.name, path: item.path })}
+              onDelete={(item, afterDeleted) =>
+                handleDelete({ name: item.name, path: item.path }, false, afterDeleted)
+              }
             />
           </div>
         </Modal>
