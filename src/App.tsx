@@ -112,6 +112,7 @@ import Omnibar from "./_shared/Omnibar";
 import { MediaGallery } from "./components/MediaGallery";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import { parentOfPath } from "./utils/parentDir";
+import { topmostLayer, type LayerState } from "./utils/layerStack";
 
 /**
  * 可拖拽列宽的表头单元格。
@@ -1321,6 +1322,42 @@ function AppShellInner() {
     return tab?.kind ?? "directory";
   }, [activeTabId, tabs]);
 
+  /**
+   * Esc 的关层顺序（越靠前越"在上面"）与当前开着的层。
+   * 前 12 项沿用原来的相对顺序，后面是原先漏掉的那些面板。
+   */
+  const openLayers: LayerState = {
+    rename: renameModal.visible,
+    create: createModal.visible,
+    batchRename: batchRenameOpen,
+    properties: propertiesOpen,
+    dualPanel: dualPanelOpen,
+    duplicateFinder: duplicateFinderOpen,
+    hashCalc: hashCalcOpen,
+    dirSync: dirSyncOpen,
+    zipBrowser: zipBrowserOpen,
+    newFileTemplate: newFileTemplateOpen,
+    shortcutHelp: shortcutHelpOpen,
+    terminal: terminalVisible,
+    mediaLibrary: mediaLibraryOpen,
+    quickActions: quickActionsOpen,
+    tagEdit: tagEditOpen,
+    archive: archiveOpen,
+    pdfTools: pdfToolsOpen,
+    diff: diffOpen,
+    ocr: ocrOpen,
+    aria2: aria2Open,
+    updater: updaterOpen,
+    settings: settingsOpen,
+    trash: trashOpen,
+    sftp: sftpOpen,
+    storage: storageOpen,
+    // 预览区是常驻侧栏，和 terminal 同一类「最下面那层」：
+// 上面还开着任何弹窗时，Esc 不该顺手把它收掉
+    preview: previewVisible,
+  };
+  const ESC_LAYERS = Object.keys(openLayers);
+
   // 键盘快捷键。这同一份数组既喂给 hook 也喂给快捷键面板（ShortcutHelp）：
   // 面板要是另抄一张"功能 → 键位"表，改了键位它就开始教用户按一个不存在的组合键。
   const shortcutSpecs = useMemo(() => ([
@@ -1356,20 +1393,40 @@ function AppShellInner() {
     { key: "Enter", handler: () => handleOpen(selectedFiles), allowInInput: false, description: "打开选中项（目录进入 / 文件用默认应用）", group: "导航" },
     { key: "F2", handler: () => handleRenameOne(selectedFiles), allowInInput: false, description: "重命名选中项", group: "文件" },
     { key: "Escape", handler: () => {
-      // 关闭最上层弹窗
-      if (renameModal.visible) { setRenameModal({ visible: false, path: "", oldName: "" }); setNewName(""); }
-      else if (createModal.visible) { setCreateModal({ visible: false, type: "file" }); setCreateName(""); }
-      else if (batchRenameOpen) setBatchRenameOpen(false);
-      else if (propertiesOpen) setPropertiesOpen(false);
-      else if (dualPanelOpen) setDualPanelOpen(false);
-      else if (duplicateFinderOpen) setDuplicateFinderOpen(false);
-      else if (hashCalcOpen) setHashCalcOpen(false);
-      else if (dirSyncOpen) setDirSyncOpen(false);
-      else if (zipBrowserOpen) { setZipBrowserOpen(false); setZipBrowserPath(null); }
-      else if (newFileTemplateOpen) setNewFileTemplateOpen(false);
-      else if (shortcutHelpOpen) setShortcutHelpOpen(false);
-      else if (terminalVisible) setTerminalVisible(false);
-    }, description: "关闭弹窗", group: "通用" },
+      // 一次只关最上面那一层；顺序与"当前开着谁"分开成数据，
+      // 新加面板时漏掉这里会被 tests/escapeClosesTopLayer.test.ts 判红
+      const top = topmostLayer(ESC_LAYERS, openLayers);
+      if (!top) return;
+      const close: Record<string, () => void> = {
+        rename: () => { setRenameModal({ visible: false, path: "", oldName: "" }); setNewName(""); },
+        create: () => { setCreateModal({ visible: false, type: "file" }); setCreateName(""); },
+        batchRename: () => setBatchRenameOpen(false),
+        properties: () => setPropertiesOpen(false),
+        dualPanel: () => setDualPanelOpen(false),
+        duplicateFinder: () => setDuplicateFinderOpen(false),
+        hashCalc: () => setHashCalcOpen(false),
+        dirSync: () => setDirSyncOpen(false),
+        zipBrowser: () => { setZipBrowserOpen(false); setZipBrowserPath(null); },
+        newFileTemplate: () => setNewFileTemplateOpen(false),
+        shortcutHelp: () => setShortcutHelpOpen(false),
+        terminal: () => setTerminalVisible(false),
+        mediaLibrary: () => setMediaLibraryOpen(false),
+        quickActions: () => setQuickActionsOpen(false),
+        tagEdit: () => setTagEditOpen(false),
+        archive: () => { setArchiveOpen(false); setArchiveSources([]); },
+        pdfTools: () => { setPdfToolsOpen(false); setPdfToolsPath(null); },
+        diff: () => setDiffOpen(false),
+        ocr: () => setOcrOpen(false),
+        aria2: () => setAria2Open(false),
+        updater: () => setUpdaterOpen(false),
+        settings: () => setSettingsOpen(false),
+        trash: () => setTrashOpen(false),
+        sftp: () => setSftpOpen(false),
+        storage: () => setStorageOpen(false),
+        preview: () => setPreviewVisible(false),
+      };
+      close[top]?.();
+    }, description: "关闭最上层弹窗", group: "通用" },
     // 26 条注册项都写了 description，却没有任何界面显示过它们；F1 是这个面板的入口，
     // 顶部工具栏的「?」按钮走的是同一个 state。
     { key: "F1", handler: () => setShortcutHelpOpen((v) => !v), description: "查看快捷键面板", group: "通用" },
