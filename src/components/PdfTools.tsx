@@ -68,6 +68,7 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
   const [wmPath, setWmPath] = useState<string | null>(initialPath || null);
   const [wmText, setWmText] = useState("CONFIDENTIAL");
   const [wmOpacity, setWmOpacity] = useState(30);
+  const [wmOut, setWmOut] = useState<string | null>(null);
 
   // ====== Extract Images Tab ======
   const [extPath, setExtPath] = useState<string | null>(initialPath || null);
@@ -210,13 +211,14 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
     setBusy(true);
     try {
       const outPath = wmPath.replace(/\.pdf$/i, "") + "-watermarked.pdf";
-      await invoke("watermark_pdf", {
+      const pages = await invoke<number>("watermark_pdf", {
         inputPath: wmPath,
         outputPath: outPath,
         text: wmText,
         opacity: wmOpacity / 100,
       });
-      msgApi.success(`水印添加完成！输出: ${outPath}`);
+      setWmOut(outPath);
+      msgApi.success(`已为 ${pages} 页添加水印`);
     } catch (e: any) {
       msgApi.error("添加水印失败: " + e);
     } finally {
@@ -419,7 +421,8 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                 </div>
 
                 <div>
-                  <Text>透明度: {wmOpacity}%</Text>
+                  {/* 传给后端的是不透明度：100% = 完全实心，别写成"透明度" */}
+                  <Text>不透明度: {wmOpacity}%</Text>
                   <Slider
                     value={wmOpacity}
                     min={5}
@@ -435,6 +438,21 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                 >
                   添加水印
                 </Button>
+
+                {wmOut && (
+                  <Space style={{ width: "100%" }} direction="vertical" size={4}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      输出：{wmOut}（原文件未改动）
+                    </Text>
+                    <Button
+                      size="small"
+                      icon={<FolderOpenOutlined />}
+                      onClick={() => invoke("reveal_in_finder", { path: wmOut })}
+                    >
+                      在访达中显示
+                    </Button>
+                  </Space>
+                )}
               </Space>
             ),
           },

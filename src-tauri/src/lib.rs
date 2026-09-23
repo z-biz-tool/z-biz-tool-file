@@ -4,6 +4,7 @@ mod ebook;
 mod pdf_utils;
 mod pdf_font;
 mod pdf_image;
+mod pdf_watermark;
 mod pdf_ops;
 mod image_utils;
 mod convert;
@@ -82,6 +83,7 @@ pub fn run() {
             pdf_ops::merge_pdfs,
             pdf_ops::split_pdf,
             pdf_image::extract_pdf_images,
+            pdf_watermark::watermark_pdf,
             commands::diff_files,
             commands::quick_diff_dirs,
             ocr::list_ocr_languages,
@@ -309,5 +311,18 @@ pub mod test_bridge {
     }
     pub fn call_get_directory_size(path: &str) -> Result<u64, String> {
         crate::commands::get_directory_size(path)
+    }
+    pub fn call_watermark_pdf(
+        input: &str,
+        output: &str,
+        text: &str,
+        opacity: f64,
+    ) -> Result<u32, String> {
+        crate::pdf_watermark::watermark_pdf_blocking(
+            input.to_string(),
+            output.to_string(),
+            text.to_string(),
+            opacity,
+        )
     }
 }

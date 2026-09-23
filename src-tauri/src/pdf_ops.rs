@@ -94,7 +94,7 @@ pub(crate) fn inheritable(doc: &Document, page: ObjectId, key: &[u8]) -> Option<
     None
 }
 
-fn number_of(doc: &Document, obj: &Object) -> f64 {
+pub(crate) fn number_of(doc: &Document, obj: &Object) -> f64 {
     match obj {
         Object::Integer(i) => *i as f64,
         Object::Real(r) => *r as f64,
@@ -282,7 +282,7 @@ fn page_ids(doc: &Document) -> Vec<ObjectId> {
 }
 
 /// 输出落点：先过 path_guard，再建父目录 —— 反过来会先把敏感目录创建出来
-fn save_doc(mut doc: Document, raw_dest: &str) -> Result<(), String> {
+pub(crate) fn save_doc(mut doc: Document, raw_dest: &str) -> Result<(), String> {
     let dest = crate::path_guard::writable(raw_dest)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
