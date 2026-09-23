@@ -12,6 +12,7 @@ import {
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getFileType, formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
 import { LoadingState, ErrorState, EmptyState } from "../_shared";
+import { useShortcutHint } from "../_shared/ShortcutHints";
 import EpubReader from "./EpubReader";
 import PdfViewer from "./PdfViewer";
 import OfficePreview from "./OfficePreview";
@@ -82,6 +83,7 @@ export default function FileContentPreview({
   onEditImage,
   onExitEditImage,
 }: FileContentPreviewProps) {
+  const hint = useShortcutHint();
   const { message: antdMessage } = AntdApp.useApp();
   const fileType = getFileType(file.name);
   const [loading, setLoading] = useState(false);
@@ -354,7 +356,7 @@ export default function FileContentPreview({
       )}
       <div style={{ flex: 1 }} />
       {onCollapse && (
-        <Tooltip title="收起预览 (⌘+\\)">
+        <Tooltip title={`收起预览${hint("显示/隐藏预览区")}`}>
           <Button
             size="small"
             type="text"

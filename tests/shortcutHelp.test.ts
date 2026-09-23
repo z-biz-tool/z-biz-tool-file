@@ -8,7 +8,7 @@
  * 最后一段不测函数，直接扫 src/App.tsx：hintSuffix 查不到 key 时返回空串，
  * 表现是"tooltip 少了一句键位"——不报错、不红屏、肉眼也难发现，只能源码级断言。
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   describeShortcuts,
@@ -17,6 +17,7 @@ import {
   shortcutHints,
   type ShortcutSpec,
 } from "../src/_shared/useKeyboardShortcuts";
+import { hintSuffixOf } from "../src/_shared/ShortcutHints";
 
 const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 
@@ -166,28 +167,58 @@ describe("shortcutHints：tooltip 的键位来源", () => {
   });
 });
 
-describe("结构闸：App.tsx 里 hintSuffix 的 key 必须真实存在于注册表", () => {
-  // hintSuffix 查不到时返回空串，界面"少了一句键位提示"不会报错也不会红——
-  // 改 description 措辞的人会毫无察觉地把 19 处提示悄悄清空。只能靠源码级断言兜住。
+describe("hintSuffixOf：App 与子组件共用的那一个取值函数", () => {
+  const hints = shortcutHints([spec({ key: "t", meta: true, description: "新建标签页" })]);
+
+  it("命中时带前导空格和括号，直接拼在 label 后面就是原来的文案格式", () => {
+    expect(`新建标签页${hintSuffixOf(hints, "新建标签页")}`).toBe("新建标签页 (⌘ + T)");
+  });
+
+  it("查不到时返回空串（没有 Provider 的子组件会走这里，宁可不显示也不写死 mac 键位）", () => {
+    expect(hintSuffixOf(hints, "没注册的功能")).toBe("");
+    expect(hintSuffixOf({}, "新建标签页")).toBe("");
+  });
+});
+
+describe('结构闸：hint("…") 引用的 description 必须真实存在于注册表', () => {
+  // hint() 查不到 key 时返回空串，界面表现是"少了一句键位提示"——不报错、不红屏，
+  // 改 description 措辞的人会毫无察觉地把所有提示悄悄清空，只能源码级断言兜住。
+  // 子组件（Omnibar / TabsBar / 预览区）经 context 用同一份注册表，所以必须跨文件扫。
   const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const registered = new Set([...appSource.matchAll(/description:\s*"([^"]+)"/g)].map((m) => m[1]));
+  // 递归扫 src，别用白名单：写死文件列表的话，下一个新增 hint() 调用的组件会天然在闸外
+  // 尾斜杠不能省：URL 的相对解析会丢掉无斜杠路径的最后一段（"../src" → 仓库根）
+  const srcRoot = new URL("../src/", import.meta.url);
+  const tsxFiles: string[] = [];
+  const walk = (dir: URL) => {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const url = new URL(ent.name + (ent.isDirectory() ? "/" : ""), dir);
+      if (ent.isDirectory()) walk(url);
+      else if (/\.tsx?$/.test(ent.name)) tsxFiles.push(url.href);
+    }
+  };
+  walk(srcRoot);
+  const referenced = tsxFiles.flatMap((href) =>
+    [...readFileSync(new URL(href), "utf8").matchAll(/\bhint\("([^"]*)"\)/g)].map((m) => m[1])
+  );
+
+  it("扫描范围本身要够大，否则正则一失配整条断言就空转", () => {
+    expect(tsxFiles.length).toBeGreaterThan(20);
+    expect(referenced.length).toBeGreaterThanOrEqual(25);
+    expect(registered.size).toBeGreaterThanOrEqual(25);
+  });
 
   it("注册表里能找到每一个被引用的 description", () => {
-    const registered = new Set(
-      [...appSource.matchAll(/description:\s*"([^"]+)"/g)].map((m) => m[1])
-    );
-    const referenced = [...appSource.matchAll(/hintSuffix\("([^"]*)"\)/g)].map((m) => m[1]);
-    expect(referenced.length).toBeGreaterThan(10); // 防止正则失配导致整条断言空转
     expect(referenced.filter((r) => !registered.has(r))).toEqual([]);
   });
 
-  it("被引用的 description 在注册表里必须唯一，否则 tooltip 展示哪个键位是看运气", () => {
-    // 注册表允许别名（⌘⌫ 和 Delete 都表示"移到回收站"，面板会各占一行），
-    // 但那种 description 不能被 hintSuffix 引用：首条胜出等于随机。
+  it("被引用的 description 在注册表里必须唯一，否则 tooltip 显示哪个键位是看运气", () => {
+    // 注册表允许别名（⌘⌫ 和 Delete 都表示"移到回收站"，面板按一行一键保留两条），
+    // 但那种 description 不能被 hint() 引用：首条胜出等于随机。
     const counts = new Map<string, number>();
     for (const m of appSource.matchAll(/description:\s*"([^"]+)"/g)) {
       counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
     }
-    const referenced = [...new Set([...appSource.matchAll(/hintSuffix\("([^"]*)"\)/g)].map((m) => m[1]))];
-    expect(referenced.filter((r) => (counts.get(r) ?? 0) > 1)).toEqual([]);
+    expect([...new Set(referenced)].filter((r) => (counts.get(r) ?? 0) > 1)).toEqual([]);
   });
 });

@@ -15,6 +15,7 @@ import {
   MacCommandOutlined,
 } from "@ant-design/icons";
 import type { FC } from "react";
+import { useShortcutHint } from "./ShortcutHints";
 
 interface OmnibarProps {
   currentPath: string;
@@ -39,6 +40,8 @@ const Omnibar: FC<OmnibarProps> = ({
   historyIndex,
   history,
 }) => {
+  // 键位由 App 的注册表推导：这里写死 "⌥+←" 在 Windows/Linux 上指的是不存在的键
+  const hint = useShortcutHint();
   const [mode, setMode] = useState<"navigation" | "search" | "command">("navigation");
   const [searchQuery, setSearchQuery] = useState("");
   const [commandInput, setCommandInput] = useState("");
@@ -261,7 +264,7 @@ const Omnibar: FC<OmnibarProps> = ({
             opacity: historyIndex <= 0 ? 0.4 : 1,
             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
-          title="后退 (⌥+←)"
+          title={`后退${hint("后退")}`}
           onMouseEnter={(e) => {
             if (historyIndex > 0) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
           }}
@@ -285,7 +288,7 @@ const Omnibar: FC<OmnibarProps> = ({
             opacity: historyIndex >= history.length - 1 ? 0.4 : 1,
             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
-          title="前进 (⌥+→)"
+          title={`前进${hint("前进")}`}
           onMouseEnter={(e) => {
             if (historyIndex < history.length - 1) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
           }}
@@ -307,7 +310,7 @@ const Omnibar: FC<OmnibarProps> = ({
             cursor: 'pointer',
             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
-          title="上级目录 (⌥+↑)"
+          title={`上级目录${hint("返回上级")}`}
           onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)'}
           onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.transform = 'scale(1)'}
         >

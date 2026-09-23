@@ -8,6 +8,7 @@ import {
   FolderOutlined,
 } from "@ant-design/icons";
 import { useTheme } from "./ThemeContext";
+import { useShortcutHint } from "./ShortcutHints";
 
 const { Header, Sider, Content } = Layout;
 
@@ -39,8 +40,9 @@ export function AppShell({
     // 占位：未来若要支持"跟随系统"可在此实现
   }, [mode]);
 
-  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform);
-  const modKey = isMac ? "⌘" : "Ctrl";
+  // 键位提示交给 App 的注册表推导：这里自己按平台拼一遍修饰键，既跟 matchSpec 的判定
+  // 脱钩（注册表改了这里不会跟），也是全应用第三种书写口径。
+  const hint = useShortcutHint();
 
   // 渐变色主题
   const headerGradient = mode === "dark"
@@ -67,7 +69,10 @@ export function AppShell({
       >
         <Space size={8} align="center">
           {onToggleSider && (
-            <Tooltip title={`${modKey}+B 折叠侧栏`} placement="bottom">
+            <Tooltip
+              title={`${collapsedSider ? "展开侧栏" : "折叠侧栏"}${hint("折叠/展开侧栏")}`}
+              placement="bottom"
+            >
               <Button
                 type="text"
                 size="small"
@@ -128,14 +133,16 @@ export function AppShell({
         </Space>
         <Space size={4}>
           {headerExtra}
-          <Tooltip title={`${modKey}+Shift+L 切换主题`} placement="bottom">
+          <Tooltip
+            title={`${mode === "dark" ? "切换到亮色" : "切换到暗色"}${hint("切换主题")}`}
+            placement="bottom"
+          >
             <Button
               type="text"
               size="small"
               icon={mode === "dark" ? <BulbFilled /> : <BulbOutlined />}
               onClick={toggle}
               aria-label={mode === "dark" ? "切换到亮色" : "切换到暗色"}
-              title={mode === "dark" ? "切换到亮色" : "切换到暗色"}
               style={{
                 borderRadius: 8,
                 transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",

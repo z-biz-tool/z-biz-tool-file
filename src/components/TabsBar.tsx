@@ -2,6 +2,7 @@ import { Tabs, Button, Tooltip } from "antd";
 import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
 import { shortenHome } from "../utils/homeDir";
+import { useShortcutHint } from "../_shared/ShortcutHints";
 
 interface Props {
   onOpenNewTab: () => void;
@@ -25,6 +26,7 @@ function tabIcon(kind: string): React.ReactNode {
 }
 
 export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
+  const hint = useShortcutHint();
   const tabs = useFileStore((s) => s.tabs);
   const activeTabId = useFileStore((s) => s.activeTabId);
   const closeTab = useFileStore((s) => s.closeTab);
@@ -144,7 +146,7 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
         tabBarStyle={{ margin: 0, borderBottom: "none" }}
         cardGutter={8}
       />
-      <Tooltip title="新建标签页 (⌘+T)">
+      <Tooltip title={`新建标签页${hint("新建标签页")}`}>
         <Button
           type="text"
           size="small"
