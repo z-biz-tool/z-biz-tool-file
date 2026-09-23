@@ -144,6 +144,23 @@ export function describeShortcuts(specs: ShortcutSpec[]): ShortcutDocGroup[] {
   return [...byGroup.entries()].map(([group, items]) => ({ group, items }));
 }
 
+/**
+ * 把注册表倒排成"描述 → 键位提示"，给 tooltip、右键菜单这类地方现取。
+ *
+ * 写死 `刷新 (⌘+R)` 有两个错：Windows/Linux 用户在按一个不存在的键（matchSpec
+ * 早就改成"主修饰键"了，Windows 上其实是 Ctrl+R），以及快捷键一改 tooltip 就悄悄说谎。
+ * 没写 description 的注册项不进表；同名描述以第一条注册的为准。
+ */
+export function shortcutHints(specs: ShortcutSpec[]): Record<string, string> {
+  const hints: Record<string, string> = {};
+  for (const spec of specs) {
+    const desc = spec.description?.trim();
+    if (!desc || hints[desc]) continue;
+    hints[desc] = formatShortcut(spec);
+  }
+  return hints;
+}
+
 /** 按功能名或键位过滤；空查询返回原样（含空组会被丢掉，面板不该显示一个空标题） */
 export function filterShortcutDocs(
   groups: ShortcutDocGroup[],

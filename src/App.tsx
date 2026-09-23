@@ -96,7 +96,7 @@ import LibraryView from "./components/LibraryView";
 import Updater from "./components/Updater";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
-import { ThemeProvider, AppShell, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
+import { ThemeProvider, AppShell, shortcutHints, useKeyboardShortcuts, CollapsiblePanel } from "./_shared";
 import Omnibar from "./_shared/Omnibar";
 import { MediaGallery, PhotoGallery, VideoGallery, MusicGallery } from "./components/MediaGallery";
 import AISettingPanel from "./components/AISettingPanel";
@@ -803,6 +803,9 @@ function AppShellInner() {
   );
 
   // 单文件右键菜单
+  // 菜单里的键位提示走 hintSuffix()。它是注册表的派生值，声明在本 callback 之后，
+  // 所以**不能**进下面的 deps（渲染期取值会撞 TDZ："Cannot access before initialization"）；
+  // 提示内容只由注册表里的键位决定，而键位是编译期常量，不会出现"菜单显示的是旧键位"。
   const singleContextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
     const lowerName = record.name.toLowerCase();
     const isDir = record.is_dir;
@@ -883,9 +886,9 @@ function AppShellInner() {
         key: "storage-analyze", label: "存储分析", icon: <PieChartOutlined />, onClick: () => { setSelectedFile(record); setStorageOpen(true); },
       }] : []),
       { type: "divider" as const },
-      { key: "copy", label: "复制 (⌘+C)", icon: <CopyOutlined />, onClick: () => handleCopy([record]) },
-      { key: "cut", label: "剪切 (⌘+X)", icon: <ScissorOutlined />, onClick: () => handleCut([record]) },
-      { key: "rename", label: "重命名 (F2)", icon: <EditOutlined />, onClick: () => handleRenameOne([record]) },
+      { key: "copy", label: `复制${hintSuffix("复制选中")}`, icon: <CopyOutlined />, onClick: () => handleCopy([record]) },
+      { key: "cut", label: `剪切${hintSuffix("剪切选中")}`, icon: <ScissorOutlined />, onClick: () => handleCut([record]) },
+      { key: "rename", label: `重命名${hintSuffix("重命名选中项")}`, icon: <EditOutlined />, onClick: () => handleRenameOne([record]) },
       { key: "copy-path", label: "复制完整路径", icon: <CopyFilled />, onClick: () => {
         navigator.clipboard.writeText(record.path);
         message.success("已复制路径");
@@ -1365,6 +1368,15 @@ function AppShellInner() {
   ]);
   useKeyboardShortcuts(shortcutSpecs);
 
+  // tooltip / 右键菜单里的键位提示全部从这份注册表现算。写死 "刷新 (⌘+R)" 有两个错：
+  // Windows/Linux 上用户在按一个不存在的键（matchSpec 的主修饰键在那边是 Ctrl），
+  // 以及快捷键一改，tooltip 就悄悄开始说谎。
+  const shortcutHintMap = useMemo(() => shortcutHints(shortcutSpecs), [shortcutSpecs]);
+  const hintSuffix = useCallback(
+    (desc: string) => (shortcutHintMap[desc] ? ` (${shortcutHintMap[desc]})` : ""),
+    [shortcutHintMap]
+  );
+
   // 侧栏：搜索栏 + 收藏夹 + 暂存栈（文件树已移除，路径导航靠面包屑 + 中间列表 + 上级按钮 + 路径输入框）
   const sidebar = (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -1389,7 +1401,7 @@ function AppShellInner() {
   // 顶栏额外内容：工具栏
   const headerExtra = (
     <>
-      <Tooltip title="后退 (⌥+←)" placement="bottom">
+      <Tooltip title={`后退${hintSuffix("后退")}`} placement="bottom">
         <Button
           icon={<ArrowLeftOutlined />}
           onClick={goBack}
@@ -1398,7 +1410,7 @@ function AppShellInner() {
           aria-label="后退"
         />
       </Tooltip>
-      <Tooltip title="前进 (⌥+→)" placement="bottom">
+      <Tooltip title={`前进${hintSuffix("前进")}`} placement="bottom">
         <Button
           icon={<ArrowRightOutlined />}
           onClick={goForward}
@@ -1407,7 +1419,7 @@ function AppShellInner() {
           aria-label="前进"
         />
       </Tooltip>
-      <Tooltip title="刷新 (⌘+R)" placement="bottom">
+      <Tooltip title={`刷新${hintSuffix("刷新当前目录")}`} placement="bottom">
         <Button
           icon={<ReloadOutlined />}
           onClick={() => loadDirectory(currentPath)}
@@ -1415,12 +1427,12 @@ function AppShellInner() {
           aria-label="刷新"
         />
       </Tooltip>
-      <Tooltip title="上级目录 (⌥+↑)" placement="bottom">
+      <Tooltip title={`上级目录${hintSuffix("返回上级")}`} placement="bottom">
         <Button onClick={goUp} size="small" aria-label="上级目录">
           上级
         </Button>
       </Tooltip>
-      <Tooltip title={showHidden ? "隐藏隐藏文件 (⌘+Shift+H)" : "显示隐藏文件 (⌘+Shift+H)"} placement="bottom">
+      <Tooltip title={`${showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}${hintSuffix("显示/隐藏隐藏文件")}`} placement="bottom">
         <Button
           size="small"
           icon={showHidden ? <EyeOutlined /> : <EyeInvisibleOutlined />}
@@ -1429,7 +1441,7 @@ function AppShellInner() {
           aria-label={showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}
         />
       </Tooltip>
-      <Tooltip title="快捷键 (F1)" placement="bottom">
+      <Tooltip title={`快捷键${hintSuffix("查看快捷键面板")}`} placement="bottom">
         <Button
           size="small"
           icon={<ThunderboltOutlined />}
@@ -1501,7 +1513,7 @@ function AppShellInner() {
             style={{ width: 180 }}
             aria-label="快速过滤当前目录"
           />
-          <Tooltip title="新建文件 (⌘+Shift+N)">
+          <Tooltip title={`新建文件${hintSuffix("新建文件")}`}>
             <Button
               size="small"
               icon={<FileAddOutlined />}
@@ -1518,7 +1530,7 @@ function AppShellInner() {
               aria-label="新建文件（模板）"
             />
           </Tooltip>
-          <Tooltip title="新建文件夹 (⌘+Alt+N)">
+          <Tooltip title={`新建文件夹${hintSuffix("新建文件夹")}`}>
             <Button
               size="small"
               icon={<FolderAddOutlined />}
@@ -1719,7 +1731,7 @@ function AppShellInner() {
               aria-label="打开回收站"
             />
           </Tooltip>
-          <Tooltip title="复制 (⌘+C)">
+          <Tooltip title={`复制${hintSuffix("复制选中")}`}>
             <Button
               size="small"
               icon={<CopyOutlined />}
@@ -1728,7 +1740,7 @@ function AppShellInner() {
               aria-label="复制"
             />
           </Tooltip>
-          <Tooltip title="剪切 (⌘+X)">
+          <Tooltip title={`剪切${hintSuffix("剪切选中")}`}>
             <Button
               size="small"
               icon={<ScissorOutlined />}
@@ -1737,7 +1749,7 @@ function AppShellInner() {
               aria-label="剪切"
             />
           </Tooltip>
-          <Tooltip title="粘贴 (⌘+V)">
+          <Tooltip title={`粘贴${hintSuffix("粘贴")}`}>
             <Button
               size="small"
               icon={<SnippetsOutlined />}
@@ -1834,10 +1846,10 @@ function AppShellInner() {
             onChange={(v) => setViewMode(v as "table" | "grid" | "list" | "column")}
             aria-label="视图切换"
             options={[
-              { value: "table", icon: <TableOutlined />, title: "表格 (⌘+1)" },
-              { value: "list", icon: <UnorderedListOutlined />, title: "列表 (⌘+2)" },
-              { value: "grid", icon: <AppstoreOutlined />, title: "网格 (⌘+3)" },
-              { value: "column", label: "分栏", title: "分栏 (⌘+4)" },
+              { value: "table", icon: <TableOutlined />, title: `表格${hintSuffix("表格视图")}` },
+              { value: "list", icon: <UnorderedListOutlined />, title: `列表${hintSuffix("列表视图")}` },
+              { value: "grid", icon: <AppstoreOutlined />, title: `网格${hintSuffix("网格视图")}` },
+              { value: "column", label: "分栏", title: `分栏${hintSuffix("分栏视图")}` },
             ]}
           />
         </div>
@@ -1996,7 +2008,7 @@ function AppShellInner() {
             </>
           )}
           {!previewVisible && (
-            <Tooltip title="展开预览 (⌘+\\)" placement="left">
+            <Tooltip title={`展开预览${hintSuffix("显示/隐藏预览区")}`} placement="left">
               <Button
                 size="small"
                 type="text"
