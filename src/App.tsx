@@ -2211,11 +2211,16 @@ function AppShellInner() {
             </div>
           }
           open={mediaLibraryOpen}
-          onClose={() => setMediaLibraryOpen(false)}
+          // antd Modal 没有 onClose 这个 prop，只有 onCancel：X、遮罩、Esc 三条关闭
+          // 路径全走它。之前写的是 onClose ⇒ 三个都不响，而全站没有任何一处把
+          // mediaLibraryOpen 置回 false，照片馆/视频馆/音乐馆一打开就出不来，只能 ⌘R。
+          // （实测：点 X 后 .ant-modal 停在 ant-zoom-appear，连 ant-zoom-leave 都不出现；
+          // 同一条通道里对比弹窗的 X 是会进 leave 的。）
+          onCancel={() => setMediaLibraryOpen(false)}
           width="90vw"
-          height="80vh"
           footer={null}
-          styles={{ body: { padding: "0", overflow: "hidden" } }}
+          // Modal 也没有 height：亮高挂在 styles.body 上，正文那句 height:100% 才有参照
+          styles={{ body: { padding: "0", overflow: "hidden", height: "80vh" } }}
         >
           <div style={{ height: "100%", overflow: "hidden" }}>
             <MediaGallery
