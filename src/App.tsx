@@ -1260,6 +1260,13 @@ function AppShellInner() {
     ? [selectedFile]
     : [];
 
+  // 文件对比的两个入参：多选时按列表顺序取前两个；只选一个就当左边，右边留给用户挑。
+  // 之前工具栏那条入口开面板永远是从空开始，等于让用户把路径再敲一遍。
+  const diffSeeds = {
+    left: selectedFiles[0]?.path ?? null,
+    right: selectedFiles[1]?.path ?? null,
+  };
+
   // 当前激活的 tab 信息（用于判断是否显示图书馆/媒体库视图）
   const activeTabKind = useMemo(() => {
     if (!activeTabId) return "directory";
@@ -1630,7 +1637,9 @@ function AppShellInner() {
               size="small"
               icon={<FilePdfOutlined />}
               onClick={() => {
-                setPdfToolsPath(null);
+                // 选中的就是那个 PDF 时直接带进去：右键菜单那条入口本来就这么做，
+                // 工具栏这里原先一律塞 null，等于逼用户再挑一次同一个文件
+                setPdfToolsPath(selectedFile?.path ?? null);
                 setPdfToolsOpen(true);
               }}
               aria-label="打开 PDF 工具集"
@@ -2111,10 +2120,16 @@ function AppShellInner() {
       <DiffViewer
         open={diffOpen}
         onClose={() => setDiffOpen(false)}
+        initialLeft={diffSeeds.left}
+        initialRight={diffSeeds.right}
       />
 
       {/* OCR */}
-      <OcrTool open={ocrOpen} onClose={() => setOcrOpen(false)} />
+      <OcrTool
+        open={ocrOpen}
+        onClose={() => setOcrOpen(false)}
+        initialPath={selectedFile?.path ?? null}
+      />
 
       {/* Aria2 离线下载 */}
       <Aria2Manager open={aria2Open} onClose={() => setAria2Open(false)} />

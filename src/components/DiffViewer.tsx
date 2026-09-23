@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Modal,
   Button,
@@ -64,6 +64,14 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
   // 文件对比
   const [leftFile, setLeftFile] = useState<string | null>(initialLeft || null);
   const [rightFile, setRightFile] = useState<string | null>(initialRight || null);
+
+  // App 里这个面板是常驻挂载的（靠 open 显隐），只在 mount 时读一次 initial*
+  // 就等于"从工具栏/右键第二次打开还是上次的两个文件"。开面板时按当前选择重来一遍。
+  useEffect(() => {
+    if (!open) return;
+    setLeftFile(initialLeft || null);
+    setRightFile(initialRight || null);
+  }, [open, initialLeft, initialRight]);
   const [diffResult, setDiffResult] = useState<DiffResult | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
 
