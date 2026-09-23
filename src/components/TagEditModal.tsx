@@ -126,7 +126,7 @@ export default function TagEditModal({ open, onClose, filePath, fileName }: Prop
                   {c.label}
                 </span>
               ) : (
-                <span style={{ color: "#999" }}>无</span>
+                <span style={{ color: "var(--ant-color-text-tertiary)" }}>无</span>
               ),
             }))}
           />

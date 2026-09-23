@@ -1585,7 +1585,7 @@ function AppShellInner() {
           <Input
             size="small"
             allowClear
-            prefix={<SearchOutlined style={{ color: "#999" }} />}
+            prefix={<SearchOutlined style={{ color: "var(--ant-color-text-tertiary)" }} />}
             placeholder="过滤…"
             value={quickFilter}
             onChange={(e) => setQuickFilter(e.target.value)}

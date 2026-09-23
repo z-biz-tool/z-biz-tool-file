@@ -95,7 +95,7 @@ export default function OfficePreview({ filePath, fileName }: Props) {
                 <li><code>brew install --cask libreoffice</code>（推荐）</li>
                 <li>到 <a href="https://www.libreoffice.org/download" target="_blank" rel="noreferrer">libreoffice.org</a> 下载 .dmg</li>
               </ul>
-              <p style={{ color: "#888" }}>安装后重启本 app，会自动检测。</p>
+              <p style={{ color: "var(--ant-color-text-tertiary)" }}>安装后重启本 app，会自动检测。</p>
             </div>
           }
         />
@@ -120,7 +120,7 @@ export default function OfficePreview({ filePath, fileName }: Props) {
         >
           <FileOutlined />
           <span>由 LibreOffice 转换为 PDF 后预览</span>
-          <span style={{ color: "#888" }}>·</span>
+          <span style={{ color: "var(--ant-color-text-tertiary)" }}>·</span>
           <span>{fileName}</span>
           <div style={{ flex: 1 }} />
           <Tooltip title="重新转换（清缓存）">

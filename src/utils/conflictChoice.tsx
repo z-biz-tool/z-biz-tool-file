@@ -68,7 +68,7 @@ export function askConflictPolicy(
             }))}
           />
           {/* 拖到文件夹行时目标不在眼前，落点必须写出来 */}
-          <div style={{ marginTop: 8, fontSize: 12, color: "#888" }}>目标：{destDir}</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ant-color-text-tertiary)" }}>目标：{destDir}</div>
         </div>
       ),
       okText: "应用",

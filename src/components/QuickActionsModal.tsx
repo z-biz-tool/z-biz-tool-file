@@ -235,12 +235,12 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
                   <Space>
                     <code style={{ color: "#1677ff" }}>{actionSummary(a).head}</code>
                     <span>{a.name}</span>
-                    {a.builtin && <span style={{ color: "#888", fontSize: 11 }}>内置</span>}
+                    {a.builtin && <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 11 }}>内置</span>}
                     {a.dangerous && <span style={{ color: "#f5222d", fontSize: 11 }}>危险</span>}
                   </Space>
                 }
                 description={
-                  <code style={{ fontSize: 11, color: "#666" }}>
+                  <code style={{ fontSize: 11, color: "var(--ant-color-text-secondary)" }}>
                     {actionSummary(a).detail}
                   </code>
                 }

@@ -434,9 +434,9 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                         >
                           <div
                             style={{
-                              height: 100, background: "#f5f5f5", borderRadius: 4,
+                              height: 100, background: "var(--ant-color-bg-layout)", borderRadius: 4,
                               display: "flex", alignItems: "center", justifyContent: "center",
-                              fontSize: 36, color: "#999", marginBottom: 8,
+                              fontSize: 36, color: "var(--ant-color-text-tertiary)", marginBottom: 8,
                             }}
                           >
                             {item.kind === "image" && item.path.match(/\.(jpe?g|png|webp|gif)$/i) ? (
@@ -574,7 +574,7 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                             <div
                               style={{
                                 width: 48, height: 64,
-                                background: "#fafafa", border: "1px solid #e8e8e8",
+                                background: "var(--ant-color-bg-layout)", border: "1px solid var(--ant-color-border-secondary)",
                                 borderRadius: 4,
                                 display: "flex", alignItems: "center", justifyContent: "center",
                                 fontSize: 20,

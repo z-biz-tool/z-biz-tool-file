@@ -192,7 +192,7 @@ export default function SettingsModal({ open, onClose }: Props) {
                         placeholder={preset?.key_label ?? "API Key"}
                         autoComplete="off"
                       />
-                      <small style={{ color: "#888" }}>
+                      <small style={{ color: "var(--ant-color-text-tertiary)" }}>
                         仅存储在你机器上（{configPath || "app config dir"}），不上传任何服务器
                       </small>
                     </Form.Item>
@@ -279,10 +279,10 @@ export default function SettingsModal({ open, onClose }: Props) {
                       style={{
                         marginTop: 16,
                         padding: 8,
-                        background: "#fafafa",
+                        background: "var(--ant-color-bg-layout)",
                         borderRadius: 4,
                         fontSize: 11,
-                        color: "#888",
+                        color: "var(--ant-color-text-tertiary)",
                       }}
                     >
                       <FolderOpenOutlined style={{ marginRight: 4 }} />
@@ -297,7 +297,7 @@ export default function SettingsModal({ open, onClose }: Props) {
             key: "about",
             label: <span>关于</span>,
             children: (
-              <div style={{ padding: "16px 0", color: "#666", fontSize: 13, lineHeight: 1.8 }}>
+              <div style={{ padding: "16px 0", color: "var(--ant-color-text-secondary)", fontSize: 13, lineHeight: 1.8 }}>
                 <p>
                   <strong>z-biz-tool-file</strong> v0.1.0
                 </p>

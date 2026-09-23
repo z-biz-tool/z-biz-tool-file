@@ -189,7 +189,7 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
         <Space>
           <DeleteOutlined />
           <span>回收站</span>
-          <span style={{ color: "#888", fontSize: 12, fontWeight: 400 }}>
+          <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 12, fontWeight: 400 }}>
             ({entries.length} 项 · {formatSize(totalSize)})
           </span>
         </Space>
@@ -201,10 +201,10 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
         style={{
           marginBottom: 12,
           padding: "8px 12px",
-          background: "#fafafa",
+          background: "var(--ant-color-bg-layout)",
           borderRadius: 4,
           fontSize: 12,
-          color: "#666",
+          color: "var(--ant-color-text-secondary)",
           display: "flex",
           alignItems: "center",
           gap: 8,
@@ -257,7 +257,7 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
                 <Tooltip title={e.original_path}>
                   <span style={{ fontWeight: 500 }}>{name}</span>
                   {e.is_dir && (
-                    <span style={{ color: "#888", marginLeft: 4, fontSize: 11 }}>(目录)</span>
+                    <span style={{ color: "var(--ant-color-text-tertiary)", marginLeft: 4, fontSize: 11 }}>(目录)</span>
                   )}
                 </Tooltip>
               ),
@@ -269,7 +269,7 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
               width: 280,
               render: (p: string) => (
                 <Tooltip title={p}>
-                  <span style={{ color: "#888", fontSize: 12 }}>{p}</span>
+                  <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 12 }}>{p}</span>
                 </Tooltip>
               ),
             },
@@ -290,7 +290,7 @@ export default function TrashModal({ open, onClose, onRestored }: Props) {
               width: 110,
               render: (secs: number) => (
                 <Tooltip title={new Date(Date.now() - secs * 1000).toLocaleString()}>
-                  <span style={{ color: "#888", fontSize: 12 }}>{formatAge(secs)}</span>
+                  <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 12 }}>{formatAge(secs)}</span>
                 </Tooltip>
               ),
             },

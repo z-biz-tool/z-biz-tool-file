@@ -80,7 +80,7 @@ export default function TextConverter({ fileName, content, open, onClose }: Prop
       <div style={{ marginBottom: 12 }}>
         <Typography.Text type="secondary">文件预览</Typography.Text>
         <div style={{
-          background: "#f5f5f5", padding: 8, borderRadius: 4, marginTop: 4,
+          background: "var(--ant-color-bg-layout)", padding: 8, borderRadius: 4, marginTop: 4,
           maxHeight: 120, overflow: "auto", fontSize: 12, whiteSpace: "pre-wrap",
         }}>
           {preview}

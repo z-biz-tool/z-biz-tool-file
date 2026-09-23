@@ -152,7 +152,7 @@ const Omnibar: FC<OmnibarProps> = ({
           const isLast = index === breadcrumbs.length - 1;
           return (
             <div key={path} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ color: "#999", fontSize: 10 }}>•</span>
+              <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 10 }}>•</span>
               {isLast ? (
                 <span 
                   style={{ 

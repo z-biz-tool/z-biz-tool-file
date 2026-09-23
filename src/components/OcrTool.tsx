@@ -196,7 +196,7 @@ export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
         {running && (
           <div style={{ textAlign: "center", padding: 24 }}>
             <Spin size="large" />
-            <div style={{ marginTop: 12, color: "#999" }}>OCR 引擎处理中...</div>
+            <div style={{ marginTop: 12, color: "var(--ant-color-text-tertiary)" }}>OCR 引擎处理中...</div>
           </div>
         )}
 

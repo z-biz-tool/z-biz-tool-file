@@ -286,10 +286,10 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
                               }`,
                             }}
                           >
-                            <td style={{ width: 50, padding: "2px 8px", color: "#999", textAlign: "right", userSelect: "none" }}>
+                            <td style={{ width: 50, padding: "2px 8px", color: "var(--ant-color-text-tertiary)", textAlign: "right", userSelect: "none" }}>
                               {line.old_line || ""}
                             </td>
-                            <td style={{ width: 50, padding: "2px 8px", color: "#999", textAlign: "right", userSelect: "none" }}>
+                            <td style={{ width: 50, padding: "2px 8px", color: "var(--ant-color-text-tertiary)", textAlign: "right", userSelect: "none" }}>
                               {line.new_line || ""}
                             </td>
                             <td style={{ width: 20, padding: "2px 4px", textAlign: "center", userSelect: "none" }}>

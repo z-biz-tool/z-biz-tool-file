@@ -462,7 +462,7 @@ export default function FileContentPreview({
                 style={{
                   marginTop: 12,
                   fontSize: 11,
-                  color: "#888",
+                  color: "var(--ant-color-text-tertiary)",
                   textAlign: "right",
                 }}
               >

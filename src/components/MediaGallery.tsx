@@ -118,7 +118,7 @@ const ImageItem: React.FC<MediaItemCardProps> = ({ item, onSelect, onOpen, selec
         borderRadius: 8,
         overflow: "hidden",
         cursor: "pointer",
-        background: "#f0f0f0",
+        background: "var(--ant-color-fill-tertiary)",
         transition: "transform 0.2s, box-shadow 0.2s",
         ...ringStyle(selected, token.colorPrimary),
       }}

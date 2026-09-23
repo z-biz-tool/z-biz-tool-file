@@ -151,10 +151,10 @@ function SizeBar({ item, total }: { item: DirNode; total: number }) {
             }}
           >
             {item.name}
-            {item.is_dir && <span style={{ color: "#888", fontSize: 11, marginLeft: 4 }}>(目录)</span>}
+            {item.is_dir && <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 11, marginLeft: 4 }}>(目录)</span>}
           </span>
         </Tooltip>
-        <span style={{ color: "#888", fontSize: 12, marginLeft: "auto" }}>
+        <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 12, marginLeft: "auto" }}>
           {formatSize(item.size)} · {pct.toFixed(1)}%
         </span>
       </div>

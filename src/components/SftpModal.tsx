@@ -197,7 +197,7 @@ export default function SftpModal({ open, onClose }: Props) {
           <CloudServerOutlined />
           <span>SSH / SFTP 远程浏览</span>
           {conn && (
-            <span style={{ color: "#888", fontSize: 12, fontWeight: 400 }}>
+            <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 12, fontWeight: 400 }}>
               ({conn.user}@{conn.host}:{conn.port})
             </span>
           )}
@@ -234,7 +234,7 @@ export default function SftpModal({ open, onClose }: Props) {
                 <Button size="small" onClick={() => setFilePreview(null)}>
                   ← 返回列表
                 </Button>
-                <span style={{ fontSize: 12, color: "#666" }}>
+                <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
                   {filePreview.name} · {formatSize(filePreview.size)}
                   {filePreview.is_binary && " · 二进制"}
                 </span>
