@@ -606,6 +606,13 @@ function AppShellInner() {
       message.error(`无法创建：${check.issue.message}`);
       return;
     }
+    // 实时查重：用户在弹窗里敲到一半时，名字与现有条目撞了就把按钮禁掉；
+    // 这里再做一次兜底是怕 fileList 与 createName 之间有竞态（异步刷新时
+    // 列表里还没有同名，但后端校验时会拿到同样的输入）。
+    if (fileList.some((f) => f.name === check.name)) {
+      message.error(`无法创建：当前目录已有同名「${check.name}」`);
+      return;
+    }
     const fullPath = currentPath + "/" + check.name;
     try {
       if (createModal.type === "file") {
@@ -621,7 +628,20 @@ function AppShellInner() {
     }
     setCreateModal({ visible: false, type: "file" });
     setCreateName("");
-  }, [createName, createModal.type, currentPath, loadDirectory, message]);
+  }, [createName, createModal.type, currentPath, fileList, loadDirectory, message]);
+
+  /**
+   * 弹窗里需要"实时知道 createName 是否与现有条目冲突"。
+   * 抽出来供 Input 的 status 与 okButtonProps.disabled 共享，否则两处判断
+   * 漂移一下就会出现"按钮没禁用但提交后报错"或者"按钮禁了但提交走另一条
+   * 路径"。
+   */
+  const createNameValid = useMemo(() => {
+    if (!createName) return false;
+    const check = checkFileNameForCreate(createName);
+    if (!check.ok) return false;
+    return !fileList.some((f) => f.name === check.name);
+  }, [createName, fileList]);
 
   // 压缩
   const handleCompress = useCallback(async () => {
@@ -2161,8 +2181,9 @@ function AppShellInner() {
         cancelText="取消"
         // 名字含 / 或 \\ 时让后端拿到的是 "/currentpath/a/b"，等于悄悄建到子目录，
         // 弹窗看着"成功了"，用户找不到刚建的文件。onChange 实时吞掉这些字符，
-        // 并把"非空"作为 okButton 可用的判据 —— Enter 提交也走这条。
-        okButtonProps={{ disabled: !checkFileNameForCreate(createName).ok }}
+        // 并把"非空 + 合法 + 与现有条目不重名"作为 okButton 可用的判据 ——
+        // Enter 提交也走这条，按钮没亮起来就按不动 Enter。
+        okButtonProps={{ disabled: !createNameValid }}
       >
         <Input
           value={createName}
@@ -2170,7 +2191,7 @@ function AppShellInner() {
           onPressEnter={handleCreate}
           placeholder={createModal.type === "file" ? "请输入文件名（含扩展名）" : "请输入文件夹名"}
           autoFocus
-          status={createName && !checkFileNameForCreate(createName).ok ? "error" : undefined}
+          status={createName && !createNameValid ? "error" : undefined}
         />
       </ModalWrap>
 

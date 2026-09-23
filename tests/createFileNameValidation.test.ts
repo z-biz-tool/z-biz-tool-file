@@ -32,8 +32,29 @@ describe("建文件名与返回上级：走单一真源", () => {
     const modal = APP.match(/\{?\/\* 新建文件\/文件夹弹窗 \*\/\}[\s\S]*?<\/ModalWrap>/);
     expect(modal, "找不到新建文件/文件夹弹窗").not.toBeNull();
     expect(modal![0]).toMatch(/sanitizeFileNameInput\(e\.target\.value\)/);
-    expect(modal![0]).toMatch(/status=\{createName\s*&&\s*!checkFileNameForCreate/);
-    expect(modal![0]).toMatch(/okButtonProps=\{\{\s*disabled:\s*!checkFileNameForCreate/);
+    // 状态与按钮统一从 createNameValid 派生，避免两处判断漂移：
+    // 漂移会出现"按钮没禁用但提交后报错"。
+    expect(modal![0]).toMatch(/status=\{createName\s*&&\s*!createNameValid/);
+    expect(modal![0]).toMatch(/okButtonProps=\{\{\s*disabled:\s*!createNameValid/);
+  });
+
+  it("createNameValid 必须包含名字合法 + 与现有条目不重名两件事", () => {
+    const start = APP.indexOf("const createNameValid = useMemo");
+    expect(start, "找不到 createNameValid 定义").toBeGreaterThan(-1);
+    // 一直读到 useMemo 的 deps 数组结束
+    const tail = APP.slice(start);
+    const end = tail.indexOf("}, [");
+    const block = tail.slice(0, end);
+    expect(block).toMatch(/checkFileNameForCreate\(createName\)/);
+    expect(block).toMatch(/fileList\.some\(\(f\) => f\.name === check\.name\)/);
+  });
+
+  it("handleCreate 提交时也再查一次 fileList —— 防 fileList 异步刷新与 createName 之间的竞态", () => {
+    const block = APP.match(/const handleCreate\s*=[\s\S]*?setCreateModal\(\{ visible: false/);
+    expect(block, "找不到 handleCreate 函数体").not.toBeNull();
+    expect(block![0]).toMatch(/fileList\.some\(\(f\) => f\.name === check\.name\)/);
+    // 冲突时给的不是泛泛的"创建失败"，而是点明"已有同名"
+    expect(block![0]).toMatch(/当前目录已有同名/);
   });
 
   it("goUp 必须用 parentOfPath，禁止再写 parts.pop()", () => {
