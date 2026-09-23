@@ -5,6 +5,7 @@ mod pdf_utils;
 mod pdf_font;
 mod pdf_image;
 mod pdf_watermark;
+mod pdf_compress;
 mod pdf_ops;
 mod image_utils;
 mod convert;
@@ -84,6 +85,7 @@ pub fn run() {
             pdf_ops::split_pdf,
             pdf_image::extract_pdf_images,
             pdf_watermark::watermark_pdf,
+            pdf_compress::compress_pdf,
             commands::diff_files,
             commands::quick_diff_dirs,
             ocr::list_ocr_languages,
@@ -323,6 +325,19 @@ pub mod test_bridge {
             output.to_string(),
             text.to_string(),
             opacity,
+        )
+    }
+    pub fn call_compress_pdf(
+        input: &str,
+        output: &str,
+        quality: u8,
+        max_dimension: u32,
+    ) -> Result<crate::pdf_compress::CompressReport, String> {
+        crate::pdf_compress::compress_pdf_blocking(
+            input.to_string(),
+            output.to_string(),
+            Some(quality),
+            Some(max_dimension),
         )
     }
 }

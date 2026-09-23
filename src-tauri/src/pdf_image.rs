@@ -25,7 +25,7 @@ pub struct ExtractReport {
     pub skipped: Vec<String>,
 }
 
-enum Decoded {
+pub(crate) enum Decoded {
     /// JPEG / JPEG2000：字节原样写出，转 PNG 只会二次损失画质还涨体积
     Passthrough { ext: &'static str, bytes: Vec<u8> },
     /// 统一收到 DynamicImage：无掩码的灰度/彩色图没必要一律撑成 RGBA，
@@ -120,7 +120,7 @@ fn save_decoded(decoded: &Decoded, path: &Path) -> Result<(), String> {
 /// 页面可达的位图：Resources（含祖先继承）→ XObject。
 /// Form XObject 里还能再嵌图（实测一份 92 图的语料有 29 张只出现在 Form 资源里），
 /// 所以要顺着 Form 走下去；`visited` 防互引成环，`depth` 防无限套娃。
-fn image_xobjects(doc: &Document, page: ObjectId) -> Vec<(String, ObjectId)> {
+pub(crate) fn image_xobjects(doc: &Document, page: ObjectId) -> Vec<(String, ObjectId)> {
     let mut found = Vec::new();
     let mut visited: BTreeSet<ObjectId> = BTreeSet::new();
     collect_images(doc, page, 0, "", &mut visited, &mut found);
@@ -229,7 +229,7 @@ fn is_true(stream: &Stream, key: &[u8]) -> bool {
 }
 
 /// `depth` 只用来防 /SMask 自引用成环：损坏文件里 A 的掩码指回 A 会让递归永不返回
-fn decode_image(doc: &Document, stream: &Stream, depth: u8) -> Result<Decoded, String> {
+pub(crate) fn decode_image(doc: &Document, stream: &Stream, depth: u8) -> Result<Decoded, String> {
     let width = field_i64(stream, b"Width")?;
     let height = field_i64(stream, b"Height")?;
     if width <= 0 || height <= 0 {

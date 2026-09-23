@@ -29,7 +29,16 @@ import {
   FolderOpenOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  compressPercent,
+  compressSummary,
+  countImageSkips,
+  defaultCompressPath,
+  docReverted,
+  formatSize,
+  type CompressReport,
+} from "../utils/pdfCompress";
 
 const { Text } = Typography;
 
@@ -37,6 +46,12 @@ interface ExtractReport {
   images: string[];
   skipped: string[];
 }
+
+const COMPRESS_PRESETS = [
+  { label: "屏幕阅读", quality: 65, maxDimension: 1200, hint: "适合邮件/网盘分享，扫描页长边缩到 1200px" },
+  { label: "均衡", quality: 70, maxDimension: 1600, hint: "默认档，屏幕阅读基本看不出差别" },
+  { label: "打印级", quality: 85, maxDimension: 3000, hint: "保留更多细节，体积降得少" },
+];
 
 interface PdfPageInfo {
   page_number: number;
@@ -78,8 +93,11 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
 
   // ====== Compress Tab ======
   const [compPath, setCompPath] = useState<string | null>(initialPath || null);
-  const [compBefore, setCompBefore] = useState(0);
-  const [compAfter, setCompAfter] = useState(0);
+  const [compOutPath, setCompOutPath] = useState<string | null>(null);
+  const [compReport, setCompReport] = useState<CompressReport | null>(null);
+  const [compPreset, setCompPreset] = useState(1);
+  const [compQuality, setCompQuality] = useState(COMPRESS_PRESETS[1].quality);
+  const [compMaxDim, setCompMaxDim] = useState(COMPRESS_PRESETS[1].maxDimension);
 
   // ====== Busy ======
   const [busy, setBusy] = useState(false);
@@ -103,6 +121,14 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
       loadPdfPages(initialPath);
     }
   }, [initialPath, open]);
+
+  // 换了输入文件，上一份的统计就作废——留着会把两个文件的数字混在一起看
+  useEffect(() => {
+    setCompReport(null);
+    setCompOutPath(null);
+  }, [compPath]);
+
+  const compResultPath = compOutPath || (compPath ? defaultCompressPath(compPath) : "");
 
   // 选 PDF 文件
   const pickPdfFiles = async () => {
@@ -260,22 +286,47 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
     }
   };
 
+  const applyCompPreset = (index: number) => {
+    setCompPreset(index);
+    setCompQuality(COMPRESS_PRESETS[index].quality);
+    setCompMaxDim(COMPRESS_PRESETS[index].maxDimension);
+  };
+
+  const pickCompOut = async () => {
+    if (!compPath) return;
+    try {
+      const sel = await saveDialog({
+        defaultPath: compOutPath || defaultCompressPath(compPath),
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (sel) setCompOutPath(sel);
+    } catch (e: any) {
+      message.error("选择失败: " + e);
+    }
+  };
+
   const doCompress = async () => {
     if (!compPath) {
       message.warning("请选择 PDF");
       return;
     }
+    const outPath = compOutPath || defaultCompressPath(compPath);
+    if (outPath === compPath) {
+      message.warning("输出文件与原件相同，请换一个文件名");
+      return;
+    }
     setBusy(true);
     try {
-      const outPath = compPath.replace(/\.pdf$/i, "") + "-compressed.pdf";
-      const [before, after] = await invoke<[number, number]>("compress_pdf", {
+      const report = await invoke<CompressReport>("compress_pdf", {
         inputPath: compPath,
         outputPath: outPath,
+        quality: compQuality,
+        maxDimension: compMaxDim,
       });
-      setCompBefore(before);
-      setCompAfter(after);
-      const ratio = ((1 - after / before) * 100).toFixed(1);
-      msgApi.success(`压缩完成！减少 ${ratio}% (${(before - after) / 1024} KB)`);
+      setCompReport(report);
+      const summary = compressSummary(report);
+      if (summary.kind === "info") msgApi.info(summary.text);
+      else msgApi.success(summary.text);
     } catch (e: any) {
       msgApi.error("压缩失败: " + e);
     } finally {
@@ -284,6 +335,10 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
   };
 
   // ====== Render ======
+
+  const compKept = compReport ? countImageSkips(compReport) : 0;
+  const compReverted = !!compReport && docReverted(compReport);
+  const compPct = compReport ? compressPercent(compReport) : 0;
 
   return (
     <Modal
@@ -545,6 +600,53 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                   <Button onClick={() => pickFile(setCompPath)}>选择</Button>
                 </Space.Compact>
 
+                <div>
+                  <Text>画质档位</Text>
+                  <Radio.Group
+                    value={compPreset}
+                    onChange={(e) => applyCompPreset(e.target.value)}
+                    optionType="button"
+                    buttonStyle="solid"
+                    size="small"
+                    style={{ marginTop: 4 }}
+                    options={COMPRESS_PRESETS.map((p, i) => ({ label: p.label, value: i }))}
+                  />
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {COMPRESS_PRESETS[compPreset].hint}
+                    </Text>
+                  </div>
+                </div>
+
+                <div>
+                  <Text>JPEG 画质: {compQuality}</Text>
+                  <Slider
+                    value={compQuality}
+                    min={20}
+                    max={95}
+                    onChange={(v: any) => setCompQuality(v)}
+                    marks={{ 20: "20", 70: "70", 95: "95" }}
+                  />
+                </div>
+
+                <div>
+                  {/* 下限对齐后端 clamp(64, …)：更小的值会被静默抬到 64，摆出来就是骗人 */}
+                  <Text>图片长边上限: {compMaxDim}px</Text>
+                  <Slider
+                    value={compMaxDim}
+                    min={64}
+                    max={4000}
+                    step={64}
+                    onChange={(v: any) => setCompMaxDim(v)}
+                    marks={{ 64: "64", 1200: "1200", 2400: "2400", 4000: "4000" }}
+                  />
+                </div>
+
+                <Space.Compact style={{ width: "100%" }}>
+                  <Input value={compResultPath} readOnly placeholder="输出文件..." />
+                  <Button onClick={pickCompOut} disabled={!compPath}>另存为</Button>
+                </Space.Compact>
+
                 <Button
                   type="primary" size="large" block loading={busy}
                   disabled={!compPath}
@@ -553,29 +655,59 @@ export default function PdfTools({ open, onClose, initialPath }: PdfToolsProps) 
                   开始压缩
                 </Button>
 
-                {compBefore > 0 && (
+                {compReport && (
                   <Card size="small">
                     <Row gutter={16}>
                       <Col span={8}>
-                        <Statistic title="原始大小" value={(compBefore / 1024).toFixed(2)} suffix="KB" />
+                        <Statistic title="原始大小" value={formatSize(compReport.original_size)} />
                       </Col>
                       <Col span={8}>
-                        <Statistic title="压缩后" value={(compAfter / 1024).toFixed(2)} suffix="KB" />
+                        <Statistic title="压缩后" value={formatSize(compReport.new_size)} />
                       </Col>
                       <Col span={8}>
                         <Statistic
                           title="压缩率"
-                          value={((1 - compAfter / compBefore) * 100).toFixed(1)}
+                          value={compPct}
                           suffix="%"
-                          valueStyle={{ color: "#52c41a" }}
+                          valueStyle={{ color: compPct > 0 ? "#52c41a" : undefined }}
                         />
                       </Col>
                     </Row>
-                    <Progress
-                      percent={Math.round((1 - compAfter / compBefore) * 100)}
-                      strokeColor="#52c41a"
-                      style={{ marginTop: 12 }}
-                    />
+                    <Progress percent={compPct} strokeColor="#52c41a" style={{ marginTop: 12 }} />
+                    <div style={{ marginTop: 8 }}>
+                      <Space size={4} wrap>
+                        <Tag color="blue">{compReport.rewritten} 张位图重编码</Tag>
+                        <Tag color="cyan">{compReport.flated} 条流补 Flate</Tag>
+                        {compKept > 0 && <Tag color="orange">{compKept} 张保持原样</Tag>}
+                        {compReverted && <Tag color="default">已按原样输出副本</Tag>}
+                      </Space>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        输出：{compResultPath}（原文件未改动）
+                      </Text>
+                      <Button
+                        size="small"
+                        icon={<FolderOpenOutlined />}
+                        style={{ marginLeft: 8 }}
+                        onClick={() =>
+                          invoke("reveal_in_finder", { path: compResultPath }).catch((err) =>
+                            msgApi.error("打开 Finder 失败: " + err)
+                          )
+                        }
+                      >
+                        在访达中显示
+                      </Button>
+                    </div>
+                    {compReport.skipped.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        {compReport.skipped.map((reason) => (
+                          <div key={reason}>
+                            <Text type="warning" style={{ fontSize: 12 }}>{reason}</Text>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </Card>
                 )}
               </Space>
