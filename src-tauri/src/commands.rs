@@ -2405,10 +2405,10 @@ mod zip_tests {
     use std::time::Instant;
     use zip::ZipArchive;
 
-    fn workspace() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("z-biz-tool-file-zip-tests");
-        let _ = fs::create_dir_all(&dir);
-        dir
+    /// 每个用例独享一个目录，作用域结束自动回收。
+    /// 用固定名会让并行跑的线程共用同一目录，还会在临时目录里留下清不掉的残渣。
+    fn workspace() -> crate::test_bridge::TempDir {
+        crate::test_bridge::TempDir::new("zip")
     }
 
     #[test]
@@ -2430,8 +2430,6 @@ mod zip_tests {
         entry.read_to_string(&mut s).unwrap();
         assert_eq!(s, "hello\nworld\n".repeat(1000));
 
-        let _ = fs::remove_file(&src);
-        let _ = fs::remove_file(&dest);
     }
 
     #[test]
@@ -2490,8 +2488,6 @@ mod zip_tests {
         assert!(names.iter().any(|n| n.ends_with("a.txt")));
         assert!(names.iter().any(|n| n.ends_with("b.txt")));
 
-        let _ = fs::remove_dir_all(&dir);
-        let _ = fs::remove_file(&dest);
     }
 }
 
@@ -2500,10 +2496,10 @@ mod secure_delete_tests {
     use super::secure_delete_file;
     use std::fs;
 
-    fn workspace() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("z-biz-tool-file-secure-tests");
-        let _ = fs::create_dir_all(&dir);
-        dir
+    /// 每个用例独享一个目录，作用域结束自动回收。
+    /// 用固定名会让并行跑的线程共用同一目录，还会在临时目录里留下清不掉的残渣。
+    fn workspace() -> crate::test_bridge::TempDir {
+        crate::test_bridge::TempDir::new("secure")
     }
 
     #[test]
@@ -2517,8 +2513,6 @@ mod secure_delete_tests {
 
         let r = secure_delete_file(p.to_str().unwrap(), None);
         assert!(r.is_err(), "missing file should return error");
-
-        let _ = fs::remove_dir(&ws);
     }
 
     #[test]
@@ -2538,7 +2532,6 @@ mod secure_delete_tests {
         // 即便传 99 也不会爆；预期正常完成
         secure_delete_file(p.to_str().unwrap(), Some(99)).unwrap();
         assert!(!p.exists());
-        let _ = fs::remove_dir(&ws);
     }
 }
 
@@ -2547,10 +2540,10 @@ mod crc32_tests {
     use super::calculate_file_hash;
     use std::fs;
 
-    fn workspace() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("z-biz-tool-file-crc-tests");
-        let _ = fs::create_dir_all(&dir);
-        dir
+    /// 每个用例独享一个目录，作用域结束自动回收。
+    /// 用固定名会让并行跑的线程共用同一目录，还会在临时目录里留下清不掉的残渣。
+    fn workspace() -> crate::test_bridge::TempDir {
+        crate::test_bridge::TempDir::new("crc")
     }
 
     #[test]
@@ -2561,7 +2554,6 @@ mod crc32_tests {
         // 标准 CRC32 (IEEE) for "123456789" = 0xCBF43926
         let r = calculate_file_hash(p.to_str().unwrap(), "crc32").unwrap();
         assert_eq!(r, "cbf43926");
-        let _ = fs::remove_file(&p);
     }
 
     #[test]
@@ -2573,7 +2565,6 @@ mod crc32_tests {
         // 不应 OOM；仅校验 8 位十六进制格式正确
         let r = calculate_file_hash(p.to_str().unwrap(), "crc32").unwrap();
         assert_eq!(r.len(), 8);
-        let _ = fs::remove_file(&p);
     }
 }
 
@@ -2582,9 +2573,7 @@ mod diff_tests {
     use super::diff_files;
     use std::time::Instant;
 
-    fn write_temp(name: &str, content: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("z-biz-tool-file-diff-tests");
-        let _ = std::fs::create_dir_all(&dir);
+    fn write_temp(dir: &crate::test_bridge::TempDir, name: &str, content: &str) -> std::path::PathBuf {
         let p = dir.join(name);
         std::fs::write(&p, content).unwrap();
         p
@@ -2593,8 +2582,9 @@ mod diff_tests {
     #[test]
     fn diff_identical_files_all_equal() {
         let content: String = (0..2000).map(|i| format!("row {}\n", i)).collect();
-        let a = write_temp("a.txt", &content);
-        let b = write_temp("b.txt", &content);
+        let ws = crate::test_bridge::TempDir::new("diff");
+        let a = write_temp(&ws, "a.txt", &content);
+        let b = write_temp(&ws, "b.txt", &content);
         let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
         assert_eq!(r.added, 0);
         assert_eq!(r.removed, 0);
@@ -2612,8 +2602,9 @@ mod diff_tests {
                 new_content.push_str(&format!("line {}\n", i));
             }
         }
-        let a = write_temp("old5000.txt", &old_content);
-        let b = write_temp("new5000.txt", &new_content);
+        let ws = crate::test_bridge::TempDir::new("diff");
+        let a = write_temp(&ws, "old5000.txt", &old_content);
+        let b = write_temp(&ws, "new5000.txt", &new_content);
 
         let start = Instant::now();
         let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
@@ -2637,8 +2628,9 @@ mod diff_tests {
                 }
             })
             .collect();
-        let a = write_temp("big_old.txt", &old_content);
-        let b = write_temp("big_new.txt", &new_content);
+        let ws = crate::test_bridge::TempDir::new("diff");
+        let a = write_temp(&ws, "big_old.txt", &old_content);
+        let b = write_temp(&ws, "big_new.txt", &new_content);
 
         let start = Instant::now();
         let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap());

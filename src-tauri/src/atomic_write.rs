@@ -78,10 +78,8 @@ mod tests {
 
     #[test]
     fn write_and_readback() {
-        let dir = std::env::temp_dir().join("z-biz-tool-file-atomic-test");
-        let _ = fs::create_dir_all(&dir);
+        let dir = crate::test_bridge::TempDir::new("atomic");
         let target = dir.join("data.json");
-        let _ = fs::remove_file(&target);
 
         let mut m: HashMap<String, String> = HashMap::new();
         m.insert("a".into(), "1".into());
@@ -90,21 +88,14 @@ mod tests {
         let raw = fs::read_to_string(&target).unwrap();
         let back: HashMap<String, String> = serde_json::from_str(&raw).unwrap();
         assert_eq!(back.get("a").map(String::as_str), Some("1"));
-
-        let _ = fs::remove_file(&target);
-        let _ = fs::remove_dir(&dir);
     }
 
     #[test]
     fn no_leftover_tmp_on_success() {
-        let dir = std::env::temp_dir().join("z-biz-tool-file-atomic-test");
-        let _ = fs::create_dir_all(&dir);
+        let dir = crate::test_bridge::TempDir::new("atomic-clean");
         let target = dir.join("clean.json");
-        let _ = fs::remove_file(&target);
         atomic_write(&target, b"hi").unwrap();
         let tmp = dir.join("clean.json.tmp");
         assert!(!tmp.exists(), "tmp file should be renamed away");
-        let _ = fs::remove_file(&target);
-        let _ = fs::remove_dir(&dir);
     }
 }

@@ -186,18 +186,36 @@ pub mod test_bridge {
 
     impl TempDir {
         pub fn new(tag: &str) -> Self {
-            let nonce: u128 = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "z-biz-tool-file-{}-{}-{}",
-                tag,
-                std::process::id(),
-                nonce
-            ));
-            std::fs::create_dir_all(&path).expect("创建临时目录失败");
-            Self { path }
+            // 本机时钟粒度实测只有 1 µs（连续取 199 次时间戳，185 次完全相同），
+            // 靠纳秒戳保证唯一是自欺欺人：两个并行测试会拿到同一个目录，
+            // 先结束那个的 Drop 会把另一个还在用的目录整个删掉，
+            // 表现成"偶发 ENOENT"的假故障。这里改成原子创建撞名就重试。
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let pid = std::process::id();
+            for _ in 0..1000 {
+                let nonce: u128 = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "z-biz-tool-file-{}-{}-{}-{}",
+                    tag, pid, nonce, seq
+                ));
+                // create_dir（不是 create_dir_all）在目录已存在时报错，等于原子占位
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self { path },
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        std::thread::yield_now();
+                    }
+                    // TMPDIR 指向已被系统回收的目录时先把它补出来
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        let _ = std::fs::create_dir_all(&*std::env::temp_dir());
+                    }
+                    Err(e) => panic!("创建临时目录失败: {}", e),
+                }
+            }
+            panic!("创建临时目录失败：连续 1000 次都撞名");
         }
     }
 

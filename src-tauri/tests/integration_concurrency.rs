@@ -7,8 +7,10 @@
 //! - path_guard 跨符号链接链：level1 → level2 → /etc 也必须被拦截
 //! - path_guard 并发验证：50 线程×100 次混合调合法/非法路径，不能 panic
 
+use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use z_biz_tool_file_lib::test_bridge::{
@@ -35,6 +37,7 @@ fn atomic_write_concurrent_writers_no_corruption() {
         let barrier = barrier.clone();
         handles.push(thread::spawn(move || {
             barrier.wait();
+            let mut errors = vec![];
             for i in 0..n_iters {
                 let payload = format!(
                     r#"{{"thread":{},"iter":{},"payload":"{}"}}"#,
@@ -42,22 +45,70 @@ fn atomic_write_concurrent_writers_no_corruption() {
                     i,
                     "x".repeat(1024)
                 );
-                atomic_write_concurrent(&target, payload.as_bytes()).unwrap();
+                if let Err(e) = atomic_write_concurrent(&target, payload.as_bytes()) {
+                    errors.push(format!("iter {} 写入失败: {}", i, e));
+                }
             }
+            errors
         }));
     }
 
-    for h in handles {
-        h.join().expect("thread should not panic");
-    }
+    // 原来这里直接 unwrap()，写失败的 OS 错误被吞成 "thread should not panic"，
+    // 偶发一次之后完全无从判断是竞态还是环境（磁盘/文件描述符）。
+    let errors: Vec<String> = handles
+        .into_iter()
+        .map(|h| h.join().expect("写入线程不该 panic"))
+        .flatten()
+        .collect();
+    assert!(errors.is_empty(), "并发写入出现失败: {:#?}", errors);
 
     let final_bytes = fs::read(&target).unwrap();
-    let s = std::str::from_utf8(&final_bytes).expect("file must be valid UTF-8");
-    let v: serde_json::Value =
-        serde_json::from_str(s).expect("file must be valid JSON, not interleaved bytes");
+    let s = std::str::from_utf8(&final_bytes)
+        .unwrap_or_else(|e| panic!("文件不是合法 UTF-8（长度 {}）: {}", final_bytes.len(), e));
+    let v: serde_json::Value = serde_json::from_str(s)
+        .unwrap_or_else(|e| panic!("文件不是完整 JSON（长度 {}）: {}", s.len(), e));
     assert!(v.get("payload").is_some(), "got malformed payload: {:?}", v);
 }
 
+
+/// 本机时钟粒度实测 1 µs（连续 199 次取时间戳，185 次值相同），所以临时目录
+/// 名不能只靠纳秒戳去重。之前两个并行测试会分到同一个目录，先结束的那个 Drop
+/// 时把另一个还在写的目录删掉，表现成"偶发 ENOENT"的假故障。
+#[test]
+fn tempdirs_created_concurrently_never_share_a_path() {
+    let n = 64usize;
+    let barrier = Arc::new(Barrier::new(n));
+    let mut handles = vec![];
+    for _ in 0..n {
+        let barrier = barrier.clone();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            let dir = TempDir::new("integ-race");
+            let path = dir.to_path_buf();
+            fs::write(dir.join("marker.bin"), b"alive").unwrap();
+            (dir, path)
+        }));
+    }
+    // 全部持有到断言之后，避免边断言边被 Drop 掉
+    let all: Vec<(TempDir, PathBuf)> = handles
+        .into_iter()
+        .map(|h| h.join().expect("建目录线程不该 panic"))
+        .collect();
+    let mut seen = HashSet::new();
+    for (_, path) in &all {
+        assert!(
+            seen.insert(path.clone()),
+            "两个并发 TempDir 分到了同一个目录: {:?}",
+            path
+        );
+        assert!(
+            path.join("marker.bin").exists(),
+            "目录被别的测试回收了: {:?}",
+            path
+        );
+    }
+    assert_eq!(all.len(), n);
+}
 #[test]
 fn atomic_write_crash_leaves_no_corrupted_final() {
     // 测试目标：atomic_write 在 panic 之后（rename 之前）被中止时，
