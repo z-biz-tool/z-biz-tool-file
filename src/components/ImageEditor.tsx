@@ -6,7 +6,7 @@ import {
   Button,
   Space,
   Typography,
-  message,
+  App as AntdApp,
   Modal,
   Select,
   ColorPicker,
@@ -98,7 +98,10 @@ interface ImageEditorProps {
 }
 
 export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
-  const { } = { /* token */ }; // 占位
+  // 静态的 message / Modal.confirm 是从模块级默认配置起弹窗的：不吃 ConfigProvider 的
+  // theme（暗色主题下弹出一个亮色框）也吃不到 locale（按钮写 OK/Cancel）。
+  // useApp() 拿到的这两个实例挂在 <AntdApp> 上，主题和文案才跟全站一致。
+  const { message, modal } = AntdApp.useApp();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -566,7 +569,7 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
     } else if (currentAnnot && currentAnnot.type === "text") {
       // 弹窗输入文字
       let inputValue = "双击编辑";
-      Modal.confirm({
+      modal.confirm({
         title: "输入文字",
         content: (
           <Input
