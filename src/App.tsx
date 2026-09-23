@@ -112,6 +112,7 @@ import Omnibar from "./_shared/Omnibar";
 import { MediaGallery } from "./components/MediaGallery";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import { parentOfPath } from "./utils/parentDir";
+import { checkFileNameForCreate, sanitizeFileNameInput } from "./utils/validateFileName";
 import { topmostLayer, type LayerState } from "./utils/layerStack";
 
 /**
@@ -531,12 +532,12 @@ function AppShellInner() {
 
   // 返回上级目录
   const goUp = useCallback(() => {
-    if (currentPath && currentPath !== "/") {
-      const parts = currentPath.split("/").filter(Boolean);
-      parts.pop();
-      const parentPath = "/" + parts.join("/");
-      navigateTo(parentPath || "/");
-    }
+    if (!currentPath) return;
+    // 同一份"取父目录"逻辑与右键"加入图片库"共享。手写的取最后一段在
+    // Windows 盘符根（"C:\\"）上会拼出 "C:/"，看起来像切到了另一个目录。
+    const parent = parentOfPath(currentPath);
+    if (!parent || parent === currentPath) return;
+    navigateTo(parent);
   }, [currentPath, navigateTo]);
 
   // 剪贴板操作
@@ -598,8 +599,14 @@ function AppShellInner() {
 
   // 新建文件/文件夹
   const handleCreate = useCallback(async () => {
-    if (!createName.trim() || !currentPath) return;
-    const fullPath = currentPath + "/" + createName.trim();
+    if (!currentPath) return;
+    const check = checkFileNameForCreate(createName);
+    if (!check.ok) {
+      // 用户敲完直接按 Enter；给一句明确的话，而不是让后端报"无效路径"那种模糊的错
+      message.error(`无法创建：${check.issue.message}`);
+      return;
+    }
+    const fullPath = currentPath + "/" + check.name;
     try {
       if (createModal.type === "file") {
         await invoke("create_file", { path: fullPath });
@@ -2152,13 +2159,18 @@ function AppShellInner() {
         onCancel={() => { setCreateModal({ visible: false, type: "file" }); setCreateName(""); }}
         okText="创建"
         cancelText="取消"
+        // 名字含 / 或 \\ 时让后端拿到的是 "/currentpath/a/b"，等于悄悄建到子目录，
+        // 弹窗看着"成功了"，用户找不到刚建的文件。onChange 实时吞掉这些字符，
+        // 并把"非空"作为 okButton 可用的判据 —— Enter 提交也走这条。
+        okButtonProps={{ disabled: !checkFileNameForCreate(createName).ok }}
       >
         <Input
           value={createName}
-          onChange={(e) => setCreateName(e.target.value)}
+          onChange={(e) => setCreateName(sanitizeFileNameInput(e.target.value))}
           onPressEnter={handleCreate}
           placeholder={createModal.type === "file" ? "请输入文件名（含扩展名）" : "请输入文件夹名"}
           autoFocus
+          status={createName && !checkFileNameForCreate(createName).ok ? "error" : undefined}
         />
       </ModalWrap>
 
@@ -2402,6 +2414,7 @@ function ModalWrap({
   title,
   okText,
   cancelText,
+  okButtonProps,
   children,
 }: {
   open: boolean;
@@ -2410,6 +2423,8 @@ function ModalWrap({
   title: ReactNode;
   okText?: string;
   cancelText?: string;
+  /** 透传给 antd Modal 的 OK 按钮（disabled / loading / danger 等）。 */
+  okButtonProps?: { disabled?: boolean; loading?: boolean; danger?: boolean };
   children: ReactNode;
 }) {
   return (
@@ -2420,6 +2435,7 @@ function ModalWrap({
       onCancel={onCancel}
       okText={okText}
       cancelText={cancelText}
+      okButtonProps={okButtonProps}
       destroyOnClose
       maskClosable={false}
     >
