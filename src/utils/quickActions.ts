@@ -3,6 +3,8 @@
 // 内置项走 Rust 那边已有的具名命令（path_guard 会校验路径），
 // 用户自定义项才走 run_shell_command（那边只放行白名单里的绝对路径程序）。
 
+import { invoke } from "@tauri-apps/api/core";
+
 export interface QuickAction {
   id: string;
   name: string;
@@ -21,6 +23,106 @@ export interface QuickAction {
   enabled?: boolean;
   /** 危险标记：执行前需二次确认 */
   dangerous?: boolean;
+}
+
+/**
+ * 后端白名单里一条程序的展示信息。
+ *
+ * 路径必须 == `run_shell_command::ALLOWED_PROGRAMS` 中的某一项；
+ * 描述给 AutoComplete 当副标题，让用户知道选了这个会做什么。
+ */
+export interface AllowedProgram {
+  path: string;
+  description: string;
+}
+
+/**
+ * 后端白名单的离线兜底。
+ *
+ * 真源是 `list_allowed_programs`（invoke 拿）。但 invoke 失败 / 非 Tauri 环境
+ * （vitest、纯浏览器打开 dev 面板的一瞬间）不能让"程序"输入框直接挂掉 —— 让
+ * 用户至少能从本地这份里挑。这份与 Rust `ALLOWED_PROGRAMS_META` 必须同源。
+ */
+export const FALLBACK_ALLOWED_PROGRAMS: AllowedProgram[] = [
+  { path: "/usr/bin/open", description: "在 macOS Finder 里打开/选中文件（-R 选中）" },
+  { path: "/bin/open", description: "open 的另一份位置（同上）" },
+  { path: "/usr/bin/pbcopy", description: "把内容写入剪贴板（搭配 echo / pbpaste）" },
+  { path: "/usr/bin/pbpaste", description: "把剪贴板内容读到 stdout" },
+  { path: "/usr/bin/say", description: "TTS 朗读文本" },
+  { path: "/usr/bin/afplay", description: "播放音频文件" },
+  { path: "/usr/bin/mdls", description: "读 Spotlight 元数据（kMDItem*）" },
+  { path: "/usr/bin/xattr", description: "读写扩展属性（quarantine / 自定义 key）" },
+  { path: "/usr/bin/qlmanage", description: "用 Quick Look 生成缩略图" },
+];
+
+const ALLOWED_CACHE_KEY = "z-tool-allowed-programs";
+
+/**
+ * 从后端拉白名单。
+ *
+ * 真源是 `list_allowed_programs`。invoke 失败时回退到 `FALLBACK_ALLOWED_PROGRAMS`，
+ * 不抛 —— "程序"输入框在断网/非 Tauri 环境下也必须能用。
+ *
+ * 结果在当前会话内缓存一次：调用方可能每次 onChange 都调，没有缓存会让
+ * 每次敲键都触发一次 IPC。
+ */
+let cached: AllowedProgram[] | null = null;
+export async function loadAllowedPrograms(): Promise<AllowedProgram[]> {
+  if (cached) return cached;
+  if (typeof window === "undefined") {
+    cached = FALLBACK_ALLOWED_PROGRAMS;
+    return cached;
+  }
+  try {
+    const remote = await invoke<AllowedProgram[]>("list_allowed_programs");
+    cached = remote.length > 0 ? remote : FALLBACK_ALLOWED_PROGRAMS;
+  } catch {
+    // invoke 通道不可用（dev 工具独立打开 / Tauri 没起）时不允许把表单干掉
+    cached = FALLBACK_ALLOWED_PROGRAMS;
+  }
+  try {
+    sessionStorage.setItem(ALLOWED_CACHE_KEY, JSON.stringify(cached));
+  } catch {
+    /* ignore */
+  }
+  return cached;
+}
+
+/**
+ * 同步读最近一次缓存的白名单。给"打开即要渲染选项"的场景用。
+ *
+ * 既无缓存又没法拉时退到 fallback —— AutoComplete 的 options 永远是数组，
+ * 不能返回 undefined。
+ */
+export function getCachedAllowedPrograms(): AllowedProgram[] {
+  if (cached) return cached;
+  if (typeof window === "undefined") return FALLBACK_ALLOWED_PROGRAMS;
+  try {
+    const raw = sessionStorage.getItem(ALLOWED_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as AllowedProgram[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        cached = parsed;
+        return cached;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  cached = FALLBACK_ALLOWED_PROGRAMS;
+  return cached;
+}
+
+/** 测试/调试时强制让下一次 loadAllowedPrograms 重新拉 */
+export function resetAllowedProgramsCache(): void {
+  cached = null;
+  if (typeof window !== "undefined") {
+    try {
+      sessionStorage.removeItem(ALLOWED_CACHE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 const STORAGE_KEY = "z-tool-quick-actions";

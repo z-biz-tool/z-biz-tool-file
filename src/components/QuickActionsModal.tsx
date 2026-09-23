@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Modal,
   List,
@@ -10,6 +10,7 @@ import {
   Popconfirm,
   App as AntdApp,
   Empty,
+  AutoComplete,
 } from "antd";
 import {
   ThunderboltOutlined,
@@ -23,9 +24,13 @@ import { resolveHomeDir } from "../utils/homeDir";
 import {
   actionResultText,
   actionSummary,
+  loadAllowedPrograms,
   loadQuickActions,
+  getCachedAllowedPrograms,
+  resetAllowedProgramsCache,
   resolveActionCall,
   saveUserQuickActions,
+  type AllowedProgram,
   type QuickAction,
 } from "../utils/quickActions";
 
@@ -47,10 +52,20 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
   const [editingOpen, setEditingOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [targetPath, setTargetPath] = useState("");
+  // 快速操作编辑表单的"程序"下拉直接走后端白名单（list_allowed_programs）。
+  // 之前这里是个空白 Input，placeholder 写"/usr/bin/open"——用户敲错或拼成
+  // /bin/chmod 之类，后端一句"程序未在白名单内"打回，整条动作就是死的。
+  // 先读缓存立即出选项，再异步拿后端真源覆盖；invoke 失败时本地兜底仍然能选。
+  const [allowedPrograms, setAllowedPrograms] = useState<AllowedProgram[]>(() =>
+    getCachedAllowedPrograms(),
+  );
 
   useEffect(() => {
     if (!open) return;
     setActions(loadQuickActions());
+    // 每次打开都试一次后端：会话内拖死的话缓存也是脏的（reset 后保证能再拉）。
+    resetAllowedProgramsCache();
+    loadAllowedPrograms().then(setAllowedPrograms);
     // 作用对象要跟"当前选中的那个文件"走。之前只会预填主目录：选中 a.jpg 之后点
     // 「设为只读」，改的其实是 ~ —— 一个看不见、还很危险的作用域错位。
     if (suggestedPath) {
@@ -61,6 +76,25 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
     if (!targetPath) resolveHomeDir().then(setTargetPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, suggestedPath]);
+
+  // AutoComplete options：从 path + description 拼成 { value, label }，并按
+  // 用户已敲的内容做子串过滤。optionFilterProp 默认是 "value"，这里手写 label
+  // 过滤才能让用户敲"/usr/bin/say"时只看得到描述里出现"朗读"的项不奇怪。
+  const programOptions = useMemo(
+    () =>
+      allowedPrograms.map((p) => ({
+        value: p.path,
+        label: (
+          <Space size={4} style={{ width: "100%" }}>
+            <code style={{ minWidth: 0 }}>{p.path}</code>
+            <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 12, flex: 1 }}>
+              {p.description}
+            </span>
+          </Space>
+        ),
+      })),
+    [allowedPrograms],
+  );
 
   const persist = (next: QuickAction[]) => {
     setActions(next);
@@ -299,10 +333,21 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
               />
             </Form.Item>
             <Form.Item label="程序">
-              <Input
+              <AutoComplete
                 value={editing.program}
-                onChange={(e) => setEditing({ ...editing, program: e.target.value })}
-                placeholder="/usr/bin/open（必须是后端白名单里的绝对路径）"
+                onChange={(v) => setEditing({ ...editing, program: v })}
+                options={programOptions}
+                filterOption={(input, opt) => {
+                  // 用户敲的是路径片段或描述片段都行；空串=全部展示
+                  const q = input.trim().toLowerCase();
+                  if (!q) return true;
+                  return String(opt?.value ?? "").toLowerCase().includes(q);
+                }}
+                placeholder="/usr/bin/open（只列后端白名单里的程序）"
+                // 用户可能手敲一个后端没有的路径（向后兼容旧 localStorage）：
+                // 保留手输文本，但保存时由后端"程序未在白名单内"那条错误兜底。
+                backfill
+                allowClear
               />
             </Form.Item>
             <Form.Item label="参数（每行一个，支持 {path} 占位符）">

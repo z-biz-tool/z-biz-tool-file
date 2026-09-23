@@ -11,9 +11,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   DEFAULT_QUICK_ACTIONS,
+  FALLBACK_ALLOWED_PROGRAMS,
   actionResultText,
   actionSummary,
+  getCachedAllowedPrograms,
   isStaleBuiltin,
+  loadAllowedPrograms,
+  resetAllowedProgramsCache,
   resolveActionCall,
   type QuickAction,
 } from "../src/utils/quickActions";
@@ -121,6 +125,35 @@ describe("结果文案与管理列表标签", () => {
       detail: "path={path}",
     });
     expect(actionSummary(byId("builtin-cp-clipboard")).head).toBe("剪贴板");
+  });
+});
+
+describe("程序白名单", () => {
+  it("FALLBACK 至少列出来 5 条常用程序，且每条描述都不能为空", () => {
+    expect(FALLBACK_ALLOWED_PROGRAMS.length).toBeGreaterThanOrEqual(5);
+    for (const p of FALLBACK_ALLOWED_PROGRAMS) {
+      expect(p.path.startsWith("/"), `路径必须绝对: ${p.path}`).toBe(true);
+      expect(p.description.trim().length, `${p.path} 描述不能为空`).toBeGreaterThan(0);
+    }
+    // 这些是这次门禁里特别容易漏的：open / pbcopy / qlmanage
+    expect(FALLBACK_ALLOWED_PROGRAMS.map((p) => p.path)).toEqual(
+      expect.arrayContaining(["/usr/bin/open", "/usr/bin/pbcopy", "/usr/bin/qlmanage"]),
+    );
+  });
+
+  it("loadAllowedPrograms 在非 Tauri 环境里走 FALLBACK 而不是抛", async () => {
+    // 没注入 invoke（也没在 Tauri 里）时，cached=null + 无 window fallback
+    resetAllowedProgramsCache();
+    const list = await loadAllowedPrograms();
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.every((p) => p.path.startsWith("/"))).toBe(true);
+  });
+
+  it("getCachedAllowedPrograms 在没缓存时给 FALLBACK，不返回 undefined", () => {
+    resetAllowedProgramsCache();
+    const list = getCachedAllowedPrograms();
+    expect(Array.isArray(list)).toBe(true);
+    expect(list.length).toBeGreaterThan(0);
   });
 });
 

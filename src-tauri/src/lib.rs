@@ -137,6 +137,7 @@ pub fn run() {
             commands::delete_to_trash,
             commands::analyze_storage,
             commands::run_shell_command,
+            commands::list_allowed_programs,
             ai::ai_summarize_file,
             ai::ai_chat,
             office::convert_office_to_pdf,

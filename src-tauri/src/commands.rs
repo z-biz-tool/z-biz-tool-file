@@ -573,6 +573,10 @@ pub fn run_shell_command(
     file_path: String,
 ) -> Result<ShellRunResult, String> {
     // P0 安全修复：白名单化的程序执行入口。仅允许预定义程序路径。
+    //
+    // 路径表与下面的 `ALLOWED_PROGRAMS_META` 必须保持一一对应：后端能力下发到
+    // 前端时是带描述的形式（`list_allowed_programs`），但真要执行时还是按这里
+    // 的裸路径校验。两张表必须同源 —— 否则"用户能选但点了报错"就是下一轮 bug。
     const ALLOWED_PROGRAMS: &[&str] = &[
         "/usr/bin/open",
         "/bin/open",
@@ -602,6 +606,39 @@ pub fn run_shell_command(
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         exit_code: output.status.code().unwrap_or(-1),
     })
+}
+
+/// 一条白名单程序的元数据（路径 + 用途说明），用于前端"快速操作"表单的自动补全。
+///
+/// 顺序与 `run_shell_command::ALLOWED_PROGRAMS` 一致；路径字段必须等于上面
+/// 的白名单条目（门禁 `tests/quickActionBackend.test.ts` 会钉住这件事）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowedProgram {
+    pub path: String,
+    pub description: String,
+}
+
+#[tauri::command]
+pub fn list_allowed_programs() -> Vec<AllowedProgram> {
+    // 程序路径 → 用途。中文描述给到用户看（AutoComplete 的 placeholder / 副标题），
+    // 不要写"可以执行任意命令"之类自打脸的话 —— 选了之后跑不通的尴尬是双份的。
+    const META: &[(&str, &str)] = &[
+        ("/usr/bin/open", "在 macOS Finder 里打开/选中文件（-R 选中）"),
+        ("/bin/open", "open 的另一份位置（同上）"),
+        ("/usr/bin/pbcopy", "把内容写入剪贴板（搭配 echo / pbpaste）"),
+        ("/usr/bin/pbpaste", "把剪贴板内容读到 stdout"),
+        ("/usr/bin/say", "TTS 朗读文本"),
+        ("/usr/bin/afplay", "播放音频文件"),
+        ("/usr/bin/mdls", "读 Spotlight 元数据（kMDItem*）"),
+        ("/usr/bin/xattr", "读写扩展属性（quarantine / 自定义 key）"),
+        ("/usr/bin/qlmanage", "用 Quick Look 生成缩略图"),
+    ];
+    META.iter()
+        .map(|(path, description)| AllowedProgram {
+            path: (*path).to_string(),
+            description: (*description).to_string(),
+        })
+        .collect()
 }
 
 /// 存储分析：扫描目录，统计大小，返回前 N 大子项
