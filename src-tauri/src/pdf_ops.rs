@@ -25,7 +25,59 @@ fn describe(what: &str, err: impl std::fmt::Debug) -> String {
 }
 
 pub(crate) fn load_doc(path: &Path) -> Result<Document, String> {
-    Document::load(path).map_err(|e| describe("PDF 解析失败", e))
+    match Document::load(path) {
+        Ok(doc) => Ok(doc),
+        Err(error) => {
+            // 修复不成功就把最初的报错还给用户，不要用二次错误盖掉真因
+            let detail = describe("PDF 解析失败", error);
+            let bytes = fs::read(path).map_err(|_| detail.clone())?;
+            let repaired = match repair_startxref(&bytes) {
+                Some(repaired) => repaired,
+                None => return Err(detail),
+            };
+            Document::load_mem(&repaired).map_err(|_| detail)
+        }
+    }
+}
+
+/// 部分生成器把 startxref 和偏移量写在同一行（`startxref 4453432\n%%EOF`），
+/// 本机那份 485 页 iBooks 真题就是这样，lopdf 要求严格换行于是整份文件报
+/// `Xref(Start)`、页数/文本/合并全部不可用。这里只把那一段分隔空白补成规范
+/// 写法再交给 lopdf —— 偏移量前后之外一个内容字节都不动。
+fn repair_startxref(bytes: &[u8]) -> Option<Vec<u8>> {
+    const KEY: &[u8] = b"startxref";
+    const MARK: &[u8] = b"%%EOF";
+    // lopdf 自己也只在末尾 512 字节里找这段
+    let window = bytes.len().saturating_sub(512);
+    let tail = &bytes[window..];
+    let pos = tail.windows(KEY.len()).rposition(|w| w == KEY)?;
+    let digits_start = skip_ws(tail, pos + KEY.len());
+    let mut end = digits_start;
+    while end < tail.len() && tail[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == digits_start {
+        return None;
+    }
+    let gap = skip_ws(tail, end);
+    if gap == end || !tail[gap..].starts_with(MARK) {
+        return None;
+    }
+    // 偏移量与 %%EOF 之间没有空白说明这不是排版偏差，别硬凑
+    let mut out = Vec::with_capacity(bytes.len() + 2);
+    out.extend_from_slice(&bytes[..window + pos]);
+    out.extend_from_slice(b"startxref\n");
+    out.extend_from_slice(&bytes[window + digits_start..window + end]);
+    out.extend_from_slice(b"\n");
+    out.extend_from_slice(&bytes[window + gap..]);
+    Some(out)
+}
+
+fn skip_ws(input: &[u8], mut at: usize) -> usize {
+    while at < input.len() && matches!(input[at], b' ' | b'\t' | b'\r' | b'\n' | 0x00 | 0x0C) {
+        at += 1;
+    }
+    at
 }
 
 /// 页面上没有 MediaBox/Resources 时，PDF 允许从 Pages 祖先继承。
@@ -673,5 +725,96 @@ mod tests {
             );
         }
         assert_eq!(obj.as_object().unwrap().len(), 4);
+    }
+
+    /// 把 lopdf 规范写好的 trailer 改成"startxref 和偏移量同一行"。
+    fn same_line_trailer(canonical: &[u8]) -> Vec<u8> {
+        let mut out = canonical.to_vec();
+        let pos = out
+            .windows(b"startxref".len())
+            .rposition(|w| w == b"startxref")
+            .expect("fixture 里必须有 startxref");
+        assert_eq!(out[pos + 9], b'\n', "lopdf 写出的分隔符应该是换行");
+        out[pos + 9] = b' ';
+        out
+    }
+
+    /// 真实案例：一份 485 页的 iBooks 真题 PDF 就是这么写的，lopdf 报 Xref(Start)，
+    /// 之前这个文件的页数、文本、合并、拆分全部不可用。
+    #[test]
+    fn trailer_with_startxref_on_one_line_is_recovered() {
+        let dir = crate::test_bridge::TempDir::new("pdf-xref");
+        let canonical = make_pdf(&["OK1", "OK2"]);
+        let deviating = same_line_trailer(&canonical);
+        // 注入必须先生效，否则这条测试什么都没验；规范写法作对照组
+        assert!(Document::load_mem(&canonical).is_ok());
+        assert!(
+            Document::load_mem(&deviating).is_err(),
+            "同排版式本该让 lopdf 读不出来"
+        );
+
+        let file = dir.join("one-line.pdf");
+        fs::write(&file, &deviating).unwrap();
+        let doc = load_doc(&file).unwrap();
+        assert_eq!(doc.get_pages().len(), 2);
+        let pages = get_pdf_pages(file.to_str().unwrap()).unwrap();
+        assert_eq!(
+            (pages[0].page_number, pages[1].page_number),
+            (1, 2),
+            "修复后列页必须照常可用"
+        );
+        let merged = merge_pdfs(
+            vec![
+                file.to_str().unwrap().to_string(),
+                file.to_str().unwrap().to_string(),
+            ],
+            dir.join("out.pdf").to_str().unwrap().to_string(),
+        )
+        .unwrap();
+        assert_eq!(merged, 4, "修复过的文件还要能进合并流程");
+    }
+
+    #[test]
+    fn repair_rewrites_only_the_whitespace_between_tokens() {
+        let canonical = make_pdf(&["ONLY"]);
+        assert_eq!(
+            repair_startxref(&canonical).as_deref(),
+            Some(canonical.as_slice()),
+            "规范写法应当原样返回"
+        );
+        let deviating = same_line_trailer(&canonical);
+        let repaired = repair_startxref(&deviating).unwrap();
+        assert_eq!(repaired.len(), deviating.len());
+        let diff: Vec<usize> = repaired
+            .iter()
+            .zip(deviating.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+        let pos = deviating
+            .windows(b"startxref".len())
+            .rposition(|w| w == b"startxref")
+            .unwrap();
+        assert_eq!(diff, vec![pos + 9], "只允许动 startxref 后那个分隔符");
+        assert_eq!(&repaired[pos..pos + 9], b"startxref");
+        assert!(Document::load_mem(&repaired).is_ok());
+    }
+
+    #[test]
+    fn repair_refuses_buffers_that_are_not_a_whitespace_deviation() {
+        assert!(repair_startxref(b"%PDF-1.4\nno trailer here\n").is_none());
+        assert!(repair_startxref(b"startxref 42").is_none(), "缺 %%EOF 不算排版偏差");
+        assert!(repair_startxref(b"startxref 12\n34%%EOF\n").is_none());
+        assert!(repair_startxref(b"startxref\n%%EOF\n").is_none(), "偏移量都丢了就别猜");
+    }
+
+    #[test]
+    fn load_doc_keeps_the_original_error_when_nothing_can_be_repaired() {
+        let dir = crate::test_bridge::TempDir::new("pdf-junk");
+        let file = dir.join("junk.pdf");
+        fs::write(&file, b"%PDF-1.4\nnot a pdf at all\n").unwrap();
+        let err = load_doc(&file).unwrap_err();
+        assert!(err.contains("PDF 解析失败"), "{}", err);
     }
 }
