@@ -220,7 +220,15 @@ export const useFileStore = create<FileStore>((set) => ({
           activeTabId: homeId,
         };
       }
-      return { tabs: newTabs, activeTabId: newActive };
+      const next = newTabs.find((t) => t.id === newActive);
+      // 关掉的是当前 tab 时视图必须跟上邻居。currentPath 若还停在被关掉的那个目录，
+      // 新建文件 / 粘贴 / 压缩 / ⌘T 全都写进一个用户已经关掉的文件夹。
+      // library tab 的 path 是伪路径，不能塞给 currentPath（与 switchTab 同一判据）。
+      return {
+        tabs: newTabs,
+        activeTabId: newActive,
+        currentPath: next && next.kind === "directory" ? next.path : s.currentPath,
+      };
     });
   },
   switchTab: (id) => {

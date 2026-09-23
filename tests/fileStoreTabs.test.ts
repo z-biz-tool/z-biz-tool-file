@@ -110,3 +110,36 @@ describe("closeTab / updateActiveTabPath：其余两处写 tabs 的地方不能�
     expect(store().activeTabId).toBe(b);
   });
 });
+
+describe("closeTab：关掉当前 tab 后 currentPath 必须跟上邻居", () => {
+  // 新建文件 / 粘贴 / 压缩 / ⌘T 的目标目录都是 currentPath。只换 activeTabId 不换
+  // currentPath，等于让用户往一个他已经关掉的文件夹里写文件。
+  it("关掉激活的目录 tab ⇒ 视图落到邻居目录", () => {
+    store().openTab("/Users/zifang/keep");
+    const dying = store().openTab("/Users/zifang/dying");
+    store().setCurrentPath("/Users/zifang/dying"); // 此刻用户确实在 dying 里
+    store().closeTab(dying);
+    expect(activeTab()?.path).toBe("/Users/zifang/keep");
+    expect(store().currentPath).toBe("/Users/zifang/keep");
+  });
+
+  it("邻居是图书馆 tab ⇒ 保留原目录，不能把伪路径写进 currentPath", () => {
+    store().openTab("library://main", "library");
+    const dl = store().openTab("/Users/zifang/Downloads");
+    store().setCurrentPath("/tmp"); // 用户在那个目录 tab 里又去了别处
+    store().closeTab(dl);
+    expect(activeTabKind()).toBe("library");
+    expect(store().currentPath).toBe("/tmp");
+  });
+
+  it("关的是别的 tab ⇒ 视图一步都不该动，哪怕剩下的 tab 里有目录", () => {
+    const a = store().openTab("/Users/zifang/a");
+    const lib = store().openTab("library://main", "library");
+    store().openTab("/Users/zifang/b");
+    store().switchTab(lib); // 激活图书馆，视图仍停在打开它之前的那个目录
+    expect(store().currentPath).toBe("/Users/zifang/Downloads");
+    store().closeTab(a); // 关掉的不是当前 tab
+    expect(store().activeTabId).toBe(lib);
+    expect(store().currentPath).toBe("/Users/zifang/Downloads");
+  });
+});
