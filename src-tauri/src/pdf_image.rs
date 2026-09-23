@@ -7,7 +7,7 @@
 //! 明确报"跳过 + 原因"而不是静默丢图，否则用户看到的是一份少了图的假成功。
 
 use flate2::read::ZlibDecoder;
-use image::{ImageFormat, RgbaImage};
+use image::{DynamicImage, GrayImage, ImageFormat, RgbaImage, RgbImage};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -28,7 +28,9 @@ pub struct ExtractReport {
 enum Decoded {
     /// JPEG / JPEG2000：字节原样写出，转 PNG 只会二次损失画质还涨体积
     Passthrough { ext: &'static str, bytes: Vec<u8> },
-    Raster(RgbaImage),
+    /// 统一收到 DynamicImage：无掩码的灰度/彩色图没必要一律撑成 RGBA，
+    /// 24MP 的整页扫描图从 97MB 降到 24MB，PNG 编码也是同比例变快
+    Image(DynamicImage),
 }
 
 enum ColorSpace {
@@ -39,8 +41,20 @@ enum ColorSpace {
 }
 
 /// 提取页面资源里的位图。同一张图被多页共用（485 页试卷的页眉 logo 就是同一对象）时只落一份。
+///
+/// 同步命令在主线程上跑，一份 27MB 的书稿要把上亿像素搬完会把窗口整个卡住，
+/// 所以这里显式挪到 blocking 线程池，前端只看到一个 loading 状态。
 #[tauri::command]
-pub fn extract_pdf_images(input_path: String, output_dir: String) -> Result<ExtractReport, String> {
+pub async fn extract_pdf_images(
+    input_path: String,
+    output_dir: String,
+) -> Result<ExtractReport, String> {
+    tauri::async_runtime::spawn_blocking(move || extract_pdf_images_blocking(input_path, output_dir))
+        .await
+        .map_err(|e| format!("提取任务中断: {}", e))?
+}
+
+fn extract_pdf_images_blocking(input_path: String, output_dir: String) -> Result<ExtractReport, String> {
     let file = crate::path_guard::readable(&input_path)?;
     let doc = crate::pdf_ops::load_doc(&file)?;
     let dir = crate::path_guard::writable(&output_dir)?;
@@ -79,7 +93,7 @@ pub fn extract_pdf_images(input_path: String, output_dir: String) -> Result<Extr
             };
             let ext = match &decoded {
                 Decoded::Passthrough { ext, .. } => *ext,
-                Decoded::Raster(_) => "png",
+                Decoded::Image(_) => "png",
             };
             let path = dir.join(format!("{}-{:02}-{:02}.{}", stem, index + 1, id.0, ext));
             if let Err(reason) = save_decoded(&decoded, &path) {
@@ -97,7 +111,7 @@ fn save_decoded(decoded: &Decoded, path: &Path) -> Result<(), String> {
         Decoded::Passthrough { bytes, .. } => {
             fs::write(path, bytes).map_err(|e| format!("写入失败: {}", e))
         }
-        Decoded::Raster(image) => image
+        Decoded::Image(image) => image
             .save_with_format(path, ImageFormat::Png)
             .map_err(|e| format!("写入失败: {}", e)),
     }
@@ -287,14 +301,19 @@ fn decode_image(doc: &Document, stream: &Stream, depth: u8) -> Result<Decoded, S
     };
     let mask_image = match mask {
         Some(stream) => match decode_image(doc, stream, depth + 1)? {
-            Decoded::Raster(image) if image.width() == width as u32 && image.height() == height as u32 => Some(image),
+            Decoded::Image(image)
+                if image.width() == width as u32 && image.height() == height as u32 =>
+            {
+                // 掩码只用一条通道当 alpha，先归一到灰度，省掉一份 RGBA 的中间缓冲
+                Some(image.to_luma8())
+            }
             // 掩码尺寸对不上时按不透明处理，至少图取得出来
             _ => None,
         },
         None => None,
     };
 
-    Ok(Decoded::Raster(rasterize(
+    Ok(Decoded::Image(rasterize(
         &samples,
         width as u32,
         height as u32,
@@ -504,6 +523,24 @@ fn unpack(
     expand: bool,
 ) -> Vec<u8> {
     let per_row_bytes = (width * components * bits as usize).div_ceil(8);
+    // 8 bit 时每行本来就是整字节，逐位拼窗口只是把一次 memcpy 拆成几千万次移位
+    if bits == 8 {
+        let row_len = width * components;
+        let mut out = Vec::with_capacity(row_len * height);
+        for row in 0..height {
+            let start = row * per_row_bytes;
+            match samples.get(start..start + row_len) {
+                Some(row_bytes) => out.extend_from_slice(row_bytes),
+                // 数据被截断时按补零处理，与下面的逐位路径一致
+                None => {
+                    for column in 0..row_len {
+                        out.push(*samples.get(start + column).unwrap_or(&0));
+                    }
+                }
+            }
+        }
+        return out;
+    }
     let mask = (1u16 << bits) - 1;
     let mut out = Vec::with_capacity(width * height * components);
     for row in 0..height {
@@ -531,6 +568,14 @@ fn scale(value: u8, from: f32, to: f32) -> u8 {
     (unit * 255.0).clamp(0.0, 255.0).round() as u8
 }
 
+fn scale_table(from: f32, to: f32) -> [u8; 256] {
+    let mut table = [0u8; 256];
+    for (value, slot) in table.iter_mut().enumerate() {
+        *slot = scale(value as u8, from, to);
+    }
+    table
+}
+
 fn rasterize(
     samples: &[u8],
     width: u32,
@@ -538,54 +583,93 @@ fn rasterize(
     bits: u8,
     space: &ColorSpace,
     decode: &[f32],
-    mask: Option<&RgbaImage>,
-) -> Result<RgbaImage, String> {
+    mask: Option<&GrayImage>,
+) -> Result<DynamicImage, String> {
     let components = match space {
         ColorSpace::Gray | ColorSpace::Indexed { .. } => 1,
         ColorSpace::Rgb => 3,
         ColorSpace::Cmyk => 4,
     };
-    // 调色板图的分量是索引，不能被当成亮度铺开到 0..=255
-    let raw = unpack(samples, width as usize, height as usize, bits, components, !matches!(space, ColorSpace::Indexed { .. }));
-    let mut pixels: Vec<u8> = Vec::with_capacity((width * height) as usize * 4);
-    for (index, sample) in raw.chunks(components).enumerate() {
-        let x = (index as u32) % width;
-        let y = (index as u32) / width;
-        let value = |component: usize| {
-            scale(
-                *sample.get(component).unwrap_or(&0),
-                decode[component * 2],
-                decode[component * 2 + 1],
-            )
+    // 调色板图的分量是索引，不能被当成亮度铺开到 0..=255，也不能套区间表
+    let indexed = matches!(space, ColorSpace::Indexed { .. });
+    let raw = unpack(
+        samples,
+        width as usize,
+        height as usize,
+        bits,
+        components,
+        !indexed,
+    );
+    // 每个分量烘一张 256 项表：整页扫描图有两千多万像素，
+    // 逐点做浮点乘加比逐点搬字节贵一个数量级
+    let tables: Vec<[u8; 256]> = if indexed {
+        Vec::new()
+    } else {
+        (0..components)
+            .map(|component| scale_table(decode[component * 2], decode[component * 2 + 1]))
+            .collect()
+    };
+    let gray_out = components == 1 && mask.is_none() && !indexed;
+    let channels = if mask.is_some() {
+        4
+    } else if gray_out {
+        1
+    } else {
+        3
+    };
+    let total = (width as usize) * (height as usize);
+    let mut pixels: Vec<u8> = Vec::with_capacity(total * channels);
+    // 掩码与图像同尺寸且都是行主序，并排走就不用逐点算 x/y（除法和取余在热路上很贵）
+    let mut mask_pixels = mask.into_iter().flat_map(|image| image.pixels());
+    for sample in raw.chunks(components) {
+        let pick = |component: usize| tables[component][*sample.get(component).unwrap_or(&0) as usize];
+        let rgb: [u8; 3] = if indexed {
+            let (hival, lookup) = match space {
+                ColorSpace::Indexed { hival, lookup } => (*hival, lookup),
+                _ => unreachable!(),
+            };
+            let at = (*sample.first().unwrap_or(&0)).min(hival as u8) as usize * 3;
+            [
+                *lookup.get(at).unwrap_or(&0),
+                *lookup.get(at + 1).unwrap_or(&0),
+                *lookup.get(at + 2).unwrap_or(&0),
+            ]
+        } else {
+            match space {
+                ColorSpace::Gray => {
+                    let g = pick(0);
+                    [g, g, g]
+                }
+                ColorSpace::Rgb => [pick(0), pick(1), pick(2)],
+                ColorSpace::Cmyk => {
+                    let (c, m, yk, k) = (pick(0), pick(1), pick(2), pick(3));
+                    [
+                        ((255 - c as u16) * (255 - k as u16) / 255) as u8,
+                        ((255 - m as u16) * (255 - k as u16) / 255) as u8,
+                        ((255 - yk as u16) * (255 - k as u16) / 255) as u8,
+                    ]
+                }
+                ColorSpace::Indexed { .. } => unreachable!(),
+            }
         };
-        let rgb: [u8; 3] = match space {
-            ColorSpace::Gray => {
-                let g = value(0);
-                [g, g, g]
+        match channels {
+            1 => pixels.push(rgb[0]),
+            3 => pixels.extend_from_slice(&rgb),
+            _ => {
+                pixels.extend_from_slice(&rgb);
+                pixels.push(match mask_pixels.next() {
+                    Some(alpha) => alpha.0[0],
+                    None => 255,
+                });
             }
-            ColorSpace::Rgb => [value(0), value(1), value(2)],
-            ColorSpace::Cmyk => {
-                let (c, m, yk, k) = (value(0), value(1), value(2), value(3));
-                [
-                    ((255 - c as u16) * (255 - k as u16) / 255) as u8,
-                    ((255 - m as u16) * (255 - k as u16) / 255) as u8,
-                    ((255 - yk as u16) * (255 - k as u16) / 255) as u8,
-                ]
-            }
-            ColorSpace::Indexed { hival, lookup } => {
-                let index = (*sample.first().unwrap_or(&0)).min(*hival as u8) as usize;
-                let at = index * 3;
-                [
-                    *lookup.get(at).unwrap_or(&0),
-                    *lookup.get(at + 1).unwrap_or(&0),
-                    *lookup.get(at + 2).unwrap_or(&0),
-                ]
-            }
-        };
-        let alpha = mask.map(|mask| mask.get_pixel(x, y).0[0]).unwrap_or(255);
-        pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+        }
     }
-    RgbaImage::from_raw(width, height, pixels).ok_or_else(|| "像素数量与宽高不符".to_string())
+    let bad = || "像素数量与宽高不符".to_string();
+    Ok(match channels {
+        1 => DynamicImage::ImageLuma8(GrayImage::from_raw(width, height, pixels).ok_or_else(bad)?),
+        3 => DynamicImage::ImageRgb8(RgbImage::from_raw(width, height, pixels).ok_or_else(bad)?),
+        _ => DynamicImage::ImageRgba8(RgbaImage::from_raw(width, height, pixels).ok_or_else(bad)?),
+    })
 }
 
 #[cfg(test)]
@@ -711,7 +795,7 @@ mod tests {
     fn extract(dir: &Path, file: &Path) -> ExtractReport {
         let out = dir.join(format!("{}-out", file.file_stem().unwrap().to_string_lossy()));
         assert!(!out.exists(), "输出目录应该由命令自己创建");
-        let report = extract_pdf_images(
+        let report = extract_pdf_images_blocking(
             file.to_string_lossy().to_string(),
             out.to_string_lossy().to_string(),
         )
@@ -1064,7 +1148,7 @@ mod tests {
         if !Path::new("/etc").exists() {
             return;
         }
-        let err = extract_pdf_images("/etc/passwd".into(), "/tmp/whatever".into())
+        let err = extract_pdf_images_blocking("/etc/passwd".into(), "/tmp/whatever".into())
             .expect_err("系统文件必须被拦下");
         assert!(err.contains("系统保护") || err.contains("拒绝"), "{}", err);
     }
