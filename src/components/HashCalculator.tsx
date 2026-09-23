@@ -53,6 +53,12 @@ export default function HashCalculator({ open, onClose, filePath, files }: Props
     setProgress("");
   }, [open, targetKey]);
 
+  // 算法是"这一次要算什么"，跟结果一起归零；但不跟着换目标走：
+  // 面板开着点了另一个文件就跳回 MD5，等于偷偷改用户刚选的下拉框。
+  useEffect(() => {
+    if (open) setAlgorithm("MD5");
+  }, [open]);
+
   const handleCalculate = async () => {
     if (targets.length === 0) {
       message.warning("未选择文件");
@@ -97,15 +103,6 @@ export default function HashCalculator({ open, onClose, filePath, files }: Props
     }
   };
 
-  const handleAfterOpenChange = (isOpen: boolean) => {
-    if (isOpen) {
-      setAlgorithm("MD5");
-      setResult("");
-      setRows([]);
-      setProgress("");
-    }
-  };
-
   const columns = [
     {
       title: "文件名",
@@ -139,7 +136,6 @@ export default function HashCalculator({ open, onClose, filePath, files }: Props
       onCancel={onClose}
       footer={null}
       width={isBatch ? 720 : 500}
-      afterOpenChange={handleAfterOpenChange}
     >
       {/* 目标文件 */}
       <div style={{ marginBottom: 16 }}>

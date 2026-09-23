@@ -46,4 +46,28 @@ describe("面板重开不留上一次的成果", () => {
     expect(effect).toContain("setGroups([])");
     expect(effect).toContain("setSelectedPaths(new Set())");
   });
+
+  it("目录同步：也是开面板那一刻重置，不等开合动画", () => {
+    const src = read("DirectorySync.tsx");
+    const effect = resetEffects(src).find((e) => /\bopen\b/.test(e));
+    expect(effect, "找不到跟着 open 走的重置").toBeTruthy();
+    for (const setter of ["setLeftDir(currentPath)", "setRightDir(\"\")", "setDiffEntries([])", "setCompared(false)"]) {
+      expect(effect, `重置少了 ${setter}`).toContain(setter);
+    }
+  });
+
+  it("哈希的算法重置不跟换目标走（别偷偷改用户刚选的下拉框）", () => {
+    const src = read("HashCalculator.tsx");
+    const effects = resetEffects(src);
+    const algo = effects.find((e) => /setAlgorithm\("MD5"\)/.test(e));
+    expect(algo, "算法重置没了").toBeTruthy();
+    expect(algo).not.toContain("targetKey");
+    expect(effects.find((e) => /targetKey/.test(e))).toContain("setRows([])");
+  });
+
+  it("全站不再用 afterOpenChange 做重置（那要等动画走完）", () => {
+    const offenders = ["HashCalculator", "DirectorySync", "DuplicateFinder", "ArchiveManager", "TrashModal"]
+      .filter((n) => new RegExp(`afterOpenChange=\\{`).test(read(`${n}.tsx`)));
+    expect(offenders).toEqual([]);
+  });
 });

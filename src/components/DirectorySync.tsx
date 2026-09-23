@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Modal,
   Input,
@@ -84,16 +84,19 @@ export default function DirectorySync({
   const [syncDirection, setSyncDirection] = useState<SyncDirection>("left_to_right");
   const [syncing, setSyncing] = useState(false);
 
-  const handleAfterOpenChange = (isOpen: boolean) => {
-    if (isOpen) {
-      setLeftDir(currentPath);
-      setRightDir("");
-      setDiffEntries([]);
-      setCompared(false);
-      setComparedDirs(null);
-      setSyncDirection("left_to_right");
-    }
-  };
+  // 每次打开都从头开始。原来挂的是 afterOpenChange：那要等开合动画走完才触发，
+  // 动画那一帧两侧显示的还是上一次的两个目录与上一次的差异结果。
+  useEffect(() => {
+    if (!open) return;
+    setLeftDir(currentPath);
+    setRightDir("");
+    setDiffEntries([]);
+    setCompared(false);
+    setComparedDirs(null);
+    setSyncDirection("left_to_right");
+    // currentPath 不进依赖：面板开着时浏览目录变了，不该把用户挑好的两侧目录冲掉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const pickDir = async (setter: (v: string) => void) => {
     try {
@@ -234,7 +237,6 @@ export default function DirectorySync({
       onCancel={onClose}
       footer={null}
       width={900}
-      afterOpenChange={handleAfterOpenChange}
     >
       {/* 目录输入 */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
