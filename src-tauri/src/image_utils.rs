@@ -139,6 +139,21 @@ pub fn save_image_data(data: String, dest_path: String, format: String) -> Resul
     // 这是一条"任意字节写到任意路径"的通道：必须过黑名单，否则整个 path_guard
     // 层等于给渲染进程留了后门（~/.ssh/authorized_keys、~/Library/LaunchAgents 等）
     let dest = crate::path_guard::writable(&dest_path)?;
+    // 前端按所选格式编码后再拼扩展名；两边不一致时写出来的文件是"名字说谎"
+    let want = match format.to_ascii_lowercase().as_str() {
+        "jpeg" => vec![".jpg".to_string(), ".jpeg".to_string()],
+        other => vec![format!(".{}", other)],
+    };
+    let ext = dest
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy().to_ascii_lowercase()))
+        .unwrap_or_default();
+    if !want.contains(&ext) {
+        return Err(format!(
+            "目标扩展名与所选格式不符: {} vs {}",
+            dest_path, format
+        ));
+    }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -637,6 +652,32 @@ mod guard_tests {
         .unwrap();
         assert_eq!(n, 7);
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn save_image_data_refuses_extension_format_mismatch() {
+        // format 这个参数以前是被丢掉的：调用方说自己是 png、扩展名写 .jpg 也照写，
+        // 于是磁盘上出现一个"名字说谎"的文件，双击打不开还不知道为什么
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let dir = case("save-format");
+        let dest = dir.join("lie.jpg");
+        let err = save_image_data(
+            STANDARD.encode(b"pngbytes").to_string(),
+            dest.to_string_lossy().to_string(),
+            "png".to_string(),
+        )
+        .expect_err("扩展名与格式不符时必须拒绝");
+        assert!(err.contains("格式不符"), "实得 {}", err);
+        assert!(!dest.exists());
+        // 大小写与 jpeg 别名不能把这条闸拦掉
+        let ok = dir.join("real.jpeg");
+        save_image_data(
+            STANDARD.encode(b"pngbytes").to_string(),
+            ok.to_string_lossy().to_string(),
+            "JPEG".to_string(),
+        )
+        .unwrap();
+        assert!(ok.exists());
     }
 
     #[test]

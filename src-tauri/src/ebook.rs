@@ -311,7 +311,6 @@ fn extract_epub_assets<R: std::io::Read + std::io::Seek>(
 /// - `temp_root` 是 `extract_epub_assets` 返回的临时根目录
 /// 处理：找到 src/href，resolve 到 temp_root 下的绝对路径，替换为 file:// URL
 fn rewrite_image_paths(xhtml: &str, chapter_href: &str, temp_root: &Path) -> String {
-    use std::path::PathBuf;
 
     let chapter_dir = chapter_href
         .rsplit_once('/')
@@ -630,7 +629,6 @@ pub fn get_epub_cover(path: &str) -> Result<String, String> {
             let mut buf = Vec::new();
             zf.read_to_end(&mut buf).map_err(|e| format!("读取封面失败: {}", e))?;
             // 使用标准base64编码
-            use std::fmt::Write;
             const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
             let mut result = String::with_capacity(buf.len() * 4 / 3 + 4);
             let chunks = buf.chunks(3);

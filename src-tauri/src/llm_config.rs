@@ -100,7 +100,7 @@ pub fn get_llm_config_path(app: tauri::AppHandle) -> Result<String, String> {
 
 /// 测试 LLM 配置是否可用：发一个最小请求（chat completions 的 1 token 输出）
 #[tauri::command]
-pub async fn test_llm_config(app: tauri::AppHandle, config: LlmConfig) -> Result<String, String> {
+pub async fn test_llm_config(config: LlmConfig) -> Result<String, String> {
     // 动态构建 endpoint
     let endpoint = match config.provider.as_str() {
         "openai" | "custom" => {

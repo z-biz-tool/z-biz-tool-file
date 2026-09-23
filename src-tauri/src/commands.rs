@@ -4,8 +4,6 @@ use std::fs;
 use std::io::{Read as IoRead, Write};
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
-use std::collections::BinaryHeap;
-use std::cmp::Reverse;
 use std::process::Command as StdCommand;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -1395,28 +1393,6 @@ pub fn calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String
     }
 }
 
-/// 简单的 CRC32 实现
-fn crc32(data: &[u8]) -> u32 {
-    let mut table = [0u32; 256];
-    for i in 0..256 {
-        let mut crc = i as u32;
-        for _ in 0..8 {
-            if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xEDB88320;
-            } else {
-                crc >>= 1;
-            }
-        }
-        table[i] = crc;
-    }
-    let mut crc = 0xFFFFFFFFu32;
-    for &byte in data {
-        let index = ((crc ^ byte as u32) & 0xFF) as usize;
-        crc = (crc >> 8) ^ table[index];
-    }
-    crc ^ 0xFFFFFFFF
-}
-
 /// 安全删除文件（覆写后删除）
 ///
 /// 流式覆写：每次写 1MB 随机块循环到文件长度，避免为 1GB 文件分配 1GB 内存。
@@ -1453,7 +1429,7 @@ pub fn secure_delete_file(path: &str, passes: Option<u32>) -> Result<(), String>
             getrandom::getrandom(&mut rng_buf[..to_write])
                 .map_err(|e| format!("生成随机数据失败: {}", e))?;
             file.write_all(&rng_buf[..to_write])
-                .map_err(|e| format!("覆写文件失败 (pass {})", pass))?;
+                .map_err(|e| format!("覆写文件失败 (pass {}): {}", pass, e))?;
             written += to_write as u64;
         }
         file.sync_all()

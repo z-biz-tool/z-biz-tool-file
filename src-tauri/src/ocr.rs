@@ -1,7 +1,6 @@
 // OCR (光学字符识别) - 调用系统 tesseract 命令
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::fs;
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,8 +96,9 @@ fn parse_confidence(stderr: &str) -> f32 {
     75.0
 }
 
-/// 对 PDF 第一页执行 OCR（简化版）
+/// PDF 的 OCR：没有实现 —— 需要先渲染成图再走 ocr_image，这条只是占位。
+/// （原来文档写着"简化版"，看着像有个降级实现，其实是直接报错。）
 #[tauri::command]
-pub fn ocr_pdf(path: String, language: String, _page: u32) -> Result<OcrResult, String> {
+pub fn ocr_pdf(_path: String, _language: String, _page: u32) -> Result<OcrResult, String> {
     Err("PDF OCR 暂未实现，请先用图片 OCR".to_string())
 }
