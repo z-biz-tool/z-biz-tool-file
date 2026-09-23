@@ -4,7 +4,8 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { Input, Dropdown } from "antd";
+import { Input, Dropdown, Tooltip } from "antd";
+import { App as AntdApp } from "antd";
 import {
   SearchOutlined,
   SettingOutlined,
@@ -13,8 +14,11 @@ import {
   ArrowUpOutlined,
   HistoryOutlined,
   MacCommandOutlined,
+  CopyOutlined,
+  FolderOpenOutlined,
 } from "@ant-design/icons";
 import type { FC } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useShortcutHint } from "./ShortcutHints";
 
 interface OmnibarProps {
@@ -42,11 +46,12 @@ const Omnibar: FC<OmnibarProps> = ({
 }) => {
   // 键位由 App 的注册表推导：这里写死 "⌥+←" 在 Windows/Linux 上指的是不存在的键
   const hint = useShortcutHint();
+  const { message } = AntdApp.useApp();
   const [mode, setMode] = useState<"navigation" | "search" | "command">("navigation");
   const [searchQuery, setSearchQuery] = useState("");
   const [commandInput, setCommandInput] = useState("");
   const [pathEditing, setPathEditing] = useState(false);
-  
+
   const inputRef = useRef<any>(null);
   const commandRef = useRef<any>(null);
 
@@ -64,12 +69,47 @@ const Omnibar: FC<OmnibarProps> = ({
     setPathEditing(!pathEditing);
   };
 
+  // 路径编辑时的"草稿"。原来 Input.onChange 直接 onNavigate(currentPath)：
+  // 敲一个字提交一次，URL 被瞬时切换到 "/x/y/z"，最后落到完全打错的路径。
+  // 草稿态只在按 Enter 或失焦时一次性提交 —— 输入框是"草稿"，提交是"动作"。
+  const [pathDraft, setPathDraft] = useState(currentPath);
+  useEffect(() => {
+    setPathDraft(currentPath);
+  }, [currentPath, pathEditing]);
+
   // 路径输入提交
   const handlePathSubmit = (value: string) => {
-    if (value) {
-      onNavigate(value);
+    const trimmed = value.trim();
+    if (trimmed) {
+      onNavigate(trimmed);
     }
     setPathEditing(false);
+  };
+
+  /**
+   * 复制当前目录的完整路径。Omnibar 自己处理：选中一个文件再去翻右键菜单
+   * 才能复制那条路径，但"我现在站在哪里"几乎同等常用 —— 单独一颗按钮省事。
+   * 用 AntdApp 的 message 而不是 navigator 弹原生通知 —— 桌面壳里原生通知
+   * 不吃主题、不跟站点走，看起来像 OS 弹窗。
+   */
+  const handleCopyCurrentPath = async () => {
+    try {
+      await navigator.clipboard.writeText(currentPath);
+      message.success("已复制当前路径");
+    } catch (err) {
+      message.error("复制失败: " + err);
+    }
+  };
+
+  /**
+   * 在 Finder 里打开当前目录。右键菜单的同名操作只在选中某项时出现，
+   * "我想直接去 Finder 看一眼当前目录"也得绕一遍菜单。
+   */
+  const handleRevealCurrent = () => {
+    if (!currentPath) return;
+    invoke("reveal_in_finder", { path: currentPath }).catch((err) =>
+      message.error("打开 Finder 失败: " + err),
+    );
   };
 
   // 快捷键处理
@@ -102,13 +142,13 @@ const Omnibar: FC<OmnibarProps> = ({
     if (pathEditing) {
       return (
         <Input
-          value={currentPath}
-          onChange={(e) => handlePathSubmit(e.target.value)}
-          onPressEnter={() => handlePathSubmit(currentPath)}
-          onBlur={() => setPathEditing(false)}
+          value={pathDraft}
+          onChange={(e) => setPathDraft(e.target.value)}
+          onPressEnter={() => handlePathSubmit(pathDraft)}
+          onBlur={() => handlePathSubmit(pathDraft)}
           ref={inputRef}
           size="small"
-          style={{ 
+          style={{
             width: '100%',
             fontWeight: 500,
           }}
@@ -187,10 +227,10 @@ const Omnibar: FC<OmnibarProps> = ({
 
         <span
           onClick={togglePathEditing}
-          style={{ 
-            cursor: 'text', 
-            padding: '4px 8px', 
-            borderRadius: 6, 
+          style={{
+            cursor: 'text',
+            padding: '4px 8px',
+            borderRadius: 6,
             opacity: 0.6,
             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
@@ -200,6 +240,61 @@ const Omnibar: FC<OmnibarProps> = ({
         >
           /
         </span>
+        {/* 复制当前路径：在 Finder 中显示：两条捷径让"我现在站在哪"不必绕右键菜单 */}
+        <Tooltip title="复制当前路径">
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="复制当前路径"
+            onClick={handleCopyCurrentPath}
+            style={{
+              cursor: 'pointer',
+              padding: '4px 6px',
+              borderRadius: 6,
+              opacity: 0.6,
+              display: 'inline-flex',
+              alignItems: 'center',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.opacity = '1';
+              (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.opacity = '0.6';
+              (e.currentTarget as HTMLElement).style.background = 'transparent';
+            }}
+          >
+            <CopyOutlined style={{ fontSize: 13 }} />
+          </span>
+        </Tooltip>
+        <Tooltip title="在 Finder 中显示当前目录">
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="在 Finder 中显示当前目录"
+            onClick={handleRevealCurrent}
+            style={{
+              cursor: 'pointer',
+              padding: '4px 6px',
+              borderRadius: 6,
+              opacity: 0.6,
+              display: 'inline-flex',
+              alignItems: 'center',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.opacity = '1';
+              (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.opacity = '0.6';
+              (e.currentTarget as HTMLElement).style.background = 'transparent';
+            }}
+          >
+            <FolderOpenOutlined style={{ fontSize: 13 }} />
+          </span>
+        </Tooltip>
       </div>
     );
   };
