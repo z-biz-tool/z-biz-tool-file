@@ -444,6 +444,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-img"
+version = "0.1.0"
+source = "git+https://github.com/z-biz-tool/z-biz-tool-capability?tag=v0.1.1#3219b5f8dc6a03b57d5857a37809355584833491"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "serde",
+]
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6909,8 +6919,8 @@ dependencies = [
 name = "z-biz-tool-file"
 version = "0.2.0"
 dependencies = [
- "base64 0.22.1",
  "bzip2 0.4.4",
+ "cap-img",
  "chrono",
  "dirs 5.0.1",
  "epub",

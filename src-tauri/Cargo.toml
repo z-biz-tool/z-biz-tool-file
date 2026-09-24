@@ -39,10 +39,15 @@ regex-lite = "0.1"
 image = "0.25"
 uuid = { version = "1", features = ["v4"] }
 opener = "0.7"
-base64 = "0.22"
 md-5 = "0.10"
 sha1 = "0.10"
 regex = "1"
+
+# 矩阵规划 03 §8 第 2 步：基础图片处理委托给 z-biz-tool-capability。
+# cap-img 内部打包了 image + base64，因此本仓 image/base64 中：
+#   - image 仍保留（pdf_image.rs 等模块还要用）
+#   - base64 已删除（只有 image_utils.rs 用，已搬走）
+cap-img = { git = "https://github.com/z-biz-tool/z-biz-tool-capability", tag = "v0.1.1" }
 sha2 = "0.10"
 chrono = "0.4"
 
