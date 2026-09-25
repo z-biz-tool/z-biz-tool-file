@@ -446,7 +446,8 @@ dependencies = [
 [[package]]
 name = "cap-img"
 version = "0.1.0"
-source = "git+https://github.com/z-biz-tool/z-biz-tool-capability?tag=v0.1.1#3219b5f8dc6a03b57d5857a37809355584833491"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c3fd1e553ab07a4a4a0401b176edff5b6ffc21e2e1e51160c3112748b087d4f"
 dependencies = [
  "base64 0.22.1",
  "image",

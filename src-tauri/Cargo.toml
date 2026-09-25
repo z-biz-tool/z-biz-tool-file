@@ -47,7 +47,8 @@ regex = "1"
 # cap-img 内部打包了 image + base64，因此本仓 image/base64 中：
 #   - image 仍保留（pdf_image.rs 等模块还要用）
 #   - base64 已删除（只有 image_utils.rs 用，已搬走）
-cap-img = { git = "https://github.com/z-biz-tool/z-biz-tool-capability", tag = "v0.1.1" }
+# 2026-09-25 起走 crates.io 正式版（0.1.0 已发布），不再 pin git tag
+cap-img = "0.1.0"
 sha2 = "0.10"
 chrono = "0.4"
 
