@@ -6918,7 +6918,7 @@ dependencies = [
 
 [[package]]
 name = "z-biz-tool-file"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bzip2 0.4.4",
  "cap-img",
