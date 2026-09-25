@@ -123,11 +123,16 @@ describe("conflictNote", () => {
   });
 });
 
-/** 让探测按给定答案回，并记录真正发生的写入 */
-function stubBackend(taken: string[]) {
+/**
+ * 让探测按给定答案回，并记录真正发生的写入。
+ * 存在性默认"全在"；missing 里列出的源路径会被 existing_paths 判为已失踪。
+ */
+function stubBackend(taken: string[], missing: string[] = []) {
   const writes: Array<{ cmd: string; args: Record<string, unknown> }> = [];
   invokeMock.mockImplementation((cmd: string, args: Record<string, unknown>) => {
     if (cmd === "occupied_names") return Promise.resolve(taken);
+    if (cmd === "existing_paths")
+      return Promise.resolve((args.paths as string[]).filter((p) => !missing.includes(p)));
     writes.push({ cmd, args });
     return Promise.resolve("/tmp/dest/x");
   });
@@ -152,7 +157,7 @@ async function answer(choice: "rename" | "overwrite" | "skip"): Promise<void> {
 describe("batchToast", () => {
   it("落了地才报成功，并把同名处理一起说清", () => {
     const toast = batchToast(
-      { placed: 2, note: conflictNote("rename", 1), selfSkipped: 0 },
+      { placed: 2, note: conflictNote("rename", 1), selfSkipped: 0, missingSources: 0 },
       "已移动",
       "下载"
     );
@@ -163,19 +168,38 @@ describe("batchToast", () => {
   });
 
   it("剔掉了自我包含的项就要有一句话说明，不能只报个数字", () => {
-    const partial = batchToast({ placed: 1, note: "", selfSkipped: 1 }, "已移动", "下载");
+    const partial = batchToast({ placed: 1, note: "", selfSkipped: 1, missingSources: 0 }, "已移动", "下载");
     expect(partial!.kind).toBe("success");
     expect(partial!.refresh).toBe(true);
     expect(partial!.text).toContain("1 项会搬进自己的子目录，已跳过");
 
-    const allSkipped = batchToast({ placed: 0, note: "", selfSkipped: 1 }, "已移动", "下载");
+    const allSkipped = batchToast({ placed: 0, note: "", selfSkipped: 1, missingSources: 0 }, "已移动", "下载");
     expect(allSkipped!.kind).toBe("warning");
     expect(allSkipped!.refresh).toBe(false);
     expect(allSkipped!.text).toContain("子目录");
   });
 
   it("既没落地也没被剔，就不该弹任何提示", () => {
-    expect(batchToast({ placed: 0, note: "", selfSkipped: 0 }, "已移动", "下载")).toBeNull();
+    expect(batchToast({ placed: 0, note: "", selfSkipped: 0, missingSources: 0 }, "已移动", "下载")).toBeNull();
+  });
+
+  it("源文件失踪的那几项也要单独交代，不能混进成功数里", () => {
+    const partial = batchToast(
+      { placed: 1, note: "", selfSkipped: 0, missingSources: 2 },
+      "已移动",
+      "下载"
+    );
+    expect(partial!.text).toContain("已移动 1 项到 下载");
+    expect(partial!.text).toContain("2 项源文件不存在，已跳过");
+
+    const allMissing = batchToast(
+      { placed: 0, note: "", selfSkipped: 0, missingSources: 3 },
+      "已移动",
+      "下载"
+    );
+    expect(allMissing!.kind).toBe("warning");
+    expect(allMissing!.refresh).toBe(false);
+    expect(allMissing!.text).toContain("3 项源文件不存在");
   });
 });
 
@@ -227,7 +251,7 @@ describe("placeBatch", () => {
     expect(confirmMock).not.toHaveBeenCalled();
     (mine.mock.calls[0][0] as { onOk: () => void }).onOk();
     const done = await pending;
-    expect(done).toEqual({ placed: 1, note: conflictNote("rename", 1), selfSkipped: 0 });
+    expect(done).toEqual({ placed: 1, note: conflictNote("rename", 1), selfSkipped: 0, missingSources: 0 });
     expect(writes.map((w) => w.cmd)).toEqual(["move_file"]);
   });
 
@@ -247,7 +271,7 @@ describe("placeBatch", () => {
       items(["/src/a.pdf", "move"], ["/src/b.txt", "copy"]), modalStub
     );
     expect(confirmMock).not.toHaveBeenCalled();
-    expect(done).toEqual({ placed: 2, note: "", selfSkipped: 0 });
+    expect(done).toEqual({ placed: 2, note: "", selfSkipped: 0, missingSources: 0 });
     expect(writes.map((w) => w.cmd)).toEqual(["move_file", "copy_file"]);
     expect(writes[0].args).toEqual({
       srcPath: "/src/a.pdf",
@@ -262,7 +286,7 @@ describe("placeBatch", () => {
     await answer("overwrite");
     const done = await pending;
     expect(writes[0].args.conflict).toBe("overwrite");
-    expect(done).toEqual({ placed: 1, note: conflictNote("overwrite", 1), selfSkipped: 0 });
+    expect(done).toEqual({ placed: 1, note: conflictNote("overwrite", 1), selfSkipped: 0, missingSources: 0 });
     expect(done!.note).toContain("替换");
   });
 
@@ -286,7 +310,7 @@ describe("placeBatch", () => {
       "/tmp/dest/sub",
       items(["/tmp/dest", "move"], ["/tmp/dest/sub", "copy"]), modalStub
     );
-    expect(done).toEqual({ placed: 0, note: "", selfSkipped: 2 });
+    expect(done).toEqual({ placed: 0, note: "", selfSkipped: 2, missingSources: 0 });
     expect(invokeMock).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
   });
@@ -294,7 +318,7 @@ describe("placeBatch", () => {
   it("目录尾斜杠也要认成同一个目录，不能当成没冲突", async () => {
     stubBackend([]);
     const done = await placeBatch("/tmp/dest", items(["/tmp/dest/", "move"]), modalStub);
-    expect(done).toEqual({ placed: 0, note: "", selfSkipped: 1 });
+    expect(done).toEqual({ placed: 0, note: "", selfSkipped: 1, missingSources: 0 });
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
@@ -304,8 +328,27 @@ describe("placeBatch", () => {
       "/tmp/dest/sub",
       items(["/src/a.pdf", "move"], ["/tmp/dest", "move"], ["/src/b.txt", "copy"]), modalStub
     );
-    expect(done).toEqual({ placed: 2, note: "", selfSkipped: 1 });
+    expect(done).toEqual({ placed: 2, note: "", selfSkipped: 1, missingSources: 0 });
     // 被剔掉的那条不能只是"不计数"，必须真的没发命令
     expect(writes.map((w) => w.args.srcPath)).toEqual(["/src/a.pdf", "/src/b.txt"]);
+  });
+
+  it("剪贴板里的源被外部删了，就地剔掉、数得出来，剩下的照搬", async () => {
+    const writes = stubBackend([], ["/src/gone.pdf"]);
+    const done = await placeBatch(
+      "/tmp/dest",
+      items(["/src/gone.pdf", "move"], ["/src/a.pdf", "move"]), modalStub
+    );
+    expect(done).toEqual({ placed: 1, note: "", selfSkipped: 0, missingSources: 1 });
+    // 失踪的那条一次命令都不许发
+    expect(writes.map((w) => w.args.srcPath)).toEqual(["/src/a.pdf"]);
+  });
+
+  it("整批源都失踪时，不许弹同名确认框就直接收工", async () => {
+    const writes = stubBackend(["a.pdf"], ["/src/a.pdf"]);
+    const done = await placeBatch("/tmp/dest", items(["/src/a.pdf", "move"]), modalStub);
+    expect(done).toEqual({ placed: 0, note: "", selfSkipped: 0, missingSources: 1 });
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
   });
 });
