@@ -3,6 +3,7 @@ name = "z-biz-tool-file"
 version = "0.2.0"
 description = "万能文件管理器"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "z_biz_tool_file_lib"
