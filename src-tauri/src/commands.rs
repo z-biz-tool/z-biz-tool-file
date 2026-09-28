@@ -81,7 +81,14 @@ pub struct ReadFileResult {
 
 /// 列出目录内容
 #[tauri::command]
-pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
+pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || list_directory_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn list_directory_blocking(path: &str) -> Result<Vec<FileEntry>, String> {
     let dir_path = Path::new(path);
     if !dir_path.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -134,7 +141,14 @@ pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
 
 /// 读取文件内容（文本文件）
 #[tauri::command]
-pub fn read_file_content(path: &str) -> Result<ReadFileResult, String> {
+pub async fn read_file_content(path: String) -> Result<ReadFileResult, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || read_file_content_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn read_file_content_blocking(path: &str) -> Result<ReadFileResult, String> {
     let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("文件不存在: {}", path));
@@ -187,7 +201,14 @@ pub fn read_file_content(path: &str) -> Result<ReadFileResult, String> {
 
 /// 搜索文件（按文件名搜索，使用walkdir遍历指定目录）
 #[tauri::command]
-pub fn search_files(path: &str, query: &str) -> Result<Vec<SearchResultItem>, String> {
+pub async fn search_files(path: String, query: String) -> Result<Vec<SearchResultItem>, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || search_files_blocking(&path, &query))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn search_files_blocking(path: &str, query: &str) -> Result<Vec<SearchResultItem>, String> {
     let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -229,7 +250,14 @@ pub fn search_files(path: &str, query: &str) -> Result<Vec<SearchResultItem>, St
 
 /// 获取文件详细信息
 #[tauri::command]
-pub fn get_file_info(path: &str) -> Result<FileInfo, String> {
+pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || get_file_info_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn get_file_info_blocking(path: &str) -> Result<FileInfo, String> {
     let file_path = Path::new(path);
     if !file_path.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -267,7 +295,14 @@ pub fn get_file_info(path: &str) -> Result<FileInfo, String> {
 
 /// 重命名文件/目录
 #[tauri::command]
-pub fn rename_file(old_path: &str, new_name: &str) -> Result<String, String> {
+pub async fn rename_file(old_path: String, new_name: String) -> Result<String, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || rename_file_blocking(&old_path, &new_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn rename_file_blocking(old_path: &str, new_name: &str) -> Result<String, String> {
     let canonical = crate::path_guard::validate(old_path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("源路径不存在: {}", old_path));
@@ -283,7 +318,14 @@ pub fn rename_file(old_path: &str, new_name: &str) -> Result<String, String> {
 
 /// 删除文件/目录
 #[tauri::command]
-pub fn delete_file(path: &str) -> Result<(), String> {
+pub async fn delete_file(path: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || delete_file_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn delete_file_blocking(path: &str) -> Result<(), String> {
     let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -362,7 +404,14 @@ fn resolve_dest(dest: &Path, policy: ConflictPolicy) -> Result<Option<PathBuf>, 
 
 /// 移动文件/目录
 #[tauri::command]
-pub fn move_file(
+pub async fn move_file(src_path: String, dest_dir: String, conflict: Option<ConflictPolicy>) -> Result<String, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || move_file_blocking(&src_path, &dest_dir, conflict))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn move_file_blocking(
     src_path: &str,
     dest_dir: &str,
     conflict: Option<ConflictPolicy>,
@@ -450,7 +499,14 @@ fn recreate_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
 
 /// 复制文件/目录
 #[tauri::command]
-pub fn copy_file(
+pub async fn copy_file(src_path: String, dest_dir: String, conflict: Option<ConflictPolicy>) -> Result<String, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || copy_file_blocking(&src_path, &dest_dir, conflict))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn copy_file_blocking(
     src_path: &str,
     dest_dir: &str,
     conflict: Option<ConflictPolicy>,
@@ -496,7 +552,14 @@ pub fn copy_file(
 /// 在 Tauri 2 的 fs:default capability 下会被 ACL 拒，且分两步还有
 /// "文件先被创建为空文件后写失败"的竞态）。
 #[tauri::command]
-pub fn create_file(path: &str, content: Option<String>) -> Result<(), String> {
+pub async fn create_file(path: String, content: Option<String>) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || create_file_blocking(&path, content))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn create_file_blocking(path: &str, content: Option<String>) -> Result<(), String> {
     // 写入场景：目标文件不存在，需对父目录做校验
     let parent = Path::new(path).parent().ok_or("无法获取父目录")?;
     let canonical_parent = crate::path_guard::validate(parent.to_str().unwrap_or(""))
@@ -527,7 +590,14 @@ pub fn create_file(path: &str, content: Option<String>) -> Result<(), String> {
 
 /// 创建新目录（包括父目录）
 #[tauri::command]
-pub fn create_directory(path: &str) -> Result<(), String> {
+pub async fn create_directory(path: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || create_directory_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn create_directory_blocking(path: &str) -> Result<(), String> {
     // 写入场景：父目录必须已存在
     let parent = Path::new(path).parent().ok_or("无法获取父目录")?;
     let canonical_parent = crate::path_guard::validate(parent.to_str().unwrap_or(""))
@@ -548,7 +618,14 @@ pub fn create_directory(path: &str) -> Result<(), String> {
 
 /// 删除文件 — 移到回收站（可恢复）
 #[tauri::command]
-pub fn delete_to_trash(
+pub async fn delete_to_trash(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || delete_to_trash_blocking(app, path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn delete_to_trash_blocking(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<String, String> {
@@ -660,7 +737,14 @@ pub struct StorageAnalysis {
 
 /// 递归统计目录大小 + 收集 top N
 #[tauri::command]
-pub fn analyze_storage(
+pub async fn analyze_storage(path: String, depth: Option<usize>, top_n: Option<usize>) -> Result<StorageAnalysis, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || analyze_storage_blocking(path, depth, top_n))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn analyze_storage_blocking(
     path: String,
     depth: Option<usize>,
     top_n: Option<usize>,
@@ -808,7 +892,14 @@ pub struct BatchRenameResult {
 
 /// 批量重命名文件
 #[tauri::command]
-pub fn batch_rename(
+pub async fn batch_rename(paths: Vec<String>, mode: String, find_text: Option<String>, replace_text: Option<String>, prefix: Option<String>, suffix: Option<String>, start_number: Option<u32>) -> Result<BatchRenameResult, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || batch_rename_blocking(paths, &mode, find_text, replace_text, prefix, suffix, start_number))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn batch_rename_blocking(
     paths: Vec<String>,
     mode: &str,
     find_text: Option<String>,
@@ -907,7 +998,14 @@ pub fn batch_rename(
 
 /// 列出目录内容（支持显示隐藏文件）
 #[tauri::command]
-pub fn list_directory_with_hidden(path: &str, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+pub async fn list_directory_with_hidden(path: String, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || list_directory_with_hidden_blocking(&path, show_hidden))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn list_directory_with_hidden_blocking(path: &str, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
     let dir_path = Path::new(path);
     if !dir_path.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -960,7 +1058,14 @@ pub fn list_directory_with_hidden(path: &str, show_hidden: bool) -> Result<Vec<F
 
 /// 压缩文件/目录为 ZIP
 #[tauri::command]
-pub fn compress_to_zip(paths: Vec<String>, dest_path: String) -> Result<(), String> {
+pub async fn compress_to_zip(paths: Vec<String>, dest_path: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || compress_to_zip_blocking(paths, dest_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn compress_to_zip_blocking(paths: Vec<String>, dest_path: String) -> Result<(), String> {
     let dest = Path::new(&dest_path);
 
     // 确保目标目录存在
@@ -1050,7 +1155,14 @@ fn add_file_to_zip<W: std::io::Write + std::io::Seek>(
 
 /// 解压 ZIP 文件
 #[tauri::command]
-pub fn extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
+pub async fn extract_zip(zip_path: String, dest_dir: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || extract_zip_blocking(&zip_path, &dest_dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn extract_zip_blocking(zip_path: &str, dest_dir: &str) -> Result<(), String> {
     // dest_dir 也接 path_guard：解压不能写到系统目录
     let canonical_dest = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
 
@@ -1243,7 +1355,14 @@ fn extract_7z_impl(src: &Path, dest: &Path) -> Result<(), String> {
 
 /// 通用解压：按扩展名自动选择格式
 #[tauri::command]
-pub fn extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
+pub async fn extract_archive(archive_path: String, dest_dir: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || extract_archive_blocking(&archive_path, &dest_dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn extract_archive_blocking(archive_path: &str, dest_dir: &str) -> Result<(), String> {
     // dest_dir 必须在允许范围内，避免解压到系统目录
     let canonical_dest = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
 
@@ -1255,7 +1374,7 @@ pub fn extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String>
     let dest = &canonical_dest;
 
     match detect_archive_format(src) {
-        "zip" => extract_zip(archive_path, dest_dir),
+        "zip" => extract_zip_blocking(archive_path, dest_dir),
         "tar" => extract_tar_impl(src, dest, None),
         "tar.gz" => extract_tar_impl(src, dest, Some(DecompressAlgo::Gzip)),
         "tar.bz2" => extract_tar_impl(src, dest, Some(DecompressAlgo::Bzip2)),
@@ -1350,7 +1469,14 @@ pub fn open_with_default_app(path: &str) -> Result<(), String> {
 
 /// 计算目录总大小（递归）
 #[tauri::command]
-pub fn get_directory_size(path: &str) -> Result<u64, String> {
+pub async fn get_directory_size(path: String) -> Result<u64, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || get_directory_size_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn get_directory_size_blocking(path: &str) -> Result<u64, String> {
     let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -1372,7 +1498,14 @@ pub fn get_directory_size(path: &str) -> Result<u64, String> {
 
 /// 计算文件哈希值（支持 MD5、SHA1、SHA256、CRC32）
 #[tauri::command]
-pub fn calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String> {
+pub async fn calculate_file_hash(path: String, algorithm: String) -> Result<String, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || calculate_file_hash_blocking(&path, &algorithm))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn calculate_file_hash_blocking(path: &str, algorithm: &str) -> Result<String, String> {
     let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("文件不存在: {}", path));
@@ -1436,7 +1569,14 @@ pub fn calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String
 /// 注：覆写次数默认 3 次（DoD 5220.22-M 简化），对 SSD/带 wear-leveling 的设备
 /// 只能降低恢复概率，不能完全保证（参见 doc 假设 HYP-02）。
 #[tauri::command]
-pub fn secure_delete_file(path: &str, passes: Option<u32>) -> Result<(), String> {
+pub async fn secure_delete_file(path: String, passes: Option<u32>) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || secure_delete_file_blocking(&path, passes))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn secure_delete_file_blocking(path: &str, passes: Option<u32>) -> Result<(), String> {
     let canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("文件不存在: {}", path));
@@ -1489,7 +1629,14 @@ pub struct DuplicateGroup {
 
 /// 查找重复文件
 #[tauri::command]
-pub fn find_duplicate_files(directory: &str) -> Result<Vec<DuplicateGroup>, String> {
+pub async fn find_duplicate_files(directory: String) -> Result<Vec<DuplicateGroup>, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || find_duplicate_files_blocking(&directory))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn find_duplicate_files_blocking(directory: &str) -> Result<Vec<DuplicateGroup>, String> {
     let canonical = crate::path_guard::validate(directory).map_err(|e| e.to_string())?;
     if !canonical.exists() {
         return Err(format!("目录不存在: {}", directory));
@@ -1751,7 +1898,14 @@ fn same_content(a: &Path, b: &Path) -> bool {
 ///   会让"内容完全一致"的文件在 Linux 上永远显示"已修改"，用户点多少次同步都看不到尽头。
 /// 代价是尺寸相同的文件要真读一遍内容才能定论，这是 `diff -r` 同款的口径。
 #[tauri::command]
-pub fn compare_directories(
+pub async fn compare_directories(left_dir: String, right_dir: String) -> Result<Vec<SyncDiffEntry>, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || compare_directories_blocking(&left_dir, &right_dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn compare_directories_blocking(
     left_dir: &str,
     right_dir: &str,
 ) -> Result<Vec<SyncDiffEntry>, String> {
@@ -1821,7 +1975,14 @@ pub struct SyncResult {
 /// 单向、以源为准：同名目标文件直接覆盖，绝不能用 copy_file 的默认"保留两者"
 /// 策略 —— 那会把同步变成每次多产出若干 `xxx 副本` 的重复文件。
 #[tauri::command]
-pub fn sync_directories(
+pub async fn sync_directories(source_dir: String, target_dir: String, names: Vec<String>) -> Result<SyncResult, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || sync_directories_blocking(&source_dir, &target_dir, names))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn sync_directories_blocking(
     source_dir: &str,
     target_dir: &str,
     names: Vec<String>,
@@ -2110,7 +2271,14 @@ pub struct ZipEntry {
 
 /// 解压 ZIP 中的单个文件
 #[tauri::command]
-pub fn extract_zip_file(zip_path: &str, entry_name: &str, dest_dir: &str) -> Result<(), String> {
+pub async fn extract_zip_file(zip_path: String, entry_name: String, dest_dir: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || extract_zip_file_blocking(&zip_path, &entry_name, &dest_dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn extract_zip_file_blocking(zip_path: &str, entry_name: &str, dest_dir: &str) -> Result<(), String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开ZIP失败: {}", e))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("读取ZIP失败: {}", e))?;
 
@@ -2132,7 +2300,14 @@ pub fn extract_zip_file(zip_path: &str, entry_name: &str, dest_dir: &str) -> Res
 
 /// 列出 ZIP 文件内容
 #[tauri::command]
-pub fn list_zip_contents(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
+pub async fn list_zip_contents(zip_path: String) -> Result<Vec<ZipEntry>, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || list_zip_contents_blocking(&zip_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn list_zip_contents_blocking(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
     let file = std::fs::File::open(zip_path).map_err(|e| format!("打开ZIP失败: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取ZIP失败: {}", e))?;
 
@@ -2167,7 +2342,14 @@ pub fn list_zip_contents(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
 /// - `dest_path`: 目标归档文件路径（.tar / .tar.gz / .tar.bz2）
 /// - `compression`: "tar" / "gz" / "bz2"
 #[tauri::command]
-pub fn compress_to_tar(
+pub async fn compress_to_tar(paths: Vec<String>, dest_path: String, compression: String) -> Result<(), String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || compress_to_tar_blocking(paths, dest_path, compression))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn compress_to_tar_blocking(
     paths: Vec<String>,
     dest_path: String,
     compression: String,
@@ -2283,7 +2465,14 @@ pub struct DiffResult {
 /// 但把内存降到 **O(n)** —— 只保留前一行 dp 值。回溯时再分治求中间行，
 /// 完全等价于 Hirschberg 算法的内存形态。
 #[tauri::command]
-pub fn diff_files(old_path: &str, new_path: &str) -> Result<DiffResult, String> {
+pub async fn diff_files(old_path: String, new_path: String) -> Result<DiffResult, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || diff_files_blocking(&old_path, &new_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn diff_files_blocking(old_path: &str, new_path: &str) -> Result<DiffResult, String> {
     let old = fs::read_to_string(old_path).map_err(|e| format!("读取旧文件失败: {}", e))?;
     let new = fs::read_to_string(new_path).map_err(|e| format!("读取新文件失败: {}", e))?;
     let old_size = old.len() as u64;
@@ -2446,7 +2635,14 @@ pub struct DirDiffSummary {
 
 /// 比较目录内容（仅比较文件名 + 大小 + 修改时间）
 #[tauri::command]
-pub fn quick_diff_dirs(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary, String> {
+pub async fn quick_diff_dirs(left_dir: String, right_dir: String) -> Result<DirDiffSummary, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || quick_diff_dirs_blocking(&left_dir, &right_dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn quick_diff_dirs_blocking(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary, String> {
     let collect = |dir: &str| -> Result<std::collections::HashMap<String, (u64, u64)>, String> {
         let mut map = std::collections::HashMap::new();
         for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
@@ -2494,7 +2690,7 @@ pub fn quick_diff_dirs(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary
 
 #[cfg(test)]
 mod zip_tests {
-    use super::compress_to_zip;
+    use super::compress_to_zip_blocking;
     use std::fs;
     use std::io::Read;
     use std::time::Instant;
@@ -2513,7 +2709,7 @@ mod zip_tests {
         let dest = ws.join("zip_out.zip");
         fs::write(&src, "hello\nworld\n".repeat(1000)).unwrap();
 
-        compress_to_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+        compress_to_zip_blocking(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
             .expect("compress ok");
 
         // 解压验证内容
@@ -2537,7 +2733,7 @@ mod zip_tests {
         fs::write(&src, &data).unwrap();
 
         let start = Instant::now();
-        compress_to_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+        compress_to_zip_blocking(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
             .expect("compress ok");
         let elapsed = start.elapsed();
 
@@ -2572,7 +2768,7 @@ mod zip_tests {
         fs::write(dir.join("sub/b.txt"), "BBB").unwrap();
 
         let dest = ws.join("dir.zip");
-        compress_to_zip(vec![dir.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+        compress_to_zip_blocking(vec![dir.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
             .unwrap();
 
         let f = fs::File::open(&dest).unwrap();
@@ -2588,7 +2784,7 @@ mod zip_tests {
 
 #[cfg(test)]
 mod secure_delete_tests {
-    use super::secure_delete_file;
+    use super::secure_delete_file_blocking;
     use std::fs;
 
     /// 每个用例独享一个目录，作用域结束自动回收。
@@ -2603,10 +2799,10 @@ mod secure_delete_tests {
         let p = ws.join("victim.txt");
         fs::write(&p, "secret".to_string().repeat(10_000)).unwrap();
 
-        secure_delete_file(p.to_str().unwrap(), Some(1)).unwrap();
+        secure_delete_file_blocking(p.to_str().unwrap(), Some(1)).unwrap();
         assert!(!p.exists(), "file must be removed");
 
-        let r = secure_delete_file(p.to_str().unwrap(), None);
+        let r = secure_delete_file_blocking(p.to_str().unwrap(), None);
         assert!(r.is_err(), "missing file should return error");
     }
 
@@ -2615,7 +2811,7 @@ mod secure_delete_tests {
         let ws = workspace();
         let p = ws.join("empty.txt");
         fs::write(&p, "").unwrap();
-        secure_delete_file(p.to_str().unwrap(), Some(3)).unwrap();
+        secure_delete_file_blocking(p.to_str().unwrap(), Some(3)).unwrap();
         assert!(!p.exists());
     }
 
@@ -2625,14 +2821,14 @@ mod secure_delete_tests {
         let p = ws.join("clamp.txt");
         fs::write(&p, "abc").unwrap();
         // 即便传 99 也不会爆；预期正常完成
-        secure_delete_file(p.to_str().unwrap(), Some(99)).unwrap();
+        secure_delete_file_blocking(p.to_str().unwrap(), Some(99)).unwrap();
         assert!(!p.exists());
     }
 }
 
 #[cfg(test)]
 mod crc32_tests {
-    use super::calculate_file_hash;
+    use super::calculate_file_hash_blocking;
     use std::fs;
 
     /// 每个用例独享一个目录，作用域结束自动回收。
@@ -2647,7 +2843,7 @@ mod crc32_tests {
         let p = ws.join("a.txt");
         fs::write(&p, "123456789").unwrap();
         // 标准 CRC32 (IEEE) for "123456789" = 0xCBF43926
-        let r = calculate_file_hash(p.to_str().unwrap(), "crc32").unwrap();
+        let r = calculate_file_hash_blocking(p.to_str().unwrap(), "crc32").unwrap();
         assert_eq!(r, "cbf43926");
     }
 
@@ -2658,14 +2854,14 @@ mod crc32_tests {
         let data = vec![0xCDu8; 32 * 1024 * 1024];
         fs::write(&p, &data).unwrap();
         // 不应 OOM；仅校验 8 位十六进制格式正确
-        let r = calculate_file_hash(p.to_str().unwrap(), "crc32").unwrap();
+        let r = calculate_file_hash_blocking(p.to_str().unwrap(), "crc32").unwrap();
         assert_eq!(r.len(), 8);
     }
 }
 
 #[cfg(test)]
 mod diff_tests {
-    use super::diff_files;
+    use super::diff_files_blocking;
     use std::time::Instant;
 
     fn write_temp(dir: &crate::test_bridge::TempDir, name: &str, content: &str) -> std::path::PathBuf {
@@ -2680,7 +2876,7 @@ mod diff_tests {
         let ws = crate::test_bridge::TempDir::new("diff");
         let a = write_temp(&ws, "a.txt", &content);
         let b = write_temp(&ws, "b.txt", &content);
-        let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
+        let r = diff_files_blocking(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
         assert_eq!(r.added, 0);
         assert_eq!(r.removed, 0);
         assert_eq!(r.equal, 2000);
@@ -2702,7 +2898,7 @@ mod diff_tests {
         let b = write_temp(&ws, "new5000.txt", &new_content);
 
         let start = Instant::now();
-        let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
+        let r = diff_files_blocking(a.to_str().unwrap(), b.to_str().unwrap()).unwrap();
         let elapsed = start.elapsed();
 
         assert!(r.removed >= 90 && r.removed <= 110, "removed={}", r.removed);
@@ -2728,7 +2924,7 @@ mod diff_tests {
         let b = write_temp(&ws, "big_new.txt", &new_content);
 
         let start = Instant::now();
-        let r = diff_files(a.to_str().unwrap(), b.to_str().unwrap());
+        let r = diff_files_blocking(a.to_str().unwrap(), b.to_str().unwrap());
         let elapsed = start.elapsed();
         let r = r.expect("退化分支必须返回 Ok 而非 OOM panic");
         assert_eq!(r.lines.len(), 16000);
@@ -2821,7 +3017,7 @@ mod conflict_tests {
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("a.txt"), b"precious old content").unwrap();
 
-        let out = copy_file(src.join("a.txt").to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
+        let out = copy_file_blocking(src.join("a.txt").to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
         assert_eq!(name_of(Path::new(&out)), "a 副本.txt");
         assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"precious old content");
         assert_eq!(fs::read(dst.join("a 副本.txt")).unwrap(), b"new content");
@@ -2836,7 +3032,7 @@ mod conflict_tests {
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("a.txt"), b"old").unwrap();
 
-        copy_file(
+        copy_file_blocking(
             src.to_str().unwrap(),
             dst.to_str().unwrap(),
             Some(ConflictPolicy::Skip),
@@ -2855,7 +3051,7 @@ mod conflict_tests {
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("a.txt"), b"old").unwrap();
 
-        copy_file(
+        copy_file_blocking(
             src.to_str().unwrap(),
             dst.to_str().unwrap(),
             Some(ConflictPolicy::Overwrite),
@@ -2874,7 +3070,7 @@ mod conflict_tests {
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("a.txt"), b"old").unwrap();
 
-        move_file(
+        move_file_blocking(
             src.to_str().unwrap(),
             dst.to_str().unwrap(),
             Some(ConflictPolicy::Skip),
@@ -2893,7 +3089,7 @@ mod conflict_tests {
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("a.txt"), b"old").unwrap();
 
-        move_file(src.to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
+        move_file_blocking(src.to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
         assert!(!src.exists());
         assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"old");
         assert_eq!(fs::read(dst.join("a 副本.txt")).unwrap(), b"new");
@@ -2936,7 +3132,7 @@ mod sync_tests {
     }
 
     fn compare(l: &Path, r: &Path) -> Vec<SyncDiffEntry> {
-        compare_directories(&l.to_string_lossy(), &r.to_string_lossy()).unwrap()
+        compare_directories_blocking(&l.to_string_lossy(), &r.to_string_lossy()).unwrap()
     }
 
     #[test]
@@ -3053,13 +3249,13 @@ mod sync_tests {
     #[test]
     fn compare_rejects_blocked_directory() {
         let dir = case("blocked");
-        let err = compare_directories("/etc", &dir.to_string_lossy())
+        let err = compare_directories_blocking("/etc", &dir.to_string_lossy())
             .expect_err("/etc 必须被拒绝");
         assert!(err.contains("禁止操作"), "实得 {}", err);
     }
 
     fn sync(src: &Path, dst: &Path, names: Vec<&str>) -> SyncResult {
-        sync_directories(
+        sync_directories_blocking(
             &src.to_string_lossy(),
             &dst.to_string_lossy(),
             names.into_iter().map(|s| s.to_string()).collect(),
@@ -3123,7 +3319,7 @@ mod sync_tests {
             .filter(|e| e.status != SyncDiffStatus::OnlyRight)
             .map(|e| e.name)
             .collect();
-        let res = sync_directories(
+        let res = sync_directories_blocking(
             &l.to_string_lossy(),
             &r.to_string_lossy(),
             names.clone(),

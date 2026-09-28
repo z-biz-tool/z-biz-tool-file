@@ -56,7 +56,14 @@ fn cache_key(path: &Path) -> Result<String, String> {
 
 /// 提取视频第一帧作为缩略图（缓存）
 #[tauri::command]
-pub fn get_video_thumbnail(path: String) -> Result<VideoThumbResult, String> {
+pub async fn get_video_thumbnail(path: String) -> Result<VideoThumbResult, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || get_video_thumbnail_blocking(path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub fn get_video_thumbnail_blocking(path: String) -> Result<VideoThumbResult, String> {
     let p = Path::new(&path);
     if !p.exists() {
         return Err(format!("文件不存在: {}", path));

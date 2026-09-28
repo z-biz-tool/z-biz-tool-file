@@ -262,13 +262,13 @@ pub mod test_bridge {
 
     /// 直接调真实 Tauri 命令函数做端到端集成验证
     pub fn call_delete_file(path: &str) -> Result<(), String> {
-        crate::commands::delete_file(path)
+        crate::commands::delete_file_blocking(path)
     }
     pub fn call_move_file(src: &str, dest: &str) -> Result<String, String> {
-        crate::commands::move_file(src, dest, None)
+        crate::commands::move_file_blocking(src, dest, None)
     }
     pub fn call_copy_file(src: &str, dest: &str) -> Result<String, String> {
-        crate::commands::copy_file(src, dest, None)
+        crate::commands::copy_file_blocking(src, dest, None)
     }
     /// 指定重名策略的版本；不指定时命令默认走 Rename（绝不静默覆盖）
     pub fn call_copy_file_with(
@@ -276,47 +276,47 @@ pub mod test_bridge {
         dest: &str,
         policy: crate::commands::ConflictPolicy,
     ) -> Result<String, String> {
-        crate::commands::copy_file(src, dest, Some(policy))
+        crate::commands::copy_file_blocking(src, dest, Some(policy))
     }
     pub fn call_move_file_with(
         src: &str,
         dest: &str,
         policy: crate::commands::ConflictPolicy,
     ) -> Result<String, String> {
-        crate::commands::move_file(src, dest, Some(policy))
+        crate::commands::move_file_blocking(src, dest, Some(policy))
     }
     pub fn call_rename_file(old: &str, new: &str) -> Result<String, String> {
-        crate::commands::rename_file(old, new)
+        crate::commands::rename_file_blocking(old, new)
     }
     pub fn call_create_file(path: &str, content: Option<String>) -> Result<(), String> {
-        crate::commands::create_file(path, content)
+        crate::commands::create_file_blocking(path, content)
     }
     pub fn call_extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
-        crate::commands::extract_zip(zip_path, dest_dir)
+        crate::commands::extract_zip_blocking(zip_path, dest_dir)
     }
     pub fn call_extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
-        crate::commands::extract_archive(archive_path, dest_dir)
+        crate::commands::extract_archive_blocking(archive_path, dest_dir)
     }
     pub fn call_read_file_content(path: &str) -> Result<crate::commands::ReadFileResult, String> {
-        crate::commands::read_file_content(path)
+        crate::commands::read_file_content_blocking(path)
     }
     pub fn call_search_files(
         path: &str,
         query: &str,
     ) -> Result<Vec<crate::commands::SearchResultItem>, String> {
-        crate::commands::search_files(path, query)
+        crate::commands::search_files_blocking(path, query)
     }
     pub fn call_secure_delete_file(path: &str, passes: Option<u32>) -> Result<(), String> {
-        crate::commands::secure_delete_file(path, passes)
+        crate::commands::secure_delete_file_blocking(path, passes)
     }
     pub fn call_set_file_permissions(path: &str, mode: u32) -> Result<(), String> {
         crate::commands::set_file_permissions(path, mode)
     }
     pub fn call_calculate_file_hash(path: &str, algorithm: &str) -> Result<String, String> {
-        crate::commands::calculate_file_hash(path, algorithm)
+        crate::commands::calculate_file_hash_blocking(path, algorithm)
     }
     pub fn call_get_directory_size(path: &str) -> Result<u64, String> {
-        crate::commands::get_directory_size(path)
+        crate::commands::get_directory_size_blocking(path)
     }
     pub fn call_watermark_pdf(
         input: &str,

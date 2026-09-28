@@ -48,15 +48,17 @@ describe("查找重复文件的作用域", () => {
 describe("右键即选中", () => {
   it("表行与网格/分栏两条视图都把右键接到选中上", () => {
     const row = APP.match(/onRow=\{\(record\) => \(\{[\s\S]{0,320}?\}\)\}/);
-    expect(row, "找不到表行的 onRow").toBeTruthy();
+    expect(row, "找不到表行的 onRow").toBeInstanceOf(Object);
     expect(row![0]).toContain("onContextMenu: () => selectForContextMenu(record)");
     const at = APP.indexOf("<GridView");
     expect(at, "找不到 GridView 的用法").toBeGreaterThan(-1);
-    expect(APP.slice(at, at + 1500)).toContain("onContextMenu={(entry) => {");
+    // 回调提成了 useCallback（行组件 memo 化了，每帧新建箭头函数会把 memo 全作废）
+    expect(APP.slice(at, at + 1500)).toContain("onContextMenu={handleGridContextMenu}");
+    expect(APP).toContain("const handleGridContextMenu = useCallback(");
   });
 
   it("网格那条不许动 selectedRowKeys（目录不该被塞进批量选择）", () => {
-    const at = APP.indexOf("onContextMenu={(entry) => {");
+    const at = APP.indexOf("const handleGridContextMenu = useCallback(");
     expect(at, "找不到网格的右键处理").toBeGreaterThan(-1);
     expect(APP.slice(at, at + 260)).not.toContain("setSelectedRowKeys");
   });

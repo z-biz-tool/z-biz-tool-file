@@ -53,6 +53,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
+import { toKeySet } from "./utils/virtualList";
+import { Skeleton } from "antd";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
 import { batchToast, placeBatch } from "./utils/conflictChoice";
 import { syncDirIndex } from "./services/indexService";
@@ -422,13 +425,16 @@ function AppShellInner() {
   }, [previewWidth, previewVisible]);
 
   // 加载目录
+  const [dirLoading, setDirLoading] = useState(true);
   const loadDirectory = useCallback((path: string) => {
     const cmd = showHidden ? "list_directory_with_hidden" : "list_directory";
     const args = showHidden ? { path, showHidden: true } : { path };
+    setDirLoading(true);
     invoke(cmd, args)
       .then((entries: unknown) => {
         const list = entries as FileEntry[];
         setFileList(list);
+        setDirLoading(false);
         // 列表是唯一权威：这一层现在有什么就按什么对齐索引（后台跑，不挡渲染）
         syncDirIndex(
           path,
@@ -440,6 +446,8 @@ function AppShellInner() {
         });
       })
       .catch((err) => {
+        // 加载失败也必须收掉骨架屏，否则视图永远停在"还在转"的状态
+        setDirLoading(false);
         message.error("加载目录失败: " + err);
       });
   }, [showHidden, setFileList, message]);
@@ -1385,10 +1393,57 @@ function AppShellInner() {
   };
   const ESC_LAYERS = Object.keys(openLayers);
 
+  // 选中集：行渲染每行都要判"选中了吗"，O(行数 × 选中数) 的 includes 换成一次查表
+  const selectedSet = useMemo(() => toKeySet(selectedRowKeys), [selectedRowKeys]);
+
+  // 方向键在"过滤后的列表"里移动焦点，与鼠标点选走同一套 state（预览/右键菜单跟着走）
+  const moveSelection = useCallback(
+    (delta: number) => {
+      if (filteredFileList.length === 0) return;
+      const current = filteredFileList.findIndex((f) => f.path === selectedFile?.path);
+      const raw = current < 0 ? (delta > 0 ? 0 : filteredFileList.length - 1) : current + delta;
+      const next = Math.min(Math.max(raw, 0), filteredFileList.length - 1);
+      const record = filteredFileList[next];
+      if (!record) return;
+      setSelectedFile(record);
+      setSelectedRowKeys([record.path]);
+      setSelectionAnchor(record.path);
+    },
+    [filteredFileList, selectedFile?.path, setSelectedFile, setSelectedRowKeys, setSelectionAnchor],
+  );
+
+  const focusQuickFilter = useCallback(() => {
+    const el = document.getElementById("z-tool-quick-filter") as HTMLInputElement | null;
+    el?.focus();
+    el?.select();
+  }, []);
+
+  // 网格视图的回调必须稳定，否则每帧新建箭头函数会把行组件的 memo 全部作废
+  const handleGridClick = useCallback(
+    (entry: FileEntry) => {
+      setSelectedFile(entry);
+      if (!entry.is_dir) setSelectedRowKeys([entry.path]);
+    },
+    [setSelectedFile, setSelectedRowKeys],
+  );
+  const handleGridDoubleClick = useCallback((entry: FileEntry) => handleOpen([entry]), [handleOpen]);
+  const handleGridContextMenu = useCallback(
+    (entry: FileEntry) => {
+      if (selectedFile?.path !== entry.path) setSelectedFile(entry);
+    },
+    [selectedFile?.path, setSelectedFile],
+  );
+
   // 键盘快捷键。这同一份数组既喂给 hook 也喂给快捷键面板（ShortcutHelp）：
   // 面板要是另抄一张"功能 → 键位"表，改了键位它就开始教用户按一个不存在的组合键。
   const shortcutSpecs = useMemo(() => ([
     { key: "b", meta: true, handler: () => setSiderCollapsed((v) => !v), description: "折叠/展开侧栏", group: "视图" },
+    { key: "f", meta: true, handler: focusQuickFilter, description: "过滤当前目录", group: "导航" },
+    { key: "/", handler: focusQuickFilter, description: "过滤当前目录", group: "导航" },
+    { key: "ArrowDown", handler: () => moveSelection(1), description: "选中下一项", group: "导航" },
+    { key: "ArrowUp", handler: () => moveSelection(-1), description: "选中上一项", group: "导航" },
+    { key: "ArrowRight", handler: () => moveSelection(1), description: "网格视图向右选中", group: "导航" },
+    { key: "ArrowLeft", handler: () => moveSelection(-1), description: "网格视图向左选中", group: "导航" },
     // 主题按钮的 tooltip 一直写着 "⌘ + ⇧ + L 切换主题"，但全站没有任何一处注册过它：
     // 按下去不会发生事。这里把承诺补上，tooltip 的键位继续由注册表推导（单一来源）。
     { key: "l", meta: true, shift: true, handler: toggleTheme, description: "切换主题", group: "视图" },
@@ -1423,7 +1478,12 @@ function AppShellInner() {
       // 一次只关最上面那一层；顺序与"当前开着谁"分开成数据，
       // 新加面板时漏掉这里会被 tests/escapeClosesTopLayer.test.ts 判红
       const top = topmostLayer(ESC_LAYERS, openLayers);
-      if (!top) return;
+      if (!top) {
+        // 没有弹窗可关时，Esc 退回"什么都没选"（多选最容易误留的状态）
+        setSelectedRowKeys([]);
+        setSelectionAnchor(null);
+        return;
+      }
       const close: Record<string, () => void> = {
         rename: () => { setRenameModal({ visible: false, path: "", oldName: "" }); setNewName(""); },
         create: () => { setCreateModal({ visible: false, type: "file" }); setCreateName(""); },
@@ -1614,6 +1674,7 @@ function AppShellInner() {
             allowClear
             prefix={<SearchOutlined style={{ color: "var(--ant-color-text-tertiary)" }} />}
             placeholder="过滤…"
+            id="z-tool-quick-filter"
             value={quickFilter}
             onChange={(e) => setQuickFilter(e.target.value)}
             style={{ width: 180 }}
@@ -2006,10 +2067,15 @@ function AppShellInner() {
                         onContextMenu: () => selectForContextMenu(record),
                       })}
                       rowClassName={(record) =>
-                        selectedRowKeys.includes(record.path) ? "z-tool-row-selected" : ""
+                        selectedSet.has(String(record.path)) ? "z-tool-row-selected" : ""
                       }
                       locale={{
-                        emptyText: "该文件夹为空",
+                        // 目录还没回来时先给骨架屏，别闪一下"该文件夹为空"
+                        emptyText: dirLoading ? (
+                          <Skeleton active title={false} paragraph={{ rows: 8 }} />
+                        ) : (
+                          "该文件夹为空"
+                        ),
                       }}
                       components={{
                         header: {
@@ -2055,6 +2121,7 @@ function AppShellInner() {
                   showHidden={showHidden}
                 />
               ) : (
+                <ErrorBoundary inline resetKey={currentPath}>
                 <Dropdown
                   trigger={["contextMenu"]}
                   menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}
@@ -2062,26 +2129,20 @@ function AppShellInner() {
                   <div style={{ height: "100%" }}>
                     <GridView
                       mode={viewMode}
-                      files={fileList}
+                      files={filteredFileList}
                       selectedFile={selectedFile}
                       selectedRowKeys={selectedRowKeys}
-                      onClick={(entry) => {
-                        setSelectedFile(entry);
-                        if (!entry.is_dir) {
-                          setSelectedRowKeys([entry.path]);
-                        }
-                      }}
-                      onDoubleClick={(entry) => handleOpen([entry])}
+                      onClick={handleGridClick}
+                      onDoubleClick={handleGridDoubleClick}
                       // 网格/分栏视图同样要"右键即选中"：菜单项读的是 selectedFile。
                       // 这里不动 selectedRowKeys（网格的 onClick 也不动），免得把目录塞进批量选择里。
-                      onContextMenu={(entry) => {
-                        if (selectedFile?.path !== entry.path) setSelectedFile(entry);
-                      }}
+                      onContextMenu={handleGridContextMenu}
                       onDragStart={(entry, e) => handleRowDragStart(e, entry)}
                       onDragEnd={handleRowDragEnd}
                     />
                   </div>
                 </Dropdown>
+                </ErrorBoundary>
               )}
             </div>
           </DragDropTarget>

@@ -191,7 +191,7 @@ mod tests {
     /// 于是 `copy_dir_recursive` 无限自我递归；`move_file` 走到最后还会 `remove_dir_all(源)`。
     #[test]
     fn moving_into_your_own_subtree_is_refused_and_changes_nothing() {
-        use crate::commands::{copy_file, move_file};
+        use crate::commands::{copy_file_blocking, move_file_blocking};
         let root = crate::test_bridge::TempDir::new("displace");
         let top = root.join("top");
         let mid = top.join("a");
@@ -205,14 +205,14 @@ mod tests {
             mid.to_str().unwrap(),  // 挪进直接子目录
             deep.to_str().unwrap(), // 挪进孙目录
         ] {
-            let err = move_file(&src, dest_dir, None).unwrap_err();
+            let err = move_file_blocking(&src, dest_dir, None).unwrap_err();
             assert!(
                 err.contains("移动") && err.contains("内部"),
                 "移动 → {} 没被拦住: {}",
                 dest_dir,
                 err
             );
-            let err = copy_file(&src, dest_dir, None).unwrap_err();
+            let err = copy_file_blocking(&src, dest_dir, None).unwrap_err();
             assert!(
                 err.contains("复制") && err.contains("内部"),
                 "复制 → {} 没被拦住: {}",
@@ -230,7 +230,7 @@ mod tests {
     /// 这两种情况在真实使用中都会出现（后者由同名策略负责，不该报"在源内部"）。
     #[test]
     fn legitimate_destinations_still_pass() {
-        use crate::commands::{copy_file, move_file, ConflictPolicy};
+        use crate::commands::{copy_file_blocking, move_file_blocking, ConflictPolicy};
         let root = crate::test_bridge::TempDir::new("displace-ok");
         let a = root.join("a");
         let b = root.join("b");
@@ -241,7 +241,7 @@ mod tests {
         fs::write(a.join("f.txt"), b"f").unwrap();
 
         // 目录 → 完全无关的目录
-        move_file(
+        move_file_blocking(
             nested.to_str().unwrap(),
             b.to_str().unwrap(),
             Some(ConflictPolicy::Rename),
@@ -251,7 +251,7 @@ mod tests {
         assert!(!nested.exists());
 
         // 文件挪进它自己所在的目录：不是"在源内部"，交给同名策略处理成副本
-        let dup = copy_file(
+        let dup = copy_file_blocking(
             a.join("f.txt").to_str().unwrap(),
             a.to_str().unwrap(),
             Some(ConflictPolicy::Rename),
