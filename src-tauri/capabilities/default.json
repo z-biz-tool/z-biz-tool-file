@@ -1,40 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window — 2026-10-04 收敛：摘除 fs/shell 授权（T-4-5 同款处置）",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "clipboard-manager:default",
-    "dialog:default",
-    "shell:allow-open",
-    {
-      "identifier": "fs:allow-read-dir",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$APPDATA/**" },
-        { "path": "$APPLOCALDATA/**" }
-      ]
-    },
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$APPDATA/**" },
-        { "path": "$APPLOCALDATA/**" }
-      ]
-    },
-    {
-      "identifier": "fs:allow-write-file",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$APPDATA/**" },
-        { "path": "$APPLOCALDATA/**" }
-      ]
-    },
-    {
-      "identifier": "fs:allow-home-meta-recursive",
-      "allow": [{ "path": "$HOME/**" }]
-    }
+    "dialog:default"
   ]
 }
