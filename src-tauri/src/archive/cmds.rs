@@ -214,6 +214,20 @@ pub fn archive_extensions() -> Vec<String> {
     .collect()
 }
 
+/// 双击路由表：哪些扩展名该进本应用的归档浏览器，而不是交给系统默认程序。
+///
+/// 与 `archive_extensions` 分成两条命令，是因为两张表回答的不是同一个问题，
+/// 而且**双击表必须更窄**——理由写在 `format::open_extensions` 的文档注释里
+/// （docx / epub / iso 引擎都认得，但双击它们该去各自更合适的去处）。
+/// 前端启动时取一次缓存住，`resolveOpen` 靠它决定"双击这一项会发生什么"。
+#[tauri::command]
+pub fn archive_open_extensions() -> Vec<String> {
+    format::open_extensions()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// "解压到 <这个名字>" 的默认目录名。原来这段逻辑在前端手写了一串 if，
 /// 加一种格式就要两边改；现在由后端算。
 #[tauri::command]

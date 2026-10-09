@@ -152,7 +152,10 @@ const KINDS: { kind: string; color: string; label: string; exts: string[] }[] = 
   { kind: "audio", color: "#13c2c2", label: "音频", exts: ["mp3", "wav", "flac", "aac", "m4a", "wma", "ogg", "opus", "ape"] },
 
   // —— 归档（棕色） ——
-  { kind: "archive", color: "#8c6e54", label: "压缩包", exts: ["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "tbz2", "dmg", "iso"] },
+  // 这张表管的是**图标**，所以比后端 `open_extensions`（管双击路由）宽：
+  // iso / dmg 双击该交给 Windows 去挂载，但它们在列表里长得就该是个压缩包的样子。
+  // "001" 是分卷的第一片（x.zip.001），命中靠最后一个 '.' 段。
+  { kind: "archive", color: "#8c6e54", label: "压缩包", exts: ["zip", "zipx", "rar", "7z", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "zst", "tzst", "lz4", "br", "lzma", "cab", "cbr", "cbz", "001", "dmg", "iso"] },
 
   // —— 字体 ——
   { kind: "font", color: "#9254de", label: "字体", exts: ["ttf", "otf", "woff", "woff2", "eot"] },

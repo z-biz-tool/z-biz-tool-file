@@ -59,7 +59,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
 import { batchToast, placeBatch } from "./utils/conflictChoice";
 import { syncDirIndex } from "./services/indexService";
-import { openRejectText, resolveOpen, resolveRenameTarget } from "./utils/openBehavior";
+import { lastExtension, openRejectText, resolveOpen, resolveRenameTarget } from "./utils/openBehavior";
 import type { HashTarget } from "./utils/batchHash";
 import {
   useFileStore, formatFileSize, formatTime, type FileEntry,
@@ -89,8 +89,11 @@ import GitStatus from "./components/GitStatus";
 import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
 import NewFileTemplate from "./components/NewFileTemplate";
-import ZipBrowser from "./components/ZipBrowser";
-import ArchiveManager from "./components/ArchiveManager";
+import ArchiveExplorer from "./components/ArchiveExplorer";
+import ArchiveCreateDialog, { type CreateSource } from "./components/ArchiveCreateDialog";
+import ArchiveJobPanel from "./components/ArchiveJobPanel";
+import { useArchiveJobStore } from "./stores/archiveJobStore";
+import { describeArchiveError, joinFsPath, type ExtractOptions } from "./utils/archiveModel";
 import PdfTools from "./components/PdfTools";
 import DiffViewer from "./components/DiffViewer";
 import OcrTool from "./components/OcrTool";
@@ -115,6 +118,7 @@ import Omnibar from "./_shared/Omnibar";
 import { MediaGallery } from "./components/MediaGallery";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import { parentOfPath } from "./utils/parentDir";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { checkFileNameForCreate, sanitizeFileNameInput } from "./utils/validateFileName";
 import { topmostLayer, type LayerState } from "./utils/layerStack";
 
@@ -226,12 +230,16 @@ function AppShellInner() {
   const [hashCalcOpen, setHashCalcOpen] = useState(false);
   const [hashFiles, setHashFiles] = useState<HashTarget[]>([]);
   const [dirSyncOpen, setDirSyncOpen] = useState(false);
-  const [zipBrowserOpen, setZipBrowserOpen] = useState(false);
-  const [zipBrowserPath, setZipBrowserPath] = useState<string | null>(null);
-  const [archiveOpen, setArchiveOpen] = useState(false);
-  const [archiveMode, setArchiveMode] = useState<"compress" | "extract">("compress");
-  const [archiveSources, setArchiveSources] = useState<string[]>([]);
-  const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+  const [archiveExplorerOpen, setArchiveExplorerOpen] = useState(false);
+  const [archiveExplorerPath, setArchiveExplorerPath] = useState<string | null>(null);
+  const [archiveCreateOpen, setArchiveCreateOpen] = useState(false);
+  const [archiveCreateSources, setArchiveCreateSources] = useState<CreateSource[]>([]);
+  /**
+   * 双击路由表：哪些扩展名该进归档浏览器而不是交给系统默认程序。
+   * 启动时取一次就够（它来自编译期常量表），但**必须**从后端取——写死在前端的话，
+   * 后端加一种格式而这里忘了跟，症状是"双击新格式的压缩包没反应"，一句报错都没有。
+   */
+  const [archiveOpenExts, setArchiveOpenExts] = useState<string[]>([]);
   const [pdfToolsOpen, setPdfToolsOpen] = useState(false);
   const [pdfToolsPath, setPdfToolsPath] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
@@ -499,6 +507,21 @@ function AppShellInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * 归档任务的两件事都挂在 App 而不是挂在浏览器弹窗上，因为它们要活得比弹窗久：
+   * - 进度订阅：解压一个 7 GB 的包是十分钟级的事，用户中途关掉浏览窗口，
+   *   进度和取消按钮得留在右下角。订阅要是挂在弹窗里，一关窗就再也没人收事件了。
+   * - 双击路由表：见 `archiveOpenExts` 的声明处。
+   */
+  useEffect(() => {
+    void useArchiveJobStore.getState().startListening();
+    invoke<string[]>("archive_open_extensions")
+      .then(setArchiveOpenExts)
+      // 取不到就退回"压缩包一律交给系统"：那是这次改动之前的行为，
+      // 降级可用，比让双击整个失效（连目录都进不去）好
+      .catch(() => setArchiveOpenExts([]));
+  }, []);
+
   // showHidden变化时重新加载
   useEffect(() => {
     if (currentPath) loadDirectory(currentPath);
@@ -651,45 +674,128 @@ function AppShellInner() {
     return !fileList.some((f) => f.name === check.name);
   }, [createName, fileList]);
 
-  // 压缩
-  const handleCompress = useCallback(async () => {
-    if (selectedRowKeys.length === 0 && !selectedFile) return;
-    const paths = selectedRowKeys.length > 0
-      ? selectedRowKeys.map(String)
-      : [selectedFile!.path];
-    const defaultName = (paths.length === 1 ? selectedFile?.name || "archive" : "archive") + ".zip";
-    try {
-      await invoke("compress_to_zip", { paths, destPath: currentPath + "/" + defaultName });
-      message.success("压缩成功: " + defaultName);
-      loadDirectory(currentPath);
-    } catch (err) {
-      message.error("压缩失败: " + err);
-    }
-  }, [selectedRowKeys, selectedFile, currentPath, loadDirectory, message]);
+  // 批量操作选中的文件。
+  // 声明位置比多数派生值靠前，是因为归档那几个 handler 在 useCallback 的**依赖数组**里
+  // 直接引用它——依赖数组是当场求值的，声明在后面就是 TDZ，编译不过。
+  const selectedFiles = selectedRowKeys.length > 0
+    ? fileList.filter((f) => selectedRowKeys.includes(f.path))
+    : selectedFile
+    ? [selectedFile]
+    : [];
 
-  // 解压：按后缀自动选格式
-  const handleExtract = useCallback(async (entry: FileEntry) => {
-    const lower = entry.name.toLowerCase();
-    let dirName = entry.name;
-    if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) dirName = entry.name.replace(/\.(tar\.gz|tgz)$/i, "");
-    else if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) dirName = entry.name.replace(/\.(tar\.bz2|tbz2)$/i, "");
-    else if (lower.endsWith(".tar.xz") || lower.endsWith(".txz")) dirName = entry.name.replace(/\.(tar\.xz|txz)$/i, "");
-    else if (lower.endsWith(".zip")) dirName = entry.name.replace(/\.zip$/i, "");
-    else if (lower.endsWith(".tar")) dirName = entry.name.replace(/\.tar$/i, "");
-    else if (lower.endsWith(".7z")) dirName = entry.name.replace(/\.7z$/i, "");
-    else if (lower.endsWith(".gz")) dirName = entry.name.replace(/\.gz$/i, "");
-    else {
-      message.error("暂不支持该压缩格式: " + entry.name);
-      return;
+  /**
+   * 压缩：开"新建压缩"对话框。
+   *
+   * 一个入口两种起点：选中了东西就压它们，什么都没选就先开文件选择框。
+   * 后者不是多余的——它顶掉了原来工具栏那个"解压"按钮的选文件能力，也让这个按钮
+   * 不必写成 `disabled={selectedFiles.length === 0}`：一个永远灰着的按钮只是噪音。
+   */
+  const handleCompress = useCallback(async () => {
+    let items: Pick<FileEntry, "path" | "name" | "is_dir">[] =
+      selectedFiles.length > 0 ? selectedFiles : [];
+    if (items.length === 0) {
+      try {
+        const picked = await openDialog({
+          multiple: true,
+          directory: false,
+          title: "选择要压缩的文件",
+          defaultPath: currentPath || undefined,
+        });
+        if (!picked) return;
+        const paths = Array.isArray(picked) ? picked : [picked];
+        items = paths.map((p) => ({ path: p, name: p.split(/[\\/]/).pop() || p, is_dir: false }));
+      } catch (err) {
+        message.error("选择文件失败: " + err);
+        return;
+      }
     }
-    try {
-      await invoke("extract_archive", { archivePath: entry.path, destDir: currentPath + "/" + dirName });
-      message.success("解压成功: " + dirName);
-      loadDirectory(currentPath);
-    } catch (err) {
-      message.error("解压失败: " + err);
-    }
-  }, [currentPath, loadDirectory, message]);
+    setArchiveCreateSources(
+      items.map((f) => ({ path: f.path, name: f.name, isDir: f.is_dir })),
+    );
+    setArchiveCreateOpen(true);
+  }, [currentPath, message, selectedFiles]);
+
+  /**
+   * 右键菜单里的"直接解压"：不进浏览器，起一个后台任务，进度落在右下角。
+   *
+   * 两处刻意的选择：
+   * - 目标目录名由后端 `archive_extract_dir_name` 按格式算（`movie.tar.gz` → `movie.tar`）。
+   *   原来这里是前端手写的一串 endsWith if，加一种格式就要两边改，漏一边就得到一个
+   *   名叫 `movie.tar` 的目录里套着 `movie/`。
+   * - 覆盖策略固定 `rename`（保留两者），不弹重名确认框。菜单里那一下点的是"快点解开"，
+   *   再插一个模态框就把快捷入口变成了慢入口；而 `rename` 永远不会盖掉用户已有的文件，
+   *   要精细控制的话归档浏览器里有完整的重名探测。
+   *
+   * 要密码的包不适合在这里静默起任务（进度面板会挂一个立刻失败的条目），
+   * 改成打开浏览器——那儿有密码框。
+   */
+  const extractArchiveNow = useCallback(
+    async (entry: Pick<FileEntry, "path" | "name">, dest: string) => {
+      const options: ExtractOptions = {
+        entries: null,
+        password: null,
+        overwrite: "rename",
+        keepBroken: true,
+        stripRoot: false,
+        flatten: false,
+        includeChildren: true,
+      };
+      try {
+        await invoke<string>("archive_extract", { path: entry.path, dest, options });
+        message.success("已开始解压，进度见右下角");
+        loadDirectory(currentPath);
+      } catch (err) {
+        const f = describeArchiveError(err);
+        if (f.needPassword || f.badPassword) {
+          setArchiveExplorerPath(entry.path);
+          setArchiveExplorerOpen(true);
+          return;
+        }
+        message.error(f.message);
+      }
+    },
+    [currentPath, loadDirectory, message],
+  );
+
+  /** 解压到与压缩包同目录的 `<名字>` 文件夹里（7-Zip 的"解压到 xxx\"） */
+  const handleExtractToSibling = useCallback(
+    async (entry: Pick<FileEntry, "path" | "name">) => {
+      let dirName: string;
+      try {
+        dirName = await invoke<string>("archive_extract_dir_name", { path: entry.path });
+      } catch (err) {
+        message.error("解压失败: " + err);
+        return;
+      }
+      await extractArchiveNow(entry, joinFsPath(parentOfPath(entry.path), dirName));
+    },
+    [extractArchiveNow, message],
+  );
+
+  /** 校验完整性：起一个后台任务，坏的条目会写进任务的错误列表里 */
+  const handleTestArchive = useCallback(
+    async (entry: Pick<FileEntry, "path" | "name">) => {
+      try {
+        await invoke<string>("archive_test", { path: entry.path, password: null });
+        message.success("已开始校验，进度见右下角");
+      } catch (err) {
+        const f = describeArchiveError(err);
+        if (f.needPassword || f.badPassword) {
+          setArchiveExplorerPath(entry.path);
+          setArchiveExplorerOpen(true);
+          return;
+        }
+        message.error(f.message);
+      }
+    },
+    [message],
+  );
+
+  /** 打开归档浏览器（双击、Enter、右键"打开压缩包"都是这一条） */
+  const openArchiveBrowser = useCallback((path: string) => {
+    setArchiveExplorerPath(path);
+    setArchiveExplorerOpen(true);
+  }, []);
 
   // 删除文件
   const handleDelete = useCallback(
@@ -780,13 +886,13 @@ function AppShellInner() {
   }, [renameModal.path, newName, currentPath, loadDirectory, message]);
 
   /**
-   * 打开：目录进入、文件交给默认应用。
+   * 打开：目录进入、压缩包进归档浏览器、其余交给默认应用。
    * 双面板视图一直就是这么做的，主表格却只认目录 —— 双击文件没有任何反应，
    * 用户只能右键找"用默认应用打开"。
    */
   const handleOpen = useCallback(
     (entries: FileEntry[]) => {
-      const action = resolveOpen(entries);
+      const action = resolveOpen(entries, archiveOpenExts);
       if (action.kind === "none") {
         // 多选不逐个 open：一次 Enter 弹出几十个外部应用窗口不是用户想要的
         message.warning(openRejectText(action.reason));
@@ -796,11 +902,15 @@ function AppShellInner() {
         navigateTo(action.path);
         return;
       }
+      if (action.kind === "open-archive") {
+        openArchiveBrowser(action.path);
+        return;
+      }
       invoke("open_with_default_app", { path: action.path }).catch((err) =>
         message.error("打开失败: " + err),
       );
     },
-    [message, navigateTo],
+    [archiveOpenExts, message, navigateTo, openArchiveBrowser],
   );
 
   /** 重命名：目录也要能改名（原先的 Enter 分支写死了 !is_dir） */
@@ -824,15 +934,9 @@ function AppShellInner() {
   const singleContextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
     const lowerName = record.name.toLowerCase();
     const isDir = record.is_dir;
-    const isZip = lowerName.endsWith(".zip");
-    const isArchive =
-      isZip ||
-      lowerName.endsWith(".tar") ||
-      lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz") ||
-      lowerName.endsWith(".tar.bz2") || lowerName.endsWith(".tbz2") ||
-      lowerName.endsWith(".tar.xz") || lowerName.endsWith(".txz") ||
-      lowerName.endsWith(".7z") ||
-      lowerName.endsWith(".gz");
+    // 归档判定不再手写一串 endsWith：那串只认得 8 种后缀，rar / cab / zst / 分卷全漏，
+    // 而且每加一种格式就要在这里和 format.rs 两处同时改。现在直接问后端那张表。
+    const isArchive = !isDir && archiveOpenExts.includes(lastExtension(record.name));
     const isPdf = lowerName.endsWith(".pdf");
     const isImage = /\.(png|jpe?g|gif|bmp|webp|tiff?|heic|svg)$/i.test(lowerName);
     const isVideo = /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(lowerName);
@@ -887,18 +991,21 @@ function AppShellInner() {
       ...(isText && !isDir ? [{
         key: "diff", label: "与另一个文件对比", icon: <SwapOutlined />, onClick: () => { setDiffOpen(true); setSelectedFile(record); },
       }] : []),
-      ...(isZip ? [{
-        key: "browse-zip", label: "浏览压缩包", icon: <FileZipOutlined />, onClick: () => { setZipBrowserPath(record.path); setZipBrowserOpen(true); },
-      }] : []),
       ...(isArchive ? [{
-        key: "extract", label: "解压缩", icon: <ExpandOutlined />, onClick: () => handleExtract(record),
+        // 收进一个子菜单：原来这里平铺"浏览压缩包 + 解压缩"两条，加上"压缩为 ZIP"是三条，
+        // 而四条归档动作里真正高频的只有"打开"。低频的进子菜单，高频的留在双击/Enter 上。
+        key: "archive", label: "归档", icon: <FileZipOutlined />,
+        children: [
+          { key: "archive-open", label: "打开压缩包", icon: <FolderOpenOutlined />, onClick: () => openArchiveBrowser(record.path) },
+          { key: "archive-extract-sibling", label: "解压到同名文件夹", icon: <ExpandOutlined />, onClick: () => { void handleExtractToSibling(record); } },
+          { key: "archive-extract-here", label: "解压到当前文件夹", icon: <ExpandOutlined />, onClick: () => { void extractArchiveNow(record, currentPath); } },
+          { key: "archive-test", label: "校验完整性", icon: <SafetyCertificateOutlined />, onClick: () => { void handleTestArchive(record); } },
+        ],
       }] : [{
-        key: "compress", label: "压缩为 ZIP", icon: <FileZipOutlined />, onClick: () => {
+        key: "compress", label: `压缩为…${hint("压缩选中项")}`, icon: <FileZipOutlined />, onClick: () => {
           setSelectedFile(record);
-          setArchiveSources([record.path]);
-          setArchiveMode("compress");
-          setArchiveTarget(null);
-          setArchiveOpen(true);
+          setArchiveCreateSources([{ path: record.path, name: record.name, isDir: record.is_dir }]);
+          setArchiveCreateOpen(true);
         },
       }]),
       ...(!isDir ? [{
@@ -944,7 +1051,13 @@ function AppShellInner() {
     ];
 
     return items;
-  }, [handleCopy, handleCut, handleDelete, handleExtract, setSelectedFile, message, tagsByPath, openTab, handleOpen, handleRenameOne]);
+  }, [
+    handleCopy, handleCut, handleDelete, setSelectedFile, message, tagsByPath, openTab,
+    handleOpen, handleRenameOne,
+    // 归档子菜单：判定表 + 四个动作 + "解压到当前文件夹"要用的落点
+    archiveOpenExts, openArchiveBrowser, handleExtractToSibling, extractArchiveNow,
+    handleTestArchive, currentPath,
+  ]);
 
   // 多选右键菜单（基于 selectedRowKeys）
   const multiContextMenuItems = useCallback((records: FileEntry[]): MenuProps["items"] => {
@@ -975,13 +1088,13 @@ function AppShellInner() {
       // 批量压缩
       {
         key: "batch-compress",
-        label: `压缩为 ZIP（${count} 项）`,
+        label: `压缩为…（${count} 项）${hint("压缩选中项")}`,
         icon: <FileZipOutlined />,
         onClick: () => {
-          setArchiveSources(records.map((r) => r.path));
-          setArchiveMode("compress");
-          setArchiveTarget(null);
-          setArchiveOpen(true);
+          setArchiveCreateSources(
+            records.map((r) => ({ path: r.path, name: r.name, isDir: r.is_dir })),
+          );
+          setArchiveCreateOpen(true);
         },
       },
       ...(allPdf ? [{
@@ -1136,7 +1249,7 @@ function AppShellInner() {
     ];
 
     return items;
-  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setHashFiles, setSftpOpen, setArchiveSources, setArchiveMode, setArchiveTarget, setArchiveOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
+  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setHashFiles, setSftpOpen, setArchiveCreateSources, setArchiveCreateOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
 
   // 兼容旧接口的 contextMenuItems:根据是否多选派发
   const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
@@ -1331,13 +1444,6 @@ function AppShellInner() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // 批量操作选中的文件
-  const selectedFiles = selectedRowKeys.length > 0
-    ? fileList.filter((f) => selectedRowKeys.includes(f.path))
-    : selectedFile
-    ? [selectedFile]
-    : [];
-
   // 文件对比的两个入参：多选时按列表顺序取前两个；只选一个就当左边，右边留给用户挑。
   // 之前工具栏那条入口开面板永远是从空开始，等于让用户把路径再敲一遍。
   // 换选中项就退出图片编辑：不退回的话，下一个文件一点开预览就莫名进编辑态
@@ -1370,14 +1476,14 @@ function AppShellInner() {
     duplicateFinder: duplicateFinderOpen,
     hashCalc: hashCalcOpen,
     dirSync: dirSyncOpen,
-    zipBrowser: zipBrowserOpen,
+    archiveExplorer: archiveExplorerOpen,
     newFileTemplate: newFileTemplateOpen,
     shortcutHelp: shortcutHelpOpen,
     terminal: terminalVisible,
     mediaLibrary: mediaLibraryOpen,
     quickActions: quickActionsOpen,
     tagEdit: tagEditOpen,
-    archive: archiveOpen,
+    archiveCreate: archiveCreateOpen,
     pdfTools: pdfToolsOpen,
     diff: diffOpen,
     ocr: ocrOpen,
@@ -1395,6 +1501,19 @@ function AppShellInner() {
 
   // 选中集：行渲染每行都要判"选中了吗"，O(行数 × 选中数) 的 includes 换成一次查表
   const selectedSet = useMemo(() => toKeySet(selectedRowKeys), [selectedRowKeys]);
+
+  /**
+   * 选中集里的压缩包。工具栏那一个按钮靠它在「压缩」和「解压」之间换脸：
+   * 与其摆两个按钮（其中总有一个在当下是灰的），不如让这个按钮说出此刻唯一有意义的那件事。
+   * ⌘⇧E 用的是同一份，省得两处各写一遍过滤条件——写两遍的下场是它们慢慢长得不一样。
+   */
+  const selectedArchives = useMemo(
+    () =>
+      selectedFiles.filter(
+        (f) => !f.is_dir && archiveOpenExts.includes(lastExtension(f.name)),
+      ),
+    [archiveOpenExts, selectedFiles],
+  );
 
   // 方向键在"过滤后的列表"里移动焦点，与鼠标点选走同一套 state（预览/右键菜单跟着走）
   const moveSelection = useCallback(
@@ -1472,8 +1591,20 @@ function AppShellInner() {
     { key: "Delete", shift: true, handler: () => handleDeleteMany(selectedFiles, true), description: "永久删除选中", group: "删除" },
     // Enter 一直是"改文件名"，但只对单个文件生效：选中目录按 Enter 什么都没有发生，
     // 想改文件夹名也只能右键。现在 Enter 与双击同义，重命名让给 F2（两平台通用）。
-    { key: "Enter", handler: () => handleOpen(selectedFiles), allowInInput: false, description: "打开选中项（目录进入 / 文件用默认应用）", group: "导航" },
+    { key: "Enter", handler: () => handleOpen(selectedFiles), allowInInput: false, description: "打开选中项（目录进入 / 压缩包浏览 / 文件用默认应用）", group: "导航" },
     { key: "F2", handler: () => handleRenameOne(selectedFiles), allowInInput: false, description: "重命名选中项", group: "文件" },
+    // 归档那组。⌘⇧A / ⌘⇧E 对齐全站"主修饰键 + Shift = 对选中项动手"的既有口径
+    // （⌘⇧N 新建文件、⌘⇧H 隐藏文件、⌘⇧⌫ 永久删除），也和 7-Zip 的 A / X 习惯对得上。
+    { key: "a", meta: true, shift: true, handler: () => { void handleCompress(); }, description: "压缩选中项", group: "归档" },
+    { key: "e", meta: true, shift: true, handler: () => {
+      // 多选就逐个起任务：解压本来就是后台任务，N 个包就是 N 条进度，
+      // 这正是右下角那块任务面板存在的理由，不必为了"一次只解一个"再插一层确认
+      if (selectedArchives.length === 0) {
+        message.warning(selectedFiles.length === 0 ? "请先选中要解压的压缩包" : "选中的项目里没有压缩包");
+        return;
+      }
+      for (const f of selectedArchives) void handleExtractToSibling(f);
+    }, description: "解压选中项", group: "归档" },
     { key: "Escape", handler: () => {
       // 一次只关最上面那一层；顺序与"当前开着谁"分开成数据，
       // 新加面板时漏掉这里会被 tests/escapeClosesTopLayer.test.ts 判红
@@ -1493,14 +1624,14 @@ function AppShellInner() {
         duplicateFinder: () => setDuplicateFinderOpen(false),
         hashCalc: () => setHashCalcOpen(false),
         dirSync: () => setDirSyncOpen(false),
-        zipBrowser: () => { setZipBrowserOpen(false); setZipBrowserPath(null); },
+        archiveExplorer: () => { setArchiveExplorerOpen(false); setArchiveExplorerPath(null); },
         newFileTemplate: () => setNewFileTemplateOpen(false),
         shortcutHelp: () => setShortcutHelpOpen(false),
         terminal: () => setTerminalVisible(false),
         mediaLibrary: () => setMediaLibraryOpen(false),
         quickActions: () => setQuickActionsOpen(false),
         tagEdit: () => setTagEditOpen(false),
-        archive: () => { setArchiveOpen(false); setArchiveSources([]); },
+        archiveCreate: () => { setArchiveCreateOpen(false); setArchiveCreateSources([]); },
         pdfTools: () => { setPdfToolsOpen(false); setPdfToolsPath(null); },
         diff: () => setDiffOpen(false),
         ocr: () => setOcrOpen(false),
@@ -1527,7 +1658,10 @@ function AppShellInner() {
     handleOpen, handleRenameOne,
     toggleTheme,
     renameModal.visible, createModal.visible, batchRenameOpen, propertiesOpen,
-    dualPanelOpen, duplicateFinderOpen, hashCalcOpen, dirSyncOpen, zipBrowserOpen,
+    dualPanelOpen, duplicateFinderOpen, hashCalcOpen, dirSyncOpen, archiveExplorerOpen,
+    // 归档那组快捷键的依赖：漏了 selectedArchives，⌘⇧E 会拿首帧的空列表，
+    // 于是永远弹"请先选中要解压的压缩包"
+    handleCompress, handleExtractToSibling, selectedArchives, message,
     newFileTemplateOpen, terminalVisible, shortcutHelpOpen,
   ]);
   useKeyboardShortcuts(shortcutSpecs);
@@ -1794,36 +1928,32 @@ function AppShellInner() {
               aria-label="打开快速操作"
             />
           </Tooltip>
-          <Tooltip title="归档管理器（压缩/解压）">
-            <Button
-              size="small"
-              icon={<FileZipOutlined />}
-              onClick={() => {
-                // 这里要的是路径字符串数组；直接把 FileEntry 塞进去，压缩那半边
-                // 收到的是对象（其他入口都是 record.path）
-                setArchiveSources(selectedFiles.map((f) => f.path));
-                setArchiveMode("compress");
-                setArchiveOpen(true);
-              }}
-              aria-label="打开归档管理器"
-            >
-              归档
-            </Button>
-          </Tooltip>
-          <Tooltip title="解压归档（选择 .zip/.tar.gz 等）">
-            <Button
-              size="small"
-              icon={<ExpandOutlined />}
-              onClick={() => {
-                setArchiveTarget(null);
-                setArchiveMode("extract");
-                setArchiveOpen(true);
-              }}
-              aria-label="解压归档"
-            >
-              解压
-            </Button>
-          </Tooltip>
+          {selectedArchives.length > 0 ? (
+            <Tooltip title={`解压到压缩包旁边的文件夹${hint("解压选中项")}`}>
+              <Button
+                size="small"
+                type="primary"
+                icon={<ExpandOutlined />}
+                onClick={() => {
+                  for (const f of selectedArchives) void handleExtractToSibling(f);
+                }}
+                aria-label="解压选中项"
+              >
+                解压{selectedArchives.length > 1 ? ` ${selectedArchives.length} 项` : ""}
+              </Button>
+            </Tooltip>
+          ) : (
+            <Tooltip title="压缩选中项；什么都没选就先挑文件">
+              <Button
+                size="small"
+                icon={<FileZipOutlined />}
+                onClick={() => { void handleCompress(); }}
+                aria-label="压缩"
+              >
+                压缩
+              </Button>
+            </Tooltip>
+          )}
           <Tooltip title="PDF 工具集（合并/拆分/水印/压缩/提取图片）">
             <Button
               size="small"
@@ -1936,15 +2066,6 @@ function AppShellInner() {
               onClick={() => setBatchRenameOpen(true)}
               disabled={selectedFiles.length === 0}
               aria-label="批量重命名"
-            />
-          </Tooltip>
-          <Tooltip title="压缩为ZIP">
-            <Button
-              size="small"
-              icon={<FileZipOutlined />}
-              onClick={handleCompress}
-              disabled={selectedFiles.length === 0}
-              aria-label="压缩为ZIP"
             />
           </Tooltip>
           <Tooltip title="文件属性">
@@ -2307,11 +2428,11 @@ function AppShellInner() {
         currentPath={currentPath}
       />
 
-      {/* ZIP 浏览器 */}
-      <ZipBrowser
-        open={zipBrowserOpen}
-        onClose={() => { setZipBrowserOpen(false); setZipBrowserPath(null); }}
-        zipPath={zipBrowserPath}
+      {/* 归档浏览器（双击压缩包 / Enter / 右键"打开压缩包"都落到这里） */}
+      <ArchiveExplorer
+        open={archiveExplorerOpen}
+        onClose={() => { setArchiveExplorerOpen(false); setArchiveExplorerPath(null); }}
+        archivePath={archiveExplorerPath}
         currentPath={currentPath}
         onRefresh={() => loadDirectory(currentPath)}
       />
@@ -2349,18 +2470,20 @@ function AppShellInner() {
       {/* 应用更新 */}
       <Updater open={updaterOpen} onClose={() => setUpdaterOpen(false)} />
 
-      {/* 归档管理器 (压缩/解压) */}
-      <ArchiveManager
-        open={archiveOpen}
-        onClose={() => {
-          setArchiveOpen(false);
-          setArchiveSources([]);
-          setArchiveTarget(null);
-        }}
-        sourcePaths={archiveMode === "compress" ? archiveSources : undefined}
-        archivePath={archiveMode === "extract" ? archiveTarget : null}
-        onRefresh={() => loadDirectory(currentPath)}
+      {/* 压缩对话框：任务起来就关，进度交给右下角那块常驻面板 */}
+      <ArchiveCreateDialog
+        open={archiveCreateOpen}
+        onClose={() => { setArchiveCreateOpen(false); setArchiveCreateSources([]); }}
+        sources={archiveCreateSources}
+        defaultDir={currentPath}
+        onStarted={() => loadDirectory(currentPath)}
       />
+
+      {/*
+        任务面板常驻，不受任何弹窗的 open 控制：解压一个 7 GB 的包是十分钟级的事，
+        用户中途关掉浏览窗口，进度和取消按钮必须还在
+      */}
+      <ArchiveJobPanel />
 
       {/* 新建文件模板 */}
       <NewFileTemplate

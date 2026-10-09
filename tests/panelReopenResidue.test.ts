@@ -66,7 +66,7 @@ describe("面板重开不留上一次的成果", () => {
   });
 
   it("全站不再用 afterOpenChange 做重置（那要等动画走完）", () => {
-    const offenders = ["HashCalculator", "DirectorySync", "DuplicateFinder", "ArchiveManager", "TrashModal"]
+    const offenders = ["HashCalculator", "DirectorySync", "DuplicateFinder", "ArchiveCreateDialog", "ArchiveExplorer", "TrashModal"]
       .filter((n) => new RegExp(`afterOpenChange=\\{`).test(read(`${n}.tsx`)));
     expect(offenders).toEqual([]);
   });

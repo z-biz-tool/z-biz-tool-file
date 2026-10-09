@@ -65,11 +65,6 @@ pub fn run() {
             commands::batch_rename,
             commands::cleanup_epub_temp,
             commands::list_directory_with_hidden,
-            commands::compress_to_zip,
-            commands::compress_to_tar,
-            commands::extract_zip,
-            commands::extract_archive,
-            commands::is_archive_supported,
             commands::get_file_permissions,
             commands::open_with_default_app,
             commands::get_directory_size,
@@ -83,13 +78,12 @@ pub fn run() {
             commands::quick_look_preview,
             commands::get_file_tags,
             commands::set_file_tags,
-            commands::list_zip_contents,
-            commands::extract_zip_file,
             archive::cmds::archive_probe,
             archive::cmds::archive_info,
             archive::cmds::archive_conflicts,
             archive::cmds::archive_formats,
             archive::cmds::archive_extensions,
+            archive::cmds::archive_open_extensions,
             archive::cmds::archive_extract_dir_name,
             archive::cmds::archive_extract,
             archive::cmds::archive_create,
@@ -314,13 +308,6 @@ pub mod test_bridge {
     pub fn call_create_file(path: &str, content: Option<String>) -> Result<(), String> {
         crate::commands::create_file_blocking(path, content)
     }
-    pub fn call_extract_zip(zip_path: &str, dest_dir: &str) -> Result<(), String> {
-        crate::commands::extract_zip_blocking(zip_path, dest_dir)
-    }
-    pub fn call_extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
-        crate::commands::extract_archive_blocking(archive_path, dest_dir)
-    }
-
     // ---- 统一归档引擎（archive/）----
     //
     // 集成测试里没有 WebView 也没有 AppHandle，所以用 `Reporter::detached`：它只更新
@@ -349,14 +336,26 @@ pub mod test_bridge {
         crate::archive::info(Path::new(path), None).map_err(|e| e.to_string())
     }
 
+    /// 与 `archive::cmds::archive_extract` 同一套前置：先过 `path_guard`，再 preflight，再解压。
+    ///
+    /// 那两个 guard 调用**必须**留在这儿。它们不在引擎里（引擎只管"怎么解"），
+    /// 少了这一步，"解压到 `/etc`"这类目标就没人拦，而集成测试会照样绿——
+    /// 因为被测的那条路径压根没经过拦截逻辑。
     pub fn call_archive_extract(src: &str, dest: &str) -> Result<crate::archive::Stats, String> {
+        let src = crate::path_guard::readable(src).map_err(|e| e.to_string())?;
+        // dest 通常还不存在，所以是 writable（按最近的已存在祖先校验）而不是 validate
+        let dest = crate::path_guard::writable(dest).map_err(|e| e.to_string())?;
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let mut rep = archive_reporter(crate::archive::job::Kind::Extract, src, dest);
-        let det = crate::archive::preflight(Path::new(src), None).map_err(|e| e.to_string())?;
+        let mut rep = archive_reporter(
+            crate::archive::job::Kind::Extract,
+            &src.display().to_string(),
+            &dest.display().to_string(),
+        );
+        let det = crate::archive::preflight(&src, None).map_err(|e| e.to_string())?;
         crate::archive::extract(
-            Path::new(src),
+            &src,
             &det,
-            Path::new(dest),
+            &dest,
             &crate::archive::ExtractOptions::default(),
             &mut rep,
             &cancel,

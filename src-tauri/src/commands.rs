@@ -5,9 +5,6 @@ use std::io::{Read as IoRead, Write};
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 use std::process::Command as StdCommand;
-use crate::archive::job::{new_job_id, Kind as JobKind, Reporter};
-use crate::archive::{CreateOptions, ExtractOptions};
-use std::sync::atomic::AtomicBool;
 use md5::Digest as Md5Digest;
 use sha1::Sha1;
 use sha2::Sha256;
@@ -1057,127 +1054,6 @@ pub fn list_directory_with_hidden_blocking(path: &str, show_hidden: bool) -> Res
     Ok(result)
 }
 
-// ============================================================================
-// 归档命令：转发到统一引擎 archive/
-//
-// 这里原本每个格式各写一份解压循环（zip / tar / gz / 7z），三百多行，各有各的毛病：
-// zip-slip 检查在 `canonicalize` 失败时静默跳过——而解压目标常常还不存在，
-// canonicalize 于是**必然**失败，那个检查等于没写；`path_guard::validate` 要求目标
-// 已存在，"解压到新文件夹"这个最常见的用法直接报错；7z 调的是已经不在依赖里的
-// `sevenz_rust::decompress`（编译都过不去）。
-//
-// archive/ 建好之后它们全是重复实现，所以整块改成转发：命令名和签名不变，
-// 现有前端在 ArchiveExplorer 上线之前继续可用。
-//
-// 老命令返回 `Result<(), String>` 而不是 job id，没有地方挂进度事件，所以用
-// `Reporter::detached`（只写内存快照、不发事件）配一个永不置位的取消令牌。
-// 带进度和取消的那条路是 `archive::cmds::archive_extract`。
-// ============================================================================
-
-/// 老命令用的空壳上报器：不发事件、不能取消，只为了让引擎跑起来。
-fn legacy_reporter(kind: JobKind, src: &str, dest: &str) -> (Reporter, AtomicBool) {
-    (
-        Reporter::detached(new_job_id(kind), kind, src.to_string(), dest.to_string()),
-        AtomicBool::new(false),
-    )
-}
-
-/// 解压的公共出口。
-///
-/// 目标目录过 `path_guard::writable` 而不是 `validate`：后者要求路径已存在才能
-/// canonicalize，而"解压到新文件夹"的目标恰恰还不存在。`writable` 会把已存在的
-/// 前缀 canonicalize（照样拆穿符号链接）再拼回尚未存在的词法尾部。
-///
-/// 老命令没有密码入口，所以 `preflight` 传 None：加密包会返回 NeedPassword，
-/// 前端看到的是"这个包需要密码"，比解出一堆空文件强。
-fn legacy_extract(src: &str, dest_dir: &str, opts: ExtractOptions) -> Result<(), String> {
-    let src_path = crate::path_guard::readable(src)?;
-    let dst = crate::path_guard::writable(dest_dir)?;
-    fs::create_dir_all(&dst).map_err(|e| format!("创建目标目录失败: {}", e))?;
-    let det = crate::archive::preflight(&src_path, opts.password.as_deref())
-        .map_err(|e| e.to_string())?;
-    let (mut rep, cancel) = legacy_reporter(
-        JobKind::Extract,
-        &src_path.display().to_string(),
-        &dst.display().to_string(),
-    );
-    crate::archive::extract(&src_path, &det, &dst, &opts, &mut rep, &cancel)?;
-    Ok(())
-}
-
-/// 压缩的公共出口。`format` 取 `Format::id()` 的写法（"zip" / "tar.gz" …）。
-fn legacy_create(paths: Vec<String>, dest_path: String, format: &str) -> Result<(), String> {
-    let sources: Vec<PathBuf> = paths
-        .iter()
-        .map(|p| crate::path_guard::readable(p))
-        .collect::<Result<_, _>>()?;
-    let dest = crate::path_guard::writable(&dest_path)?;
-    let opts = CreateOptions {
-        format: format.to_string(),
-        ..Default::default()
-    };
-    let label = sources
-        .first()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-    let (mut rep, cancel) = legacy_reporter(JobKind::Create, &label, &dest_path);
-    crate::archive::create(&sources, &dest, &opts, &mut rep, &cancel)?;
-    Ok(())
-}
-
-/// 压缩文件/目录为 ZIP
-#[tauri::command]
-pub async fn compress_to_zip(paths: Vec<String>, dest_path: String) -> Result<(), String> {
-    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || compress_to_zip_blocking(paths, dest_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-pub fn compress_to_zip_blocking(paths: Vec<String>, dest_path: String) -> Result<(), String> {
-    legacy_create(paths, dest_path, "zip")
-}
-
-/// 解压 ZIP 文件
-#[tauri::command]
-pub async fn extract_zip(zip_path: String, dest_dir: String) -> Result<(), String> {
-    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || extract_zip_blocking(&zip_path, &dest_dir))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-pub fn extract_zip_blocking(zip_path: &str, dest_dir: &str) -> Result<(), String> {
-    legacy_extract(zip_path, dest_dir, ExtractOptions::default())
-}
-
-// ============================================================================
-// 多格式解压：格式由引擎按魔数判定，不再靠这里手写的一串 ends_with
-// ============================================================================
-
-/// 通用解压：zip / 7z / rar / cab / tar 家族 / 单流压缩
-#[tauri::command]
-pub async fn extract_archive(archive_path: String, dest_dir: String) -> Result<(), String> {
-    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || extract_archive_blocking(&archive_path, &dest_dir))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-pub fn extract_archive_blocking(archive_path: &str, dest_dir: &str) -> Result<(), String> {
-    legacy_extract(archive_path, dest_dir, ExtractOptions::default())
-}
-
-/// 判断文件是否支持解压（前端用来显示"解压"菜单项）
-///
-/// 走 `archive::probe`：只读几百字节魔数，比原来那串 `ends_with` 准得多——
-/// 改过扩展名的包认得出来，`.tgz` / `.tbz2` / `.zst` / `.lz4` 这些原来漏掉的也认得出来。
-#[tauri::command]
-pub fn is_archive_supported(archive_path: &str) -> bool {
-    let p = crate::archive::probe(Path::new(archive_path));
-    p.is_archive && p.caps.extract
-}
-
 /// 文件权限信息
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FilePermissions {
@@ -2040,104 +1916,6 @@ subprocess.run(['xattr', '-wx', 'com.apple.metadata:_kMDItemUserTags', pl.hex(),
     Ok(())
 }
 
-/// ZIP 条目信息
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ZipEntry {
-    pub name: String,
-    pub size: u64,
-    pub is_dir: bool,
-    pub modified: f64,
-}
-
-/// 解压归档中的单个条目
-///
-/// 原来这个函数把 `dest_dir.join(entry_name)` 直接当落点用，而 `entry_name` 来自
-/// 压缩包内部：一个 `../../Windows/System32/x.dll` 就能写到目标目录外面去，
-/// 这里连 `path_guard` 都没过。转发到引擎之后落点由 `guard::safe_join` 算，
-/// 顺带也不再只对 zip 有效（命令名还叫 extract_zip_file，是给老前端留的）。
-#[tauri::command]
-pub async fn extract_zip_file(zip_path: String, entry_name: String, dest_dir: String) -> Result<(), String> {
-    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || {
-        extract_zip_file_blocking(&zip_path, &entry_name, &dest_dir)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-pub fn extract_zip_file_blocking(zip_path: &str, entry_name: &str, dest_dir: &str) -> Result<(), String> {
-    legacy_extract(
-        zip_path,
-        dest_dir,
-        ExtractOptions {
-            entries: Some(vec![entry_name.to_string()]),
-            // 选中的是目录时要连子树一起解，否则只落地一个空目录
-            include_children: true,
-            ..Default::default()
-        },
-    )
-}
-
-/// 列出 ZIP 文件内容
-#[tauri::command]
-pub async fn list_zip_contents(zip_path: String) -> Result<Vec<ZipEntry>, String> {
-    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || list_zip_contents_blocking(&zip_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-pub fn list_zip_contents_blocking(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
-    let src = crate::path_guard::readable(zip_path)?;
-    // 老前端只吃 ZipEntry 这四个字段，所以在这里收窄；新前端直接用 archive_info
-    let info = crate::archive::info(&src, None).map_err(|e| e.to_string())?;
-    Ok(info
-        .entries
-        .into_iter()
-        .map(|e| ZipEntry {
-            name: e.path,
-            size: e.size,
-            is_dir: e.is_dir,
-            modified: e.modified as f64,
-        })
-        .collect())
-}
-
-// ============================================================================
-// 多格式压缩：tar / tar.gz / tar.bz2（除 zip 之外的归档能力）
-// ============================================================================
-
-/// 压缩文件/目录为 tar 系列格式
-///
-/// - `paths`: 源路径列表（文件或目录）
-/// - `dest_path`: 目标归档文件路径（.tar / .tar.gz / .tar.bz2）
-/// - `compression`: "tar" / "gz" / "bz2"
-#[tauri::command]
-pub async fn compress_to_tar(paths: Vec<String>, dest_path: String, compression: String) -> Result<(), String> {
-    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || {
-        compress_to_tar_blocking(paths, dest_path, compression)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-pub fn compress_to_tar_blocking(
-    paths: Vec<String>,
-    dest_path: String,
-    compression: String,
-) -> Result<(), String> {
-    // 老前端传的是"外层压缩叫什么"（"gz" / "bz2"），引擎的 id 是完整的 "tar.gz"。
-    // 这一步补全**不能省**：`Format::from_id("gz")` 命中的是单流 gzip（把一个文件
-    // 压成 .gz），不是 tar 包——透传下去会做出一个扩展名和内容都对不上的东西。
-    let format = match compression.as_str() {
-        "gz" | "gzip" => "tar.gz",
-        "bz2" | "bzip2" => "tar.bz2",
-        other => other,
-    };
-    legacy_create(paths, dest_path, format)
-}
-
 // ============================================================================
 // 文件对比 (Diff)
 // ============================================================================
@@ -2394,11 +2172,19 @@ pub fn quick_diff_dirs_blocking(left_dir: &str, right_dir: &str) -> Result<DirDi
 
 #[cfg(test)]
 mod zip_tests {
-    use super::compress_to_zip_blocking;
     use std::fs;
     use std::io::Read;
     use std::time::Instant;
     use zip::ZipArchive;
+
+    /// 走**活的**那条压缩路径（`archive::create`），不是已经删掉的 `compress_to_zip_blocking`。
+    ///
+    /// 这几个用例钉的是"zip 写出来能不能被第三方读回原样"和"大文件是不是流式压的"，
+    /// 两件事都只跟引擎有关；挂在老命令上测，等老命令一删它们就跟着消失，
+    /// 而引擎的这两个性质反而没人守了。
+    fn compress_zip(paths: Vec<String>, dest: String) -> Result<(), String> {
+        crate::test_bridge::call_archive_create(&paths, &dest, "zip").map(|_| ())
+    }
 
     /// 每个用例独享一个目录，作用域结束自动回收。
     /// 用固定名会让并行跑的线程共用同一目录，还会在临时目录里留下清不掉的残渣。
@@ -2413,7 +2199,7 @@ mod zip_tests {
         let dest = ws.join("zip_out.zip");
         fs::write(&src, "hello\nworld\n".repeat(1000)).unwrap();
 
-        compress_to_zip_blocking(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+        compress_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
             .expect("compress ok");
 
         // 解压验证内容
@@ -2437,7 +2223,7 @@ mod zip_tests {
         fs::write(&src, &data).unwrap();
 
         let start = Instant::now();
-        compress_to_zip_blocking(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+        compress_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
             .expect("compress ok");
         let elapsed = start.elapsed();
 
@@ -2472,7 +2258,7 @@ mod zip_tests {
         fs::write(dir.join("sub/b.txt"), "BBB").unwrap();
 
         let dest = ws.join("dir.zip");
-        compress_to_zip_blocking(vec![dir.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
+        compress_zip(vec![dir.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
             .unwrap();
 
         let f = fs::File::open(&dest).unwrap();

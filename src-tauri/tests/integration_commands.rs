@@ -156,44 +156,18 @@ fn normal_paths_still_work() {
 
 }
 
+/// 解压目标过不过 `path_guard`。
+///
+/// 这条以前有两份（`extract_zip` / `extract_archive` 各一），测的是那两条老命令。
+/// 老命令随 ZipBrowser/ArchiveManager 一起删了，但**断言本身不能跟着消失**：
+/// 引擎（`archive::extract`）不认识黑名单，拦截只发生在命令那一层的 `path_guard::writable`。
+/// 所以这里改成打 `call_archive_extract` —— 那个 bridge 现在照着命令的顺序把两步 guard 也做了。
 #[test]
-fn extract_zip_rejects_blacklist_dest() {
+fn archive_extract_rejects_blacklist_dest() {
     if !std::path::Path::new("/etc").exists() {
         return;
     }
     let dir = tempdir();
-    let canonical_dir = fs::canonicalize(&dir).unwrap();
-    let zip = canonical_dir.join("dummy.zip");
-    // 构造一个合法 zip
-    {
-        let f = fs::File::create(&zip).unwrap();
-        let mut zip_writer = zip::ZipWriter::new(f);
-        zip_writer
-            .start_file("hi.txt", zip::write::SimpleFileOptions::default())
-            .unwrap();
-        zip_writer.write_all(b"hello").unwrap();
-        zip_writer.finish().unwrap();
-    }
-
-    let res = z_biz_tool_file_lib::test_bridge::call_extract_zip(
-        zip.to_str().unwrap(),
-        "/etc",
-    );
-    let err = res.expect_err("extract_zip 到 /etc 应被拦截");
-    assert!(
-        err.contains("系统保护") || err.contains("拒绝") || err.contains("Blocked"),
-        "错误应表明拦截，实际: {}",
-        err
-    );
-}
-
-#[test]
-fn extract_archive_rejects_blacklist_dest() {
-    if !std::path::Path::new("/etc").exists() {
-        return;
-    }
-    let dir = tempdir();
-    // 用合法 zip 格式（而不是假 tar），确保 path_guard 拦截先于格式错误
     let zip = dir.join("dummy.zip");
     {
         let f = fs::File::create(&zip).unwrap();
@@ -205,17 +179,16 @@ fn extract_archive_rejects_blacklist_dest() {
         zip_writer.finish().unwrap();
     }
 
-    let res = z_biz_tool_file_lib::test_bridge::call_extract_archive(
+    let res = z_biz_tool_file_lib::test_bridge::call_archive_extract(
         zip.to_str().unwrap(),
         "/etc",
     );
-    let err = res.expect_err("extract_archive 到 /etc 应被拦截");
+    let err = res.expect_err("解压到 /etc 应被拦截");
     assert!(
         err.contains("系统保护") || err.contains("拒绝") || err.contains("Blocked"),
         "错误应表明拦截，实际: {}",
         err
     );
-
 }
 
 #[test]

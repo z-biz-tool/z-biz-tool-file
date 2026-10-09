@@ -716,6 +716,24 @@ pub fn all_extensions() -> Vec<&'static str> {
     ]
 }
 
+/// **双击时该进本应用归档浏览器**的那些扩展名。
+///
+/// 比 `all_extensions()` 窄，而且必须窄：那张表回答的是"引擎认得哪些容器"，里面包含
+/// docx / xlsx / epub / jar / apk 这些"本质是 zip、但用户不把它当压缩包"的东西。
+/// 拿它当双击路由表，后果是双击一个 Word 文档弹出一屏文件列表 —— 而这些文件在别处
+/// 已经有更合适的去处（Office 预览、电子书阅读器、系统默认应用）。
+/// iso / wim 同理：Windows 双击 ISO 是"挂载成光驱"，那比在表格里看条目有用得多。
+///
+/// 只按**最后一个 '.' 段**匹配，所以 `x.tar.gz` 靠 "gz" 命中、`x.zip.001` 靠 "001" 命中，
+/// 不必在表里穷举 `.tar.gz` / `.tar.bz2` / `.tar.xz` 这些组合（组合的剥离是
+/// `stem_for_extract` 的事，两边职责不同）。
+pub fn open_extensions() -> Vec<&'static str> {
+    vec![
+        "zip", "zipx", "7z", "rar", "cbr", "cbz", "tar", "gz", "tgz", "bz2", "tbz2", "xz",
+        "txz", "zst", "tzst", "lz4", "br", "lzma", "cab", "001",
+    ]
+}
+
 /// 给定一个"解压到 <这个名字>"的默认目录名：剥掉所有已知归档扩展名。
 /// 原来这段逻辑在前端 App.tsx 里手写了一串 if，加格式就要两边改；
 /// 现在由后端算，前端直接用。
@@ -841,6 +859,39 @@ mod tests {
                 "{} 的扩展名和 Format::extension() 对不上",
                 opt.id
             );
+        }
+    }
+
+    /// 双击路由表必须是"引擎认得的东西"的子集：漏进去一个引擎不认的扩展名，
+    /// 用户双击之后看到的是归档浏览器里一句"不支持的格式"，而不是系统打开它。
+    #[test]
+    fn open_extensions_is_a_subset_of_all_extensions() {
+        let all = all_extensions();
+        for e in open_extensions() {
+            assert!(all.contains(&e), "{e} 在双击表里，引擎却不认它");
+        }
+    }
+
+    /// 这几类"本质是 zip 但不该被归档浏览器劫持"的必须留在表外。
+    /// 判据是产品决定不是能力：docx 引擎读得了，但双击它该去 Office 预览。
+    #[test]
+    fn open_extensions_leaves_containers_to_their_own_viewers() {
+        let open = open_extensions();
+        for e in [
+            "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "jar", "war", "apk", "xpi",
+            "crx", "vsix", "nupkg", "whl", "iso", "wim",
+        ] {
+            assert!(!open.contains(&e), "{e} 双击应该走它自己的去处，不是归档浏览器");
+        }
+    }
+
+    /// 只按最后一个 '.' 段匹配，所以复合后缀靠它最后那一截命中，不必穷举组合。
+    #[test]
+    fn compound_suffixes_are_covered_by_their_last_segment() {
+        let open = open_extensions();
+        for name in ["x.tar.gz", "x.tar.bz2", "x.tar.xz", "x.tar.zst", "x.zip.001", "x.7z.001"] {
+            let ext = name.rsplit('.').next().unwrap_or("");
+            assert!(open.contains(&ext), "{name} 的最后一段 {ext} 不在双击表里");
         }
     }
 }
