@@ -93,7 +93,7 @@ import ArchiveExplorer from "./components/ArchiveExplorer";
 import ArchiveCreateDialog, { type CreateSource } from "./components/ArchiveCreateDialog";
 import ArchiveJobPanel from "./components/ArchiveJobPanel";
 import { useArchiveJobStore } from "./stores/archiveJobStore";
-import { describeArchiveError, joinFsPath, type ExtractOptions } from "./utils/archiveModel";
+import { describeArchiveError, fsBaseName, joinFsPath, type ExtractOptions } from "./utils/archiveModel";
 import PdfTools from "./components/PdfTools";
 import DiffViewer from "./components/DiffViewer";
 import OcrTool from "./components/OcrTool";
@@ -703,7 +703,7 @@ function AppShellInner() {
         });
         if (!picked) return;
         const paths = Array.isArray(picked) ? picked : [picked];
-        items = paths.map((p) => ({ path: p, name: p.split(/[\\/]/).pop() || p, is_dir: false }));
+        items = paths.map((p) => ({ path: p, name: fsBaseName(p), is_dir: false }));
       } catch (err) {
         message.error("选择文件失败: " + err);
         return;
@@ -2397,6 +2397,14 @@ function AppShellInner() {
         <DualPanelView
           onClose={() => setDualPanelOpen(false)}
           onOpenFile={(path) => {
+            // 双面板里双击压缩包也要进本应用的归档浏览器。这里原先无条件交给系统默认程序，
+            // 于是同一个包在主表格里双击进浏览器、在双面板里双击弹出 7-Zip ——
+            // 而"能替掉 7-Zip"这件事，恰恰要求后者不再发生。
+            // 目录走不到这里（面板自己 navigateTo 了），所以只需判文件那半边。
+            if (archiveOpenExts.includes(lastExtension(fsBaseName(path)))) {
+              openArchiveBrowser(path);
+              return;
+            }
             invoke("open_with_default_app", { path }).catch((err) =>
               message.error("打开失败: " + err)
             );

@@ -35,6 +35,7 @@ import {
   parentArchivePath,
   parseVolumeSize,
   parseVolumeSizeStrict,
+  packedSizeKnown,
   phaseLabel,
   searchEntries,
   singleRootName,
@@ -301,6 +302,27 @@ describe("分卷大小", () => {
     expect(formatVolumeSize(700 * 1024 * 1024)).toBe("700 MB");
     expect(formatVolumeSize(1536)).toBe("1.5 KB");
     expect(formatVolumeSize(512)).toBe("512 B");
+  });
+});
+
+describe("压缩后大小到底有没有报出来", () => {
+  // 这条规则的存在理由是真实世界的一个 RAR5：8638 条目、未压缩 9.46 GiB，
+  // 7-Zip 报压缩后 7.38 GB（78%），而 UnRAR 的 Rust 绑定不透出 PackSize，
+  // 后端只能填 0。0 被当成真值算比率就是"压缩率 0%"，两个数摆一起用户只会认为这边坏了。
+  it("rar / cab / tar 的 0 是「没报」，不是「压到零」", () => {
+    expect(packedSizeKnown({ totalSize: 10_152_865_107, totalPacked: 0 })).toBe(false);
+  });
+
+  it("有压缩后大小就照实算", () => {
+    expect(packedSizeKnown({ totalSize: 1000, totalPacked: 780 })).toBe(true);
+  });
+
+  it("Store（完全不压缩）也要算「报了」—— packed == size，不是 0", () => {
+    expect(packedSizeKnown({ totalSize: 1000, totalPacked: 1000 })).toBe(true);
+  });
+
+  it("空包没有比率可言：0/0 是 NaN，显示成「NaN%」比不显示更糟", () => {
+    expect(packedSizeKnown({ totalSize: 0, totalPacked: 0 })).toBe(false);
   });
 });
 

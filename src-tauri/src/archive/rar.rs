@@ -221,8 +221,14 @@ pub fn list(path: &Path, pw: Option<&str>) -> Result<(Vec<Entry>, ArchiveMeta), 
             name: p.rsplit('/').next().unwrap_or("").to_string(),
             is_dir: h.is_directory(),
             size: h.unpacked_size,
-            // solid 包里单条目的压缩后大小没有意义（字典是共享的），RAR 也不提供
-            packed: if solid { 0 } else { h.unpacked_size },
+            // 压缩后大小**拿不到**：`unrar::FileHeader` 只暴露 `unpacked_size`，
+            // 官方 UnRAR 的 `RARHeaderDataEx.PackSize` 没有被这个绑定透出来。
+            // 这里原先写的是 `if solid { 0 } else { h.unpacked_size }` —— 非 solid 包
+            // 于是把未压缩大小当成了压缩后大小，8638 条目的真实 RAR5 上
+            // `total_packed == total_size`，界面算出"压缩率 100%"，而 7-Zip 同一个包
+            // 显示的是 7.38 GB / 9.46 GiB。填一个看着像样的错数字比填 0 糟得多：
+            // 0 至少能让前端认出"这个格式没给"并显示 '-'（cab / tar 也是这么办的）。
+            packed: 0,
             modified: dos_to_unix(h.file_time),
             method: method_label(h.method),
             encrypted: h.is_encrypted(),

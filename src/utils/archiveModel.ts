@@ -52,6 +52,7 @@ export interface ArchiveInfo {
   container: string | null;
   entryCount: number;
   totalSize: number;
+  /** 压缩后总大小。**可能是 0，意思是"这个格式没报"**，见 `packedSizeKnown`。 */
   totalPacked: number;
   needsPassword: boolean;
   /** 连文件名都加密了，不给密码连列表都拿不到 */
@@ -66,8 +67,23 @@ export interface ArchiveInfo {
   entries: ArchiveEntry[];
 }
 
-export type Overwrite = "skip" | "overwrite" | "rename";
+/**
+ * 这个归档到底有没有报"压缩后大小"。
+ *
+ * rar / cab / tar 三个后端在 `packed` 上填的是 0，含义是**格式没给**，不是"压到了 0 字节"：
+ * UnRAR 的 Rust 绑定不透出官方结构里的 `PackSize`，cab/tar 的容器里也压根没存这个数。
+ * 于是 `totalPacked` 跟着是 0，界面要是照实算比率就会显示"压缩率 0%"——
+ * 而 7-Zip 打开同一个 RAR 显示的是 7.38 GB / 9.46 GiB。用户对着两个数，只会认为我们坏了。
+ *
+ * 0 必须和"真的没压缩"区分开，但单条目区分不了（Store 的包每条 packed == size，
+ * 空文件也是 0），所以判据落在总量上：有内容却一个字节都没报，那就是没报。
+ * solid 的 7z 每条也是 0（共享字典，单条没有意义），同样被这条规则挡住。
+ */
+export function packedSizeKnown(info: Pick<ArchiveInfo, "totalSize" | "totalPacked">): boolean {
+  return info.totalSize > 0 && info.totalPacked > 0;
+}
 
+export type Overwrite = "skip" | "overwrite" | "rename";
 export interface ExtractOptions {
   entries?: string[] | null;
   password?: string | null;

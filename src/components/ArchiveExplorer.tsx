@@ -67,6 +67,7 @@ import {
   describeArchiveError,
   fsBaseName,
   joinFsPath,
+  packedSizeKnown,
   searchEntries,
   type ArchiveEntry,
   type ArchiveInfo,
@@ -180,6 +181,14 @@ export default function ArchiveExplorer({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const caps = info?.caps ?? probe?.caps ?? null;
+  // rar / cab / tar 压根不报压缩后大小（后端在 packed 上填 0 表示"格式没给"）。
+  // 标题上的"压缩率"和属性页因此都没得说 —— 照实算会显示 0%，
+  // 而用户拿 7-Zip 打开同一个 RAR 看到的是 78%
+  const packedTotalKnown = info ? packedSizeKnown(info) : false;
+  // 条目那一列另有一个独立的失效条件：solid 的 7z **总量**是真的（上面那个判据过得去），
+  // 但字典在条目之间共享，单条的 packed 只能是 0。只判总量的话这一列照样渲染，
+  // 然后清一色 0 B，看着像包坏了
+  const packedPerEntryKnown = packedTotalKnown && !info?.solid;
 
   const load = useCallback(
     async (path: string, pw: string | null) => {
@@ -586,18 +595,21 @@ export default function ArchiveExplorer({
       render: (size: number) => formatFileSize(size),
     };
 
+    // 这一列在 rar / cab / tar 上整列都是"格式没报"，在 solid 的 7z 上整列都是
+    // "共享字典，单条没有意义"。两种情况都整列不渲染：一列清一色的破折号只是占地方，
+    // 还会让人以为包坏了。目录也不显示（它的 size 是子树合计，packed 更是无从谈起）。
+    const packedColumn: TableColumnsType<Row>[number] = {
+      title: "压缩后",
+      dataIndex: "packed",
+      key: "packed",
+      width: 100,
+      align: "right",
+      sorter: (a, b) => dirFirst(a, b) || a.packed - b.packed,
+      render: (packed: number, r: Row) => (r.isDir ? "-" : formatFileSize(packed)),
+    };
+
     const rest: TableColumnsType<Row> = [
-      {
-        title: "压缩后",
-        dataIndex: "packed",
-        key: "packed",
-        width: 100,
-        align: "right",
-        sorter: (a, b) => dirFirst(a, b) || a.packed - b.packed,
-        // solid 归档（7z / rar）里条目之间共享字典，单条目的"压缩后大小"没有意义，
-        // 后端如实给 0 —— 显示成一列 0 B 会被当成坏了，这里换成一个破折号
-        render: (packed: number, r: Row) => (info?.solid || r.isDir ? "-" : formatFileSize(packed)),
-      },
+      ...(packedPerEntryKnown ? [packedColumn] : []),
       {
         title: "修改时间",
         dataIndex: "modified",
@@ -617,7 +629,7 @@ export default function ArchiveExplorer({
     ];
 
     return [nameColumn, sizeColumn, ...rest];
-  }, [info?.solid, searching, token.colorTextTertiary, token.colorWarning]);
+  }, [packedPerEntryKnown, searching, token.colorTextTertiary, token.colorWarning]);
 
   const moreItems = useMemo<MenuProps["items"]>(() => {
     const items: MenuProps["items"] = [];
@@ -652,8 +664,11 @@ export default function ArchiveExplorer({
 
   const crumbs = archiveBreadcrumbs(dir);
   const selectedCount = selectedKeys.length;
+  // 压缩后大小没报出来就不算比率：`0 / totalSize` 会显示成"0%"，
+  // 而用户拿 7-Zip 打开同一个 RAR 看到的是 78%，两个数摆在一起只会让人觉得这边坏了。
+  // 这里用总量那一份判据，不是条目那一份 —— solid 的 7z 单条没有 packed，总量是真的
   const ratio =
-    info && info.totalSize > 0 ? Math.round((info.totalPacked / info.totalSize) * 100) : null;
+    info && packedTotalKnown ? Math.round((info.totalPacked / info.totalSize) * 100) : null;
 
   const title = (
     <Space size={8} style={{ minWidth: 0 }}>
@@ -915,7 +930,10 @@ export default function ArchiveExplorer({
             {info ? formatFileSize(info.totalSize) : "-"}
           </Descriptions.Item>
           <Descriptions.Item label="压缩后">
-            {info ? `${formatFileSize(info.totalPacked)}${ratio !== null ? `（${ratio}%）` : ""}` : "-"}
+            {/* 说清楚"没有"和"是零"的区别：属性页是唯一有地方写这句话的视图 */}
+            {info && ratio !== null
+              ? `${formatFileSize(info.totalPacked)}（${ratio}%）`
+              : "此格式不提供"}
           </Descriptions.Item>
           <Descriptions.Item label="特性">
             <Space size={4} wrap>

@@ -200,6 +200,31 @@ pub fn run() {
 pub mod test_bridge {
     use std::path::{Path, PathBuf};
 
+    // 集成测试要给这些类型**起名**（写函数签名、按 path 建索引），而 `archive` 模块是私有的：
+    // pub struct 藏在私有模块里，外面拿得到值却写不出路径，只能靠类型推导绕着走。
+    pub use crate::archive::{ArchiveInfo, CreateOptions, Entry, ProbeResult, Stats};
+    pub use crate::archive::format::{Format, FormatOption};
+    pub use crate::archive::Route;
+
+    /// 当前能写的所有格式。测试**遍历这个**而不是自己列一张表：
+    /// 自己列的话，后端加一种格式而测试忘了跟，那种格式就永远没被往返验过 ——
+    /// 而这恰恰是最需要验的时刻。
+    pub fn call_archive_writable_formats() -> Vec<FormatOption> {
+        crate::archive::format::writable_formats()
+    }
+
+    /// 这个可写格式是不是"单流"（gz/xz/bz2/zst/lz4/br/lzma）——即只能装**一个文件**。
+    ///
+    /// `FormatOption` 是给前端渲染下拉框的，里面没有这个信息（前端不需要：它只把用户选的
+    /// 路径原样交回后端，多源时 `single::create` 自己退回 tar 家族）。测试要按格式分派语料，
+    /// 又不想再列一张字符串表——那样就是第二份真相，早晚和路由表长歪。
+    /// 于是直接问 `Route::of`，它是后端分派唯一认的那份。
+    pub fn is_single_stream_format(opt: &FormatOption) -> bool {
+        Format::from_id(&opt.id)
+            .map(|f| Route::of(f) == Some(Route::Single))
+            .unwrap_or(false)
+    }
+
     /// 测试专用临时目录：随作用域结束递归删除。
     ///
     /// 之前各测试的 `tempdir()/case()` 只建不删（注释里写的是"让 OS 回收"），
@@ -342,6 +367,33 @@ pub mod test_bridge {
     /// 少了这一步，"解压到 `/etc`"这类目标就没人拦，而集成测试会照样绿——
     /// 因为被测的那条路径压根没经过拦截逻辑。
     pub fn call_archive_extract(src: &str, dest: &str) -> Result<crate::archive::Stats, String> {
+        call_archive_extract_with(src, dest, &crate::archive::ExtractOptions::default())
+    }
+
+    /// 只解指定条目。`keep_broken` 打开：真实大包里坏一条不该让整轮验证前功尽弃，
+    /// 错误进 `Stats::errors`，由调用方决定算不算失败。
+    pub fn call_archive_extract_entries(
+        src: &str,
+        dest: &str,
+        entries: &[String],
+    ) -> Result<crate::archive::Stats, String> {
+        call_archive_extract_with(
+            src,
+            dest,
+            &crate::archive::ExtractOptions {
+                entries: Some(entries.to_vec()),
+                keep_broken: true,
+                include_children: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn call_archive_extract_with(
+        src: &str,
+        dest: &str,
+        opts: &crate::archive::ExtractOptions,
+    ) -> Result<crate::archive::Stats, String> {
         let src = crate::path_guard::readable(src).map_err(|e| e.to_string())?;
         // dest 通常还不存在，所以是 writable（按最近的已存在祖先校验）而不是 validate
         let dest = crate::path_guard::writable(dest).map_err(|e| e.to_string())?;
@@ -351,15 +403,9 @@ pub mod test_bridge {
             &src.display().to_string(),
             &dest.display().to_string(),
         );
-        let det = crate::archive::preflight(&src, None).map_err(|e| e.to_string())?;
-        crate::archive::extract(
-            &src,
-            &det,
-            &dest,
-            &crate::archive::ExtractOptions::default(),
-            &mut rep,
-            &cancel,
-        )
+        let det = crate::archive::preflight(&src, opts.password.as_deref())
+            .map_err(|e| e.to_string())?;
+        crate::archive::extract(&src, &det, &dest, opts, &mut rep, &cancel)
     }
 
     pub fn call_archive_create(
@@ -367,14 +413,31 @@ pub mod test_bridge {
         dest: &str,
         format: &str,
     ) -> Result<crate::archive::Stats, String> {
+        call_archive_create_with(
+            sources,
+            dest,
+            &crate::archive::CreateOptions {
+                format: format.to_string(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// 带完整选项的版本：密码、加密文件名、分卷、等级、算法都要能从这里进去，
+    /// 否则"能不能压出一个 7-Zip 认得的加密分卷包"这种问题就没有可测的入口。
+    ///
+    /// 和 `call_archive_extract_with` 不同，这里**不**过 `path_guard`：
+    /// 命令层（`archive::cmds::archive_create`）做的是 readable/writable + "目标已存在就拒绝"，
+    /// 而这两件事各有专门的测试；这里要测的是引擎写出来的东西对不对。
+    pub fn call_archive_create_with(
+        sources: &[String],
+        dest: &str,
+        opts: &crate::archive::CreateOptions,
+    ) -> Result<crate::archive::Stats, String> {
         let srcs: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
-        let opts = crate::archive::CreateOptions {
-            format: format.to_string(),
-            ..Default::default()
-        };
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let mut rep = archive_reporter(crate::archive::job::Kind::Create, dest, dest);
-        crate::archive::create(&srcs, Path::new(dest), &opts, &mut rep, &cancel)
+        crate::archive::create(&srcs, Path::new(dest), opts, &mut rep, &cancel)
     }
 
     pub fn call_archive_test(path: &str) -> Result<crate::archive::Stats, String> {
