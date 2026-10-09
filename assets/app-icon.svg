@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0F9B8E"/>
+      <stop offset="1" stop-color="#2E7CF6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7FF9E8" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7FF9E8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="72" y="72" width="880" height="880" rx="232" fill="url(#bg)"/>
+
+  <!-- 背板 + 左上凸出的标签 -->
+  <rect x="232" y="376" width="560" height="384" rx="76" fill="#FFFFFF"/>
+  <rect x="232" y="324" width="292" height="152" rx="64" fill="#FFFFFF"/>
+
+  <!-- 前盖 -->
+  <circle cx="512" cy="632" r="216" fill="url(#glow)"/>
+  <rect x="232" y="480" width="560" height="280" rx="72" fill="#F2F7FA"/>
+
+  <!-- 前盖上的文件名 -->
+  <rect x="308" y="592" width="248" height="48" rx="24" fill="#34E8D2"/>
+  <circle cx="712" cy="616" r="28" fill="#FF6B6B"/>
+</svg>
