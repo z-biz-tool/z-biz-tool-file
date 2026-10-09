@@ -328,6 +328,60 @@ pub async fn archive_test(
     }))
 }
 
+/// 双击归档里的一个条目：解到系统临时目录，再用默认程序打开它（7-Zip 的行为）。
+///
+/// 走 job 而不是同步返回，有两个理由：solid 归档（7z / rar）抽一条也要从头解到那一条，
+/// 几百 MB 的包上这是分钟级的事，同步 invoke 会让界面看起来死掉；以及落点在系统临时
+/// 目录里，前端既拿不到 temp 路径，也不该由它来拼。
+///
+/// 覆盖模式固定是 `overwrite`：重复双击同一条目要拿到最新内容，而不是 `xxx (1).ext`。
+#[tauri::command]
+pub async fn archive_open_entry(
+    app: AppHandle,
+    path: String,
+    entry: String,
+    password: Option<String>,
+) -> Result<String, ArchiveError> {
+    let src = crate::path_guard::readable(&path).map_err(ArchiveError::from)?;
+    let pw = password.filter(|s| !s.is_empty());
+
+    let probe_src = src.clone();
+    let probe_pw = pw.clone();
+    let det = tauri::async_runtime::spawn_blocking(move || {
+        super::preflight(&probe_src, probe_pw.as_deref())
+    })
+    .await
+    .map_err(|e| ArchiveError::failed(e.to_string()))??;
+
+    let root = preview_root(&src);
+    // 落点必须在解压前就算出来：解压内部走的也是 safe_join，两边算的是同一个地方，
+    // 而前端不该自己去拼（拼错了就会打开一个不存在的文件，报一句莫名其妙的错）
+    let target = super::guard::safe_join(&root, &entry)
+        .map_err(|e| ArchiveError::failed(e.to_string()))?;
+
+    let opts = ExtractOptions {
+        entries: Some(vec![entry]),
+        password: pw,
+        overwrite: super::guard::Overwrite::Overwrite,
+        ..Default::default()
+    };
+    let label = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| src.display().to_string());
+
+    Ok(spawn_job(&app, Kind::Extract, label, String::new(), move |rep, cancel| {
+        let s = super::extract(&src, &det, &root, &opts, rep, cancel)?;
+        // 解出来是个目录（条目名以 '/' 结尾）就不该交给 opener：Windows 上打开目录
+        // 会弹一个资源管理器窗口，而用户点的是"预览这个文件"
+        if target.is_dir() {
+            return Err(format!("{} 是目录，不能直接打开。", target.display()));
+        }
+        opener::open(&target).map_err(|e| format!("打开文件失败: {}", e))?;
+        Ok(s)
+    }))
+}
+
 /// 请求取消。返回 false 表示没这个任务（已经结束并被清出账本，或 id 写错了）。
 ///
 /// 取消是**协作式**的：只置一个标志位，后端在每写满一块（64 KB）时检查一次。
@@ -373,6 +427,36 @@ fn source_label(srcs: &[PathBuf]) -> String {
         0 | 1 => first,
         n => format!("{} 等 {} 项", first, n),
     }
+}
+
+/// 预览用临时目录：`<temp>/z-tool-archive-preview/<归档名>-<路径指纹>`。
+///
+/// 前缀跟 `z-tool-epub-` / `z-tool-office-cache` 一个约定，方便统一清理。
+/// 带上路径指纹是因为只按文件名分会撞车：`D:\a\movie.rar` 和 `E:\backup\movie.rar`
+/// 同名不同物，共用一个目录会让用户双击 A 包里的文件却打开了 B 包的内容。
+///
+/// 目录只增不减，但增长有界——同一个归档的同一个条目每次都是覆盖写，
+/// 上限就是"用户预览过的不同条目数"。
+fn preview_root(archive: &Path) -> PathBuf {
+    let key = archive.to_string_lossy();
+    let stem = archive
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "archive".to_string());
+    std::env::temp_dir()
+        .join("z-tool-archive-preview")
+        .join(format!("{}-{:016x}", stem, fnv1a64(key.as_bytes())))
+}
+
+/// FNV-1a 64 位。手写而不是拉依赖：只要 8 行，而且**跨版本稳定**——
+/// `DefaultHasher` 不保证，一旦变了，老预览目录就成了孤儿，新的还会重新解一遍。
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 #[cfg(test)]
@@ -439,5 +523,28 @@ mod tests {
         let l = source_label(&many);
         assert!(l.starts_with("f0 等 200 项"), "{}", l);
         assert_eq!(source_label(&[]), "?");
+    }
+
+    #[test]
+    fn preview_root_separates_same_named_archives_in_different_dirs() {
+        let base = std::env::temp_dir().join("z-tool-archive-preview");
+        let a = preview_root(Path::new("D:/a/movie.rar"));
+        let b = preview_root(Path::new("E:/backup/movie.rar"));
+        assert!(a.starts_with(&base), "{:?}", a);
+        assert_ne!(a, b, "同名不同目录的归档必须落在不同预览目录，否则会打开错的文件");
+        assert_eq!(preview_root(Path::new("D:/a/movie.rar")), a, "同一个归档要能复用");
+        // 目录名里带分隔符会被 create_dir_all 当成多级目录，指纹就白加了
+        let name = a.file_name().unwrap().to_string_lossy().to_string();
+        assert!(!name.contains('/') && !name.contains('\\'), "{}", name);
+        assert!(name.starts_with("movie.rar-"), "{}", name);
+    }
+
+    #[test]
+    fn fnv1a64_matches_the_published_vectors() {
+        // 公开测试向量。手写实现 + 固定向量，是为了保证跨 Rust 版本稳定：
+        // 指纹一变，老预览目录全成孤儿，用户每次双击都要重解一遍
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
     }
 }

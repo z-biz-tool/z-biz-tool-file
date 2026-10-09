@@ -113,8 +113,12 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
   return { total, bad };
 }
 
-/** 全站"只有图标"的按钮数（补完可及名称那轮量出来的）；改这个数要连理由一起说 */
-const TOTAL_ICON_ONLY = 84;
+/**
+ * 全站"只有图标"的按钮数（补完可及名称那轮量出来的）；改这个数要连理由一起说。
+ * 84 → 88：归档浏览器那一套新增的（任务面板收起/展开、新建压缩的"浏览保存位置"、
+ * 归档浏览器的"更多操作"），四个都带了 aria-label。
+ */
+const TOTAL_ICON_ONLY = 88;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

@@ -64,7 +64,8 @@ pub fn open_status(path: &Path) -> super::OpenStatus {
     }
 }
 
-fn scan(ar: &mut Ar) -> Result<Vec<Meta>, String> {    let n = ar.len();
+fn scan(ar: &mut Ar) -> Result<Vec<Meta>, String> {
+    let n = ar.len();
     let mut out = Vec::with_capacity(n.min(super::MAX_ENTRIES));
     for i in 0..n {
         let e = ar

@@ -95,6 +95,7 @@ pub fn run() {
             archive::cmds::archive_create,
             archive::cmds::archive_add,
             archive::cmds::archive_test,
+            archive::cmds::archive_open_entry,
             archive::cmds::archive_cancel,
             archive::cmds::archive_job_state,
             search::full_disk_search,
