@@ -5,8 +5,9 @@ use std::io::{Read as IoRead, Write};
 use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 use std::process::Command as StdCommand;
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use crate::archive::job::{new_job_id, Kind as JobKind, Reporter};
+use crate::archive::{CreateOptions, ExtractOptions};
+use std::sync::atomic::AtomicBool;
 use md5::Digest as Md5Digest;
 use sha1::Sha1;
 use sha2::Sha256;
@@ -1056,6 +1057,74 @@ pub fn list_directory_with_hidden_blocking(path: &str, show_hidden: bool) -> Res
     Ok(result)
 }
 
+// ============================================================================
+// 归档命令：转发到统一引擎 archive/
+//
+// 这里原本每个格式各写一份解压循环（zip / tar / gz / 7z），三百多行，各有各的毛病：
+// zip-slip 检查在 `canonicalize` 失败时静默跳过——而解压目标常常还不存在，
+// canonicalize 于是**必然**失败，那个检查等于没写；`path_guard::validate` 要求目标
+// 已存在，"解压到新文件夹"这个最常见的用法直接报错；7z 调的是已经不在依赖里的
+// `sevenz_rust::decompress`（编译都过不去）。
+//
+// archive/ 建好之后它们全是重复实现，所以整块改成转发：命令名和签名不变，
+// 现有前端在 ArchiveExplorer 上线之前继续可用。
+//
+// 老命令返回 `Result<(), String>` 而不是 job id，没有地方挂进度事件，所以用
+// `Reporter::detached`（只写内存快照、不发事件）配一个永不置位的取消令牌。
+// 带进度和取消的那条路是 `archive::cmds::archive_extract`。
+// ============================================================================
+
+/// 老命令用的空壳上报器：不发事件、不能取消，只为了让引擎跑起来。
+fn legacy_reporter(kind: JobKind, src: &str, dest: &str) -> (Reporter, AtomicBool) {
+    (
+        Reporter::detached(new_job_id(kind), kind, src.to_string(), dest.to_string()),
+        AtomicBool::new(false),
+    )
+}
+
+/// 解压的公共出口。
+///
+/// 目标目录过 `path_guard::writable` 而不是 `validate`：后者要求路径已存在才能
+/// canonicalize，而"解压到新文件夹"的目标恰恰还不存在。`writable` 会把已存在的
+/// 前缀 canonicalize（照样拆穿符号链接）再拼回尚未存在的词法尾部。
+///
+/// 老命令没有密码入口，所以 `preflight` 传 None：加密包会返回 NeedPassword，
+/// 前端看到的是"这个包需要密码"，比解出一堆空文件强。
+fn legacy_extract(src: &str, dest_dir: &str, opts: ExtractOptions) -> Result<(), String> {
+    let src_path = crate::path_guard::readable(src)?;
+    let dst = crate::path_guard::writable(dest_dir)?;
+    fs::create_dir_all(&dst).map_err(|e| format!("创建目标目录失败: {}", e))?;
+    let det = crate::archive::preflight(&src_path, opts.password.as_deref())
+        .map_err(|e| e.to_string())?;
+    let (mut rep, cancel) = legacy_reporter(
+        JobKind::Extract,
+        &src_path.display().to_string(),
+        &dst.display().to_string(),
+    );
+    crate::archive::extract(&src_path, &det, &dst, &opts, &mut rep, &cancel)?;
+    Ok(())
+}
+
+/// 压缩的公共出口。`format` 取 `Format::id()` 的写法（"zip" / "tar.gz" …）。
+fn legacy_create(paths: Vec<String>, dest_path: String, format: &str) -> Result<(), String> {
+    let sources: Vec<PathBuf> = paths
+        .iter()
+        .map(|p| crate::path_guard::readable(p))
+        .collect::<Result<_, _>>()?;
+    let dest = crate::path_guard::writable(&dest_path)?;
+    let opts = CreateOptions {
+        format: format.to_string(),
+        ..Default::default()
+    };
+    let label = sources
+        .first()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let (mut rep, cancel) = legacy_reporter(JobKind::Create, &label, &dest_path);
+    crate::archive::create(&sources, &dest, &opts, &mut rep, &cancel)?;
+    Ok(())
+}
+
 /// 压缩文件/目录为 ZIP
 #[tauri::command]
 pub async fn compress_to_zip(paths: Vec<String>, dest_path: String) -> Result<(), String> {
@@ -1066,91 +1135,7 @@ pub async fn compress_to_zip(paths: Vec<String>, dest_path: String) -> Result<()
 }
 
 pub fn compress_to_zip_blocking(paths: Vec<String>, dest_path: String) -> Result<(), String> {
-    let dest = Path::new(&dest_path);
-
-    // 确保目标目录存在
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {}", e))?;
-    }
-
-    let file = fs::File::create(dest).map_err(|e| format!("创建ZIP文件失败: {}", e))?;
-    let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default()
-        .compression_method(CompressionMethod::Deflated);
-
-    for path_str in &paths {
-        let src_path = Path::new(path_str);
-        if !src_path.exists() {
-            return Err(format!("路径不存在: {}", path_str));
-        }
-
-        if src_path.is_dir() {
-            add_dir_to_zip(&mut zip, src_path, src_path, &options)
-                .map_err(|e| format!("压缩目录失败: {}", e))?;
-        } else {
-            add_file_to_zip(&mut zip, src_path, src_path, &options)
-                .map_err(|e| format!("压缩文件失败: {}", e))?;
-        }
-    }
-
-    zip.finish().map_err(|e| format!("完成ZIP写入失败: {}", e))?;
-
-    Ok(())
-}
-
-/// 递归添加目录到 ZIP
-fn add_dir_to_zip<W: std::io::Write + std::io::Seek>(
-    zip: &mut ZipWriter<W>,
-    base: &Path,
-    dir: &Path,
-    options: &SimpleFileOptions,
-) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let relative = path.strip_prefix(base).unwrap_or(&path);
-
-        if path.is_dir() {
-            let dir_name = relative.to_string_lossy().to_string() + "/";
-            zip.add_directory(&dir_name, options.clone())?;
-            add_dir_to_zip(zip, base, &path, options)?;
-        } else {
-            add_file_to_zip(zip, &path, base, options)?;
-        }
-    }
-    Ok(())
-}
-
-/// 添加单个文件到 ZIP
-///
-/// 流式写入：使用 64KB 固定缓冲区分块读取并写入 zip，避免 read_to_end 在
-/// 大文件（如 2GB 视频）上触发 OOM。
-fn add_file_to_zip<W: std::io::Write + std::io::Seek>(
-    zip: &mut ZipWriter<W>,
-    file_path: &Path,
-    base: &Path,
-    options: &SimpleFileOptions,
-) -> std::io::Result<()> {
-    use std::io::{BufReader, Read};
-
-    let relative = file_path.strip_prefix(base).unwrap_or(file_path);
-    let file_name = relative.to_string_lossy().to_string();
-
-    // 64KB 是 zip deflate 推荐的滑动窗口大小附近，兼顾 IO 调用次数与内存占用。
-    let file = fs::File::open(file_path)?;
-    let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let mut buf = [0u8; 64 * 1024];
-
-    zip.start_file(&file_name, options.clone())?;
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        zip.write_all(&buf[..n])?;
-    }
-
-    Ok(())
+    legacy_create(paths, dest_path, "zip")
 }
 
 /// 解压 ZIP 文件
@@ -1163,197 +1148,14 @@ pub async fn extract_zip(zip_path: String, dest_dir: String) -> Result<(), Strin
 }
 
 pub fn extract_zip_blocking(zip_path: &str, dest_dir: &str) -> Result<(), String> {
-    // dest_dir 也接 path_guard：解压不能写到系统目录
-    let canonical_dest = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
-
-    let src = Path::new(zip_path);
-    if !src.exists() {
-        return Err(format!("ZIP文件不存在: {}", zip_path));
-    }
-
-    let dest = &canonical_dest;
-    fs::create_dir_all(dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
-
-    let file = fs::File::open(src).map_err(|e| format!("打开ZIP文件失败: {}", e))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("读取ZIP文件失败: {}", e))?;
-
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| format!("读取ZIP条目失败: {}", e))?;
-
-        let out_path = dest.join(entry.name());
-        // 安全检查：确保解压路径在目标目录内（防止 zip slip）
-        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
-        if let Ok(canonical_out) = out_path.canonicalize() {
-            if !canonical_out.starts_with(&canonical_dest) {
-                return Err(format!("安全错误：解压路径超出目标目录: {}", entry.name()));
-            }
-        } else {
-            // 路径尚不存在，检查父路径
-            if let Some(parent) = out_path.parent() {
-                if let Ok(canonical_parent) = parent.canonicalize() {
-                    if !canonical_parent.starts_with(&canonical_dest) {
-                        return Err(format!("安全错误：解压路径超出目标目录: {}", entry.name()));
-                    }
-                }
-            }
-        }
-
-        if entry.is_dir() {
-            fs::create_dir_all(&out_path).map_err(|e| format!("创建目录失败: {}", e))?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
-            }
-            let mut out_file =
-                fs::File::create(&out_path).map_err(|e| format!("创建文件失败: {}", e))?;
-            std::io::copy(&mut entry, &mut out_file)
-                .map_err(|e| format!("写入文件失败: {}", e))?;
-        }
-
-        // 设置文件权限（Windows 下退化为只读属性）
-        if let Some(mode) = entry.unix_mode() {
-            apply_mode(&out_path, mode).map_err(|e| format!("设置权限失败: {}", e))?;
-        }
-    }
-
-    Ok(())
+    legacy_extract(zip_path, dest_dir, ExtractOptions::default())
 }
 
 // ============================================================================
-// 多格式解压：zip / tar / tar.gz / tar.bz2 / tar.xz / gz / 7z
+// 多格式解压：格式由引擎按魔数判定，不再靠这里手写的一串 ends_with
 // ============================================================================
 
-/// 检测压缩包格式（按扩展名，简单可靠）
-fn detect_archive_format(path: &Path) -> &'static str {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    // 注意：.tar.gz 等双扩展名要先匹配长后缀
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        "tar.gz"
-    } else if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") {
-        "tar.bz2"
-    } else if name.ends_with(".tar.xz") || name.ends_with(".txz") {
-        "tar.xz"
-    } else if name.ends_with(".zip") {
-        "zip"
-    } else if name.ends_with(".tar") {
-        "tar"
-    } else if name.ends_with(".7z") {
-        "7z"
-    } else if name.ends_with(".gz") {
-        "gz" // 单文件 gzip
-    } else {
-        "unknown"
-    }
-}
-
-/// 解压 tar（含 .tar / .tar.gz / .tar.bz2 / .tar.xz）
-fn extract_tar_impl(
-    src: &Path,
-    dest: &Path,
-    decompress: Option<DecompressAlgo>,
-) -> Result<(), String> {
-    let file = fs::File::open(src).map_err(|e| format!("打开文件失败: {}", e))?;
-    let reader: Box<dyn std::io::Read> = match decompress {
-        None => Box::new(file),
-        Some(DecompressAlgo::Gzip) => Box::new(flate2::read::GzDecoder::new(file)),
-        Some(DecompressAlgo::Bzip2) => Box::new(bzip2::read::BzDecoder::new(file)),
-        Some(DecompressAlgo::Xz) => Box::new(xz2::read::XzDecoder::new(file)),
-    };
-    let mut archive = tar::Archive::new(reader);
-    let canonical_dest = dest
-        .canonicalize()
-        .map_err(|e| format!("解析目标目录失败: {}", e))?;
-    for entry in archive
-        .entries()
-        .map_err(|e| format!("读取 tar 条目失败: {}", e))?
-    {
-        let mut entry = entry.map_err(|e| format!("解析 tar 条目失败: {}", e))?;
-        let entry_path = entry
-            .path()
-            .map_err(|e| format!("条目路径无效: {}", e))?
-            .into_owned();
-        let out_path = dest.join(&entry_path);
-        // 安全检查（路径必须落在 dest 内）
-        if let Some(parent) = out_path.parent() {
-            if let Ok(cp) = parent.canonicalize() {
-                if !cp.starts_with(&canonical_dest) {
-                    return Err(format!(
-                        "安全错误：解压路径超出目标目录: {}",
-                        out_path.display()
-                    ));
-                }
-            } else {
-                // 父目录尚未存在，逐级向上检查，直到 dest
-                let mut cur = Some(parent.to_path_buf());
-                while let Some(p) = cur {
-                    if p == dest {
-                        break;
-                    }
-                    if p.exists() {
-                        if let Ok(cp) = p.canonicalize() {
-                            if !cp.starts_with(&canonical_dest) {
-                                return Err(format!(
-                                    "安全错误：解压路径超出目标目录: {}",
-                                    out_path.display()
-                                ));
-                            }
-                        }
-                        break;
-                    }
-                    cur = p.parent().map(|x| x.to_path_buf());
-                }
-            }
-        }
-        if entry_path.to_string_lossy().ends_with('/') || entry.header().entry_type().is_dir() {
-            fs::create_dir_all(&out_path).map_err(|e| format!("创建目录失败: {}", e))?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
-            }
-            entry
-                .unpack(&out_path)
-                .map_err(|e| format!("解压文件失败: {}", e))?;
-        }
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum DecompressAlgo {
-    Gzip,
-    Bzip2,
-    Xz,
-}
-
-/// 解压单文件 .gz
-fn extract_gz_impl(src: &Path, dest: &Path) -> Result<(), String> {
-    let file = fs::File::open(src).map_err(|e| format!("打开文件失败: {}", e))?;
-    let mut decoder = flate2::read::GzDecoder::new(file);
-    // 输出文件名：去掉 .gz 后缀
-    let file_name = src
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| "无法获取文件名".to_string())?;
-    let out_name = file_name.trim_end_matches(".gz");
-    let out_path = dest.join(out_name);
-    let mut out_file = fs::File::create(&out_path).map_err(|e| format!("创建文件失败: {}", e))?;
-    std::io::copy(&mut decoder, &mut out_file).map_err(|e| format!("解压失败: {}", e))?;
-    Ok(())
-}
-
-/// 解压 7z（用 sevenz-rust 0.6 的高层 API：默认 extractor 已含防 zip-slip 等安全处理）
-fn extract_7z_impl(src: &Path, dest: &Path) -> Result<(), String> {
-    let file = fs::File::open(src).map_err(|e| format!("打开 7z 文件失败: {}", e))?;
-    sevenz_rust::decompress(file, dest).map_err(|e| format!("解压 7z 失败: {}", e))
-}
-
-/// 通用解压：按扩展名自动选择格式
+/// 通用解压：zip / 7z / rar / cab / tar 家族 / 单流压缩
 #[tauri::command]
 pub async fn extract_archive(archive_path: String, dest_dir: String) -> Result<(), String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
@@ -1363,39 +1165,17 @@ pub async fn extract_archive(archive_path: String, dest_dir: String) -> Result<(
 }
 
 pub fn extract_archive_blocking(archive_path: &str, dest_dir: &str) -> Result<(), String> {
-    // dest_dir 必须在允许范围内，避免解压到系统目录
-    let canonical_dest = crate::path_guard::validate(dest_dir).map_err(|e| e.to_string())?;
-
-    let src = Path::new(archive_path);
-    if !src.exists() {
-        return Err(format!("压缩包不存在: {}", archive_path));
-    }
-    fs::create_dir_all(&canonical_dest).map_err(|e| format!("创建目标目录失败: {}", e))?;
-    let dest = &canonical_dest;
-
-    match detect_archive_format(src) {
-        "zip" => extract_zip_blocking(archive_path, dest_dir),
-        "tar" => extract_tar_impl(src, dest, None),
-        "tar.gz" => extract_tar_impl(src, dest, Some(DecompressAlgo::Gzip)),
-        "tar.bz2" => extract_tar_impl(src, dest, Some(DecompressAlgo::Bzip2)),
-        "tar.xz" => extract_tar_impl(src, dest, Some(DecompressAlgo::Xz)),
-        "gz" => extract_gz_impl(src, dest),
-        "7z" => extract_7z_impl(src, dest),
-        other => Err(format!(
-            "暂不支持的压缩格式: {}（仅支持 zip / tar / tar.gz / tar.bz2 / tar.xz / gz / 7z）",
-            other
-        )),
-    }
+    legacy_extract(archive_path, dest_dir, ExtractOptions::default())
 }
 
 /// 判断文件是否支持解压（前端用来显示"解压"菜单项）
+///
+/// 走 `archive::probe`：只读几百字节魔数，比原来那串 `ends_with` 准得多——
+/// 改过扩展名的包认得出来，`.tgz` / `.tbz2` / `.zst` / `.lz4` 这些原来漏掉的也认得出来。
 #[tauri::command]
 pub fn is_archive_supported(archive_path: &str) -> bool {
-    let p = Path::new(archive_path);
-    matches!(
-        detect_archive_format(p),
-        "zip" | "tar" | "tar.gz" | "tar.bz2" | "tar.xz" | "gz" | "7z"
-    )
+    let p = crate::archive::probe(Path::new(archive_path));
+    p.is_archive && p.caps.extract
 }
 
 /// 文件权限信息
@@ -2269,33 +2049,33 @@ pub struct ZipEntry {
     pub modified: f64,
 }
 
-/// 解压 ZIP 中的单个文件
+/// 解压归档中的单个条目
+///
+/// 原来这个函数把 `dest_dir.join(entry_name)` 直接当落点用，而 `entry_name` 来自
+/// 压缩包内部：一个 `../../Windows/System32/x.dll` 就能写到目标目录外面去，
+/// 这里连 `path_guard` 都没过。转发到引擎之后落点由 `guard::safe_join` 算，
+/// 顺带也不再只对 zip 有效（命令名还叫 extract_zip_file，是给老前端留的）。
 #[tauri::command]
 pub async fn extract_zip_file(zip_path: String, entry_name: String, dest_dir: String) -> Result<(), String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || extract_zip_file_blocking(&zip_path, &entry_name, &dest_dir))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_zip_file_blocking(&zip_path, &entry_name, &dest_dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub fn extract_zip_file_blocking(zip_path: &str, entry_name: &str, dest_dir: &str) -> Result<(), String> {
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开ZIP失败: {}", e))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("读取ZIP失败: {}", e))?;
-
-    let mut entry = archive.by_name(entry_name).map_err(|e| format!("查找条目失败: {}", e))?;
-
-    if entry.is_dir() {
-        let dir_path = std::path::Path::new(dest_dir).join(entry_name);
-        std::fs::create_dir_all(&dir_path).map_err(|e| format!("创建目录失败: {}", e))?;
-    } else {
-        let file_path = std::path::Path::new(dest_dir).join(entry_name);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("创建父目录失败: {}", e))?;
-        }
-        let mut outfile = std::fs::File::create(&file_path).map_err(|e| format!("创建文件失败: {}", e))?;
-        std::io::copy(&mut entry, &mut outfile).map_err(|e| format!("写入文件失败: {}", e))?;
-    }
-    Ok(())
+    legacy_extract(
+        zip_path,
+        dest_dir,
+        ExtractOptions {
+            entries: Some(vec![entry_name.to_string()]),
+            // 选中的是目录时要连子树一起解，否则只落地一个空目录
+            include_children: true,
+            ..Default::default()
+        },
+    )
 }
 
 /// 列出 ZIP 文件内容
@@ -2308,28 +2088,19 @@ pub async fn list_zip_contents(zip_path: String) -> Result<Vec<ZipEntry>, String
 }
 
 pub fn list_zip_contents_blocking(zip_path: &str) -> Result<Vec<ZipEntry>, String> {
-    let file = std::fs::File::open(zip_path).map_err(|e| format!("打开ZIP失败: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取ZIP失败: {}", e))?;
-
-    let mut entries = Vec::new();
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(|e| format!("读取条目失败: {}", e))?;
-        entries.push(ZipEntry {
-            name: entry.name().to_string(),
-            size: entry.size(),
-            is_dir: entry.is_dir(),
-            modified: entry.last_modified()
-                .map(|t| {
-                    let dt = chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32).unwrap_or_default(),
-                        chrono::NaiveTime::from_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32).unwrap_or_default(),
-                    );
-                    dt.and_utc().timestamp() as f64
-                })
-                .unwrap_or(0.0),
-        });
-    }
-    Ok(entries)
+    let src = crate::path_guard::readable(zip_path)?;
+    // 老前端只吃 ZipEntry 这四个字段，所以在这里收窄；新前端直接用 archive_info
+    let info = crate::archive::info(&src, None).map_err(|e| e.to_string())?;
+    Ok(info
+        .entries
+        .into_iter()
+        .map(|e| ZipEntry {
+            name: e.path,
+            size: e.size,
+            is_dir: e.is_dir,
+            modified: e.modified as f64,
+        })
+        .collect())
 }
 
 // ============================================================================
@@ -2344,9 +2115,11 @@ pub fn list_zip_contents_blocking(zip_path: &str) -> Result<Vec<ZipEntry>, Strin
 #[tauri::command]
 pub async fn compress_to_tar(paths: Vec<String>, dest_path: String, compression: String) -> Result<(), String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || compress_to_tar_blocking(paths, dest_path, compression))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        compress_to_tar_blocking(paths, dest_path, compression)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub fn compress_to_tar_blocking(
@@ -2354,84 +2127,15 @@ pub fn compress_to_tar_blocking(
     dest_path: String,
     compression: String,
 ) -> Result<(), String> {
-    let dest = Path::new(&dest_path);
-
-    // 确保目标目录存在
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {}", e))?;
-    }
-
-    let file = fs::File::create(dest).map_err(|e| format!("创建归档文件失败: {}", e))?;
-
-    // 根据 compression 包装写入流
-    let writer: Box<dyn std::io::Write> = match compression.as_str() {
-        "tar" => Box::new(file),
-        "gz" | "tar.gz" => Box::new(flate2::write::GzEncoder::new(
-            file,
-            flate2::Compression::default(),
-        )),
-        "bz2" | "tar.bz2" => Box::new(bzip2::write::BzEncoder::new(
-            file,
-            bzip2::Compression::default(),
-        )),
-        other => return Err(format!("不支持的 tar 压缩格式: {}", other)),
+    // 老前端传的是"外层压缩叫什么"（"gz" / "bz2"），引擎的 id 是完整的 "tar.gz"。
+    // 这一步补全**不能省**：`Format::from_id("gz")` 命中的是单流 gzip（把一个文件
+    // 压成 .gz），不是 tar 包——透传下去会做出一个扩展名和内容都对不上的东西。
+    let format = match compression.as_str() {
+        "gz" | "gzip" => "tar.gz",
+        "bz2" | "bzip2" => "tar.bz2",
+        other => other,
     };
-
-    let mut archive = tar::Builder::new(writer);
-
-    for path_str in &paths {
-        let src_path = Path::new(path_str);
-        if !src_path.exists() {
-            return Err(format!("路径不存在: {}", path_str));
-        }
-
-        if src_path.is_dir() {
-            add_dir_to_tar(&mut archive, src_path, src_path)
-                .map_err(|e| format!("压缩目录失败: {}", e))?;
-        } else {
-            add_file_to_tar(&mut archive, src_path, src_path)
-                .map_err(|e| format!("压缩文件失败: {}", e))?;
-        }
-    }
-
-    archive
-        .finish()
-        .map_err(|e| format!("完成 tar 写入失败: {}", e))?;
-
-    Ok(())
-}
-
-/// 递归添加目录到 tar
-fn add_dir_to_tar<W: std::io::Write>(
-    archive: &mut tar::Builder<W>,
-    base: &Path,
-    dir: &Path,
-) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            add_dir_to_tar(archive, base, &path)?;
-        } else {
-            add_file_to_tar(archive, &path, base)?;
-        }
-    }
-    Ok(())
-}
-
-/// 添加单个文件到 tar（保持相对路径）
-fn add_file_to_tar<W: std::io::Write>(
-    archive: &mut tar::Builder<W>,
-    file_path: &Path,
-    base: &Path,
-) -> std::io::Result<()> {
-    let relative = file_path.strip_prefix(base).unwrap_or(file_path);
-    let file_name = relative.to_string_lossy().to_string();
-
-    let mut file = fs::File::open(file_path)?;
-    archive.append_file(&file_name, &mut file)?;
-    Ok(())
+    legacy_create(paths, dest_path, format)
 }
 
 // ============================================================================
@@ -2774,7 +2478,7 @@ mod zip_tests {
         let f = fs::File::open(&dest).unwrap();
         let mut archive = ZipArchive::new(f).unwrap();
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().map(|n| n.to_string()).unwrap_or_default())
             .collect();
         assert!(names.iter().any(|n| n.ends_with("a.txt")));
         assert!(names.iter().any(|n| n.ends_with("b.txt")));
@@ -3249,8 +2953,13 @@ mod sync_tests {
     #[test]
     fn compare_rejects_blocked_directory() {
         let dir = case("blocked");
-        let err = compare_directories_blocking("/etc", &dir.to_string_lossy())
-            .expect_err("/etc 必须被拒绝");
+        // 不用 `/etc`：BLOCKED_PREFIXES 全是 POSIX 绝对路径，Windows 上一个都不命中，
+        // 在那儿 `/etc` 只是"相对路径"，用例测的就不是"命中黑名单"这件事了。
+        // `.ssh` 走 BLOCKED_ANCESTORS（按路径段名匹配），两个平台一致。
+        let ssh = dir.join(".ssh");
+        fs::create_dir_all(&ssh).unwrap();
+        let err = compare_directories_blocking(&ssh.to_string_lossy(), &dir.to_string_lossy())
+            .expect_err(".ssh 必须被拒绝");
         assert!(err.contains("禁止操作"), "实得 {}", err);
     }
 
@@ -3400,6 +3109,11 @@ mod external_open_tests {
     use crate::test_bridge::TempDir;
     use std::fs;
 
+    /// 这份名单全是 POSIX 绝对路径，靠的是 `BLOCKED_PREFIXES`；Windows 上一个都不命中，
+    /// `/etc` 在那儿只是"相对路径"，断言的 `保护` 二字也就永远不会出现。
+    /// 跨平台的那半边覆盖在下面 `sensitive_ancestor_is_refused_even_in_a_temp_home`
+    /// （走 `BLOCKED_ANCESTORS`，按路径段名匹配）。
+    #[cfg(unix)]
     #[test]
     fn system_directories_are_refused_on_both_routes() {
         for blocked in [

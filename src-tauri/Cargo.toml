@@ -26,12 +26,6 @@ kamadak-exif = "0.6"
 walkdir = "2"
 notify = "6"
 epub = "2"
-zip = "2"
-tar = "0.4"
-flate2 = "1"
-bzip2 = "0.4"
-xz2 = "0.1"
-sevenz-rust = "0.6"
 html2text = "0.12"
 lopdf = { version = "0.34", features = ["pom_parser"] }
 regex-lite = "0.1"
@@ -55,6 +49,28 @@ chrono = "0.4"
 ureq = "2"
 tauri-plugin-updater = "2"
 dirs = "5"
+
+# ---- 归档引擎（src/archive/）：目标是完全替掉本机的 7-Zip，所以这里全是纯 Rust/自包含实现，
+# ---- 不 shell out 到 `C:\Program Files\7-Zip\7z.exe`。理由有三条：
+# ----   1) 目标机器可能没装 7-Zip，装了的版本也不一样（本机是 26.03）；
+# ----   2) 起子进程拿不到细粒度进度，也没法做到"逐块检查取消"；
+# ----   3) 仓库里已有的外部进程 helper 全是 macOS/Linux 路径拼法，Windows 上没有先例可循。
+# 各 crate 的取舍写在 archive/format.rs 的能力表里（能读的 ≠ 能写的）。
+zip = { version = "9", features = ["deflate64", "lzma", "xz"] }
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.6"
+xz2 = "0.1"
+zstd = "0.14"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"] }
+brotli = "9"
+cab = "0.6"
+# RAR 只读：UnRAR 授权明确禁止写 RAR，所以没有 rar 编码器，能力表里 create=false
+unrar = "0.5"
+# 0.23 相对 0.6 是彻底重写（decompress(file, dest) 已不存在），API 见 archive/sevenz.rs 头注
+sevenz-rust2 = "0.23"
+# 解出来的文件要恢复原修改时间，否则用户按时间排序全乱了
+filetime = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # x86_64-apple-darwin 在 arm64 runner 上交叉编译时找不到系统 OpenSSL，

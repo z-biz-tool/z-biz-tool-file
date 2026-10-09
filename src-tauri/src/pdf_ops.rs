@@ -656,13 +656,22 @@ mod tests {
     fn split_rejects_traversal_output_dir() {
         let dir = crate::test_bridge::TempDir::new("pdf-split-traversal");
         let a = write_fixture(&dir, "src.pdf", &["P1"]);
-        let err = split_pdf(
-            a.to_string_lossy().to_string(),
-            "/etc/evil-out".to_string(),
-            vec![[1, 1]],
-        )
-        .expect_err("输出目录要过黑名单");
-        assert!(err.contains("系统保护") || err.contains("拒绝"), "{}", err);
+        let src = a.to_string_lossy().to_string();
+
+        // 黑名单腿。不用 `/etc`：BLOCKED_PREFIXES 全是 POSIX 绝对路径，Windows 上一个都
+        // 不命中，`/etc` 在那儿只是"相对路径"，用例测的就不是同一件事了。
+        // `.ssh` 走的是 BLOCKED_ANCESTORS（按路径段名匹配），两个平台一致。
+        let ssh = dir.join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        let err = split_pdf(src.clone(), ssh.join("evil-out").to_string_lossy().to_string(), vec![[1, 1]])
+            .expect_err("输出目录要过黑名单");
+        assert!(err.contains("系统保护"), "{}", err);
+
+        // 穿越腿。`..` 段与平台无关，两个平台都必须被拒。
+        let traversal = dir.join("..").join("evil-out2");
+        let err = split_pdf(src, traversal.to_string_lossy().to_string(), vec![[1, 1]])
+            .expect_err("`..` 必须被拒");
+        assert!(err.contains("不允许相对路径"), "{}", err);
     }
 
     /// 合并产物要能被自己的读取路径再次当作输入解析（否则用户第二次操作就会坏）。

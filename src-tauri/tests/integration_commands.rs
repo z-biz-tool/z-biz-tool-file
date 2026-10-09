@@ -8,6 +8,10 @@
 
 use std::fs;
 use std::io::Write;
+// 符号链接用例只在 unix 上编译：Windows 建 symlink 要管理员权限或开发者模式，
+// 而且这两个用例打的靶子是 /etc/passwd 和自引用链接，在 Windows 上跑不起来。
+// 代价是 copy_file 的"跟随链接递归爆栈"防护在 Windows 上没有回归覆盖。
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use z_biz_tool_file_lib::test_bridge::{
     call_copy_file, call_create_file, call_delete_file, call_move_file, call_rename_file, TempDir,
@@ -33,6 +37,7 @@ fn delete_file_rejects_etc() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn delete_file_rejects_symlink_to_etc() {
     if !std::path::Path::new("/etc").exists() {
@@ -355,6 +360,7 @@ fn path_guard_blocks_file_protocol() {
 
 /// copy_file 复制一个含自引用符号链接的目录：修复前 is_dir() 会跟随链接一路递归，
 /// 测试进程直接栈溢出被 SIGSEGV 打挂；现在必须正常返回并把链接按链接还原。
+#[cfg(unix)]
 #[test]
 fn copy_dir_with_self_referential_symlink_terminates() {
     let dir = tempdir();

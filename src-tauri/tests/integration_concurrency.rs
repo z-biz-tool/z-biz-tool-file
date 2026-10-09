@@ -9,6 +9,9 @@
 
 use std::collections::HashSet;
 use std::fs;
+// 符号链接用例只在 unix 上编译：Windows 建 symlink 要管理员权限或开发者模式，
+// 而这两个用例打的靶子是 /etc，在 Windows 上原本也只是 `if !/etc.exists() { return }` 空跑。
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
@@ -138,6 +141,7 @@ fn atomic_write_crash_leaves_no_corrupted_final() {
     let _ = fs::remove_file(&tmp_path);
 }
 
+#[cfg(unix)]
 #[test]
 fn path_guard_blocks_symlink_escape_to_etc() {
     if !std::path::Path::new("/etc").exists() {
@@ -170,6 +174,7 @@ fn path_guard_blocks_symlink_escape_to_etc() {
     let _ = fs::remove_file(&link_path);
 }
 
+#[cfg(unix)]
 #[test]
 fn path_guard_blocks_nested_symlink_chain() {
     if !std::path::Path::new("/etc").exists() {

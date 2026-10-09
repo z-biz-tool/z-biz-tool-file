@@ -1,4 +1,15 @@
+/// 让**单元测试**那个 exe 也带上 Windows manifest 资源，细节见 `build.rs`。
+///
+/// 一句话：manifest 声明了 Common-Controls 6.0.0.0，只有它才能让进程加载 WinSxS 里的
+/// comctl32 **v6**；muda / rfd 静态导入的 `TaskDialogIndirect` 只有 v6 才导出。
+/// 没有 manifest 就落到 System32 的 v5，`cargo test --lib` 一个用例都跑不起来，
+/// 直接 0xc0000139（STATUS_ENTRYPOINT_NOT_FOUND）退出。
+#[cfg(all(test, windows))]
+#[link(name = "resource")]
+extern "C" {}
+
 mod commands;
+mod archive;
 mod conflict;
 mod search;
 mod ebook;
@@ -37,6 +48,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(WatcherState::default())
         .manage(aria2::Aria2State::default())
+        .manage(archive::job::Jobs::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_directory,
             commands::read_file_content,
@@ -73,6 +85,18 @@ pub fn run() {
             commands::set_file_tags,
             commands::list_zip_contents,
             commands::extract_zip_file,
+            archive::cmds::archive_probe,
+            archive::cmds::archive_info,
+            archive::cmds::archive_conflicts,
+            archive::cmds::archive_formats,
+            archive::cmds::archive_extensions,
+            archive::cmds::archive_extract_dir_name,
+            archive::cmds::archive_extract,
+            archive::cmds::archive_create,
+            archive::cmds::archive_add,
+            archive::cmds::archive_test,
+            archive::cmds::archive_cancel,
+            archive::cmds::archive_job_state,
             search::full_disk_search,
             search::search_file_content,
             ebook::parse_epub,
@@ -294,6 +318,70 @@ pub mod test_bridge {
     }
     pub fn call_extract_archive(archive_path: &str, dest_dir: &str) -> Result<(), String> {
         crate::commands::extract_archive_blocking(archive_path, dest_dir)
+    }
+
+    // ---- 统一归档引擎（archive/）----
+    //
+    // 集成测试里没有 WebView 也没有 AppHandle，所以用 `Reporter::detached`：它只更新
+    // 内存里的快照、不发事件，但驱动的是**和命令完全同一条生产代码路径**
+    // （preflight → 分发到后端 → 统计）。这样"能不能解开真实世界的包"这件事
+    // 不依赖前端就能验。
+
+    fn archive_reporter(
+        kind: crate::archive::job::Kind,
+        a: &str,
+        d: &str,
+    ) -> crate::archive::job::Reporter {
+        crate::archive::job::Reporter::detached(
+            crate::archive::job::new_job_id(kind),
+            kind,
+            a.to_string(),
+            d.to_string(),
+        )
+    }
+
+    pub fn call_archive_probe(path: &str) -> crate::archive::ProbeResult {
+        crate::archive::probe(Path::new(path))
+    }
+
+    pub fn call_archive_info(path: &str) -> Result<crate::archive::ArchiveInfo, String> {
+        crate::archive::info(Path::new(path), None).map_err(|e| e.to_string())
+    }
+
+    pub fn call_archive_extract(src: &str, dest: &str) -> Result<crate::archive::Stats, String> {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut rep = archive_reporter(crate::archive::job::Kind::Extract, src, dest);
+        let det = crate::archive::preflight(Path::new(src), None).map_err(|e| e.to_string())?;
+        crate::archive::extract(
+            Path::new(src),
+            &det,
+            Path::new(dest),
+            &crate::archive::ExtractOptions::default(),
+            &mut rep,
+            &cancel,
+        )
+    }
+
+    pub fn call_archive_create(
+        sources: &[String],
+        dest: &str,
+        format: &str,
+    ) -> Result<crate::archive::Stats, String> {
+        let srcs: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
+        let opts = crate::archive::CreateOptions {
+            format: format.to_string(),
+            ..Default::default()
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut rep = archive_reporter(crate::archive::job::Kind::Create, dest, dest);
+        crate::archive::create(&srcs, Path::new(dest), &opts, &mut rep, &cancel)
+    }
+
+    pub fn call_archive_test(path: &str) -> Result<crate::archive::Stats, String> {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut rep = archive_reporter(crate::archive::job::Kind::Test, path, "");
+        let det = crate::archive::preflight(Path::new(path), None).map_err(|e| e.to_string())?;
+        crate::archive::test(Path::new(path), &det, None, &mut rep, &cancel)
     }
     pub fn call_read_file_content(path: &str) -> Result<crate::commands::ReadFileResult, String> {
         crate::commands::read_file_content_blocking(path)

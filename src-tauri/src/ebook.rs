@@ -36,7 +36,9 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
     let mut opf_path = String::new();
     for i in 0..archive.len() {
         let mut zf = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
-        if zf.name().ends_with("container.xml") {
+        // zip 9 起 name() 返回 ZipResult<Cow<str>>：条目名可能压根不是 UTF-8。
+        // EPUB 规范要求名字是 ASCII/UTF-8，所以名字解不出来的条目一律当"不是要找的那个"。
+        if zf.name().is_ok_and(|n| n.ends_with("container.xml")) {
             let mut content = String::new();
             zf.read_to_string(&mut content).ok();
             // 简单提取rootfile路径
@@ -174,7 +176,9 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
         let mut html_entries: Vec<(String, String)> = Vec::new();
         for i in 0..archive.len() {
             let mut zf = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
-            let name = zf.name().to_string();
+            let Some(name) = zf.name().ok().map(|n| n.to_string()) else {
+                continue;
+            };
             if name.ends_with(".html") || name.ends_with(".xhtml") || name.ends_with(".htm") {
                 let mut content = String::new();
                 if zf.read_to_string(&mut content).is_ok() && !content.trim().is_empty() {
@@ -281,7 +285,10 @@ fn extract_epub_assets<R: std::io::Read + std::io::Seek>(
         let mut zf = archive
             .by_index(i)
             .map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
-        let name = zf.name().to_string();
+        // 名字解不出来就跳过：下面要拿它拼落盘路径，空名字会拼到 temp_root 自己身上
+        let Some(name) = zf.name().ok().map(|n| n.to_string()) else {
+            continue;
+        };
         // 跳过目录
         if name.ends_with('/') {
             continue;
@@ -624,7 +631,9 @@ pub fn get_epub_cover(path: &str) -> Result<String, String> {
     // 查找封面图片
     for i in 0..archive.len() {
         let mut zf = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
-        let name = zf.name().to_string().to_lowercase();
+        let Some(name) = zf.name().ok().map(|n| n.to_string().to_lowercase()) else {
+            continue;
+        };
         if name.contains("cover") && (name.ends_with(".jpg") || name.ends_with(".jpeg") || name.ends_with(".png")) {
             let mut buf = Vec::new();
             zf.read_to_end(&mut buf).map_err(|e| format!("读取封面失败: {}", e))?;

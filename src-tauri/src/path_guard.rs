@@ -34,7 +34,12 @@ impl fmt::Display for PathError {
 impl std::error::Error for PathError {}
 
 /// 默认黑名单：用户态应用不应改写这些位置。
-/// macOS / Linux 上影响最大；Windows 上多数不存在，由 canonicalize 直接拒绝。
+///
+/// **只对 POSIX 路径生效**：比对的是 canonicalize 之后的字符串，Windows 上长这样
+/// `C:\Windows\...`，一个前缀都命中不了，而 `/etc` 这种写法在 Windows 上根本不是绝对
+/// 路径、会先被 `RelativePath` 拦下。Windows 侧真正起作用的是下面的 BLOCKED_ANCESTORS
+/// （按路径段名匹配，跨平台一致）。给这台机器加 Windows 系统目录黑名单之前要先想清楚：
+/// `validate` 同时被"读"路径用着，把 `C:\Program Files` 拉黑会连带禁掉浏览和打开。
 const BLOCKED_PREFIXES: &[&str] = &[
     "/", "/etc", "/usr", "/bin", "/sbin", "/var", "/System",
     "/Library", "/dev", "/proc", "/sys", "/boot",
@@ -196,9 +201,15 @@ mod tests {
 
     #[test]
     fn reject_root() {
-        // 在测试环境 / 必然存在
+        // BLOCKED_PREFIXES 全是 POSIX 绝对路径，Windows 上一个都不命中；而 "/" 在 Windows 上
+        // 连绝对路径都不算（缺盘符前缀），会先被 RelativePath 拦下。两种拦法都算
+        // "根目录进不来"，这里钉住的是"被拒"这件事，不是具体的错误变体。
         let res = validate("/");
-        assert!(matches!(res, Err(PathError::Blocked(_))), "got {:?}", res);
+        assert!(
+            matches!(res, Err(PathError::Blocked(_)) | Err(PathError::RelativePath)),
+            "got {:?}",
+            res
+        );
     }
 
     #[test]
@@ -242,9 +253,13 @@ mod tests {
         let target = dir.join("a/b/new.txt");
         let res = validate_new_path(target.to_str().unwrap());
         assert!(res.is_ok(), "got {:?}", res);
+        // 用 Path::ends_with 而不是字符串 ends_with：Windows 上拼出来的是 `a\b\new.txt`，
+        // 按字符串比会误判成"尾部没接上"
+        let got = res.unwrap();
         assert!(
-            res.unwrap().to_string_lossy().ends_with("a/b/new.txt"),
-            "未存在的尾部应原样接在 canonical 前缀之后"
+            got.ends_with(Path::new("a/b/new.txt")),
+            "未存在的尾部应原样接在 canonical 前缀之后: {}",
+            got.display()
         );
         // 相对路径与 .. 依旧一律拒绝
         assert_eq!(validate_new_path("a/b.txt"), Err(PathError::RelativePath));
