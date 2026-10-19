@@ -1011,7 +1011,11 @@ fn external_7zip_reads_what_we_write() {
     };
     let formats = tb::call_archive_writable_formats();
     let ids: Vec<&str> = formats.iter().map(|o| o.id.as_str()).collect();
-    for stale in NO_SZ_DECODER.iter().filter(|f| !ids.contains(f)) {
+    // 这张表过期了就当场炸掉。用 `find` 而不是 `for` 循环：
+    // clippy 的 `never_loop` 能静态证明这个迭代器恒为空（可写格式清单里必然含表里每一项），
+    // 于是把这条"运行时守卫"判成死代码 —— 但它的意思恰恰是"**运行时要查**"。
+    // `find` 保持同样的语义（第一个过期项就 panic，消息一字不改），也不触发该 lint。
+    if let Some(stale) = NO_SZ_DECODER.iter().find(|f| !ids.contains(f)) {
         panic!(
             "{} 已经不在可写格式清单里了，NO_SZ_DECODER 这张表过期了 —— 改名字还是撤了，得说清楚",
             stale

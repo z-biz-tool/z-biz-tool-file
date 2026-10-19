@@ -1,0 +1,146 @@
+{
+  "_comment": [
+    "跨语言契约夹具：前端预览（src/components/BatchRename.tsx 的 computeNewName）",
+    "与后端实际（src-tauri/src/commands.rs 的 compute_renamed_name）必须算出同一个名字。",
+    "",
+    "为什么需要它：批量重命名是「带预览」的功能（见 doc/优化方案/01_现状审计与问题清单.md）。",
+    "本轮实测出 5 处预览与实际不一致 —— 界面上有「步长」「位数」「区分大小写」三个控件，",
+    "后端签名里根本没有对应参数；后缀还被拼到了扩展名**后面**。",
+    "于是预览写「文件01.txt」，点下去真变成「文件1.txt」—— 用户没法相信这个预览。",
+    "",
+    "两侧共用这一份夹具：Rust 侧见 src-tauri/src/commands.rs 的 rename_contract_tests，",
+    "TS 侧见 tests/renameContract.test.ts。谁改了规则而另一侧没跟上，先红的一定是错的那一侧。",
+    "",
+    "字段说明：",
+    "  oldName  —— 原始文件名（含扩展名）。两侧各自按「最后一个点」切分，切法必须一致。",
+    "  index    —— 这一项在批次里的序号（从 0 开始）。",
+    "  opts     —— 重命名参数，字段名与前后端一致（camelCase）。缺省字段按缺省语义处理。",
+    "  expected —— 两侧都必须算出的新文件名。"
+  ],
+  "cases": [
+    {
+      "name": "查找替换：默认忽略大小写（REPORT 能替到 report）",
+      "oldName": "report2024.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": "REPORT", "replaceText": "Doc" },
+      "expected": "Doc2024.txt"
+    },
+    {
+      "name": "查找替换：勾了区分大小写就匹配不到，原名不变",
+      "oldName": "report2024.txt",
+      "index": 0,
+      "opts": {
+        "mode": "find_replace",
+        "findText": "REPORT",
+        "replaceText": "Doc",
+        "caseSensitive": true
+      },
+      "expected": "report2024.txt"
+    },
+    {
+      "name": "查找替换：只作用于主名，扩展名里的同名字样不动",
+      "oldName": "report.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": ".txt", "replaceText": ".md" },
+      "expected": "report.txt"
+    },
+    {
+      "name": "查找替换：一次替换全部出现（不是只替第一处）",
+      "oldName": "aXbXc.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": "X", "replaceText": "-" },
+      "expected": "a-b-c.txt"
+    },
+    {
+      "name": "查找替换：查找串为空则原样返回",
+      "oldName": "report.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": "", "replaceText": "X" },
+      "expected": "report.txt"
+    },
+    {
+      "name": "前缀后缀：后缀加在扩展名**之前**",
+      "oldName": "report.txt",
+      "index": 0,
+      "opts": { "mode": "prefix_suffix", "prefix": "v2_", "suffix": "_bak" },
+      "expected": "v2_report_bak.txt"
+    },
+    {
+      "name": "前缀后缀：没有扩展名的文件",
+      "oldName": "README",
+      "index": 0,
+      "opts": { "mode": "prefix_suffix", "prefix": "v2_", "suffix": "" },
+      "expected": "v2_README"
+    },
+    {
+      "name": "自动编号：默认步长 1、位数 2（界面上写着「不足位数用 0 补齐」）",
+      "oldName": "report.txt",
+      "index": 0,
+      "opts": { "mode": "auto_number", "startNumber": 1, "step": 1, "digits": 2 },
+      "expected": "report01.txt"
+    },
+    {
+      "name": "自动编号：序号跟着批次走",
+      "oldName": "report.txt",
+      "index": 2,
+      "opts": { "mode": "auto_number", "startNumber": 1, "step": 1, "digits": 2 },
+      "expected": "report03.txt"
+    },
+    {
+      "name": "自动编号：步长真的生效（以前是个摆设）",
+      "oldName": "report.txt",
+      "index": 1,
+      "opts": { "mode": "auto_number", "startNumber": 1, "step": 5, "digits": 3 },
+      "expected": "report006.txt"
+    },
+    {
+      "name": "自动编号：起始号与位数一起生效",
+      "oldName": "report.txt",
+      "index": 0,
+      "opts": { "mode": "auto_number", "startNumber": 10, "step": 1, "digits": 4 },
+      "expected": "report0010.txt"
+    },
+    {
+      "name": "自动编号：位数为 0 时不补零",
+      "oldName": "report.txt",
+      "index": 0,
+      "opts": { "mode": "auto_number", "startNumber": 1, "step": 1, "digits": 0 },
+      "expected": "report1.txt"
+    },
+    {
+      "name": "自动编号：没有扩展名的文件",
+      "oldName": "README",
+      "index": 0,
+      "opts": { "mode": "auto_number", "startNumber": 1, "step": 1, "digits": 2 },
+      "expected": "README01"
+    },
+    {
+      "name": "自动编号：编号进位到两位数时不再截断",
+      "oldName": "report.txt",
+      "index": 9,
+      "opts": { "mode": "auto_number", "startNumber": 1, "step": 1, "digits": 2 },
+      "expected": "report10.txt"
+    },
+    {
+      "name": "忽略大小写：ß 不与 SS 匹配（JS 的 Canonicalize 规则，期望值由 node 实测）",
+      "oldName": "Straße.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": "STRASSE", "replaceText": "X" },
+      "expected": "Straße.txt"
+    },
+    {
+      "name": "忽略大小写：é 与 É 能互相匹配（期望值由 node 实测）",
+      "oldName": "École.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": "école", "replaceText": "X" },
+      "expected": "X.txt"
+    },
+    {
+      "name": "忽略大小写：İ 不与 i 匹配（期望值由 node 实测）",
+      "oldName": "İstanbul.txt",
+      "index": 0,
+      "opts": { "mode": "find_replace", "findText": "i̇stanbul", "replaceText": "X" },
+      "expected": "İstanbul.txt"
+    }
+  ]
+}

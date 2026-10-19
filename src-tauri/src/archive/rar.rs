@@ -512,12 +512,13 @@ mod tests {
     #[test]
     fn dos_time_decodes_to_local_wall_clock() {
         // 2024-03-05 14:30:00 的 MS-DOS 编码
+        // 位布局：0-4 秒/2 · 5-10 分 · 11-15 时 · 16-20 日 · 21-24 月 · 25-31 年-1980
+        // 秒字段（位 0-4）= 0，秒的偶数编码就是 0/2 = 0，直接不写这一段。
         let v: u32 = ((2024 - 1980) << 25)
             | (3 << 21)
             | (5 << 16)
             | (14 << 11)
-            | (30 << 5)
-            | (0 / 2);
+            | (30 << 5);
         let got = dos_to_unix(v);
         use chrono::TimeZone;
         let want = chrono::Local

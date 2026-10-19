@@ -7,11 +7,15 @@ import {
   Checkbox,
   InputNumber,
   Space,
+  Progress,
+  Button,
   Typography,
   App as AntdApp,
 } from "antd";
-import { invoke } from "@tauri-apps/api/core";
 import type { FileEntry } from "../stores/fileStore";
+import { computeNewName, type RenameMode, type RenameOptions } from "../utils/renameModel";
+import { useOperation } from "../hooks/useOperation";
+import { describeProgress } from "../utils/operationModel";
 
 interface Props {
   open: boolean;
@@ -20,64 +24,11 @@ interface Props {
   files: FileEntry[];
 }
 
-type RenameMode = "find_replace" | "prefix_suffix" | "auto_number";
-
 const MODE_OPTIONS: { label: string; value: RenameMode }[] = [
   { label: "查找替换", value: "find_replace" },
   { label: "前缀后缀", value: "prefix_suffix" },
   { label: "自动编号", value: "auto_number" },
 ];
-
-/** 将文件名拆分为名称部分和扩展名部分 */
-function splitFileName(fileName: string): [string, string] {
-  const dotIndex = fileName.lastIndexOf(".");
-  if (dotIndex <= 0) return [fileName, ""];
-  return [fileName.slice(0, dotIndex), fileName.slice(dotIndex)];
-}
-
-/** 根据模式计算新文件名 */
-function computeNewName(
-  original: string,
-  mode: RenameMode,
-  findText: string,
-  replaceText: string,
-  caseSensitive: boolean,
-  prefix: string,
-  suffix: string,
-  startNumber: number,
-  step: number,
-  digits: number,
-  index: number
-): string {
-  const [name, ext] = splitFileName(original);
-
-  switch (mode) {
-    case "find_replace": {
-      if (!findText) return original;
-      const flags = caseSensitive ? "g" : "gi";
-      try {
-        const regex = new RegExp(escapeRegExp(findText), flags);
-        return name.replace(regex, replaceText) + ext;
-      } catch {
-        return original;
-      }
-    }
-    case "prefix_suffix": {
-      return prefix + name + suffix + ext;
-    }
-    case "auto_number": {
-      const num = startNumber + index * step;
-      const numStr = String(num).padStart(digits, "0");
-      return name + numStr + ext;
-    }
-    default:
-      return original;
-  }
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 export default function BatchRename({ open, onClose, onRefresh, files }: Props) {
   const { message } = AntdApp.useApp();
@@ -91,22 +42,26 @@ export default function BatchRename({ open, onClose, onRefresh, files }: Props) 
   const [step, setStep] = useState(1);
   const [digits, setDigits] = useState(2);
   const [loading, setLoading] = useState(false);
+  const operation = useOperation();
+
+  const renameOptions: RenameOptions = useMemo(
+    () => ({
+      mode,
+      findText,
+      replaceText,
+      caseSensitive,
+      prefix,
+      suffix,
+      startNumber,
+      step,
+      digits,
+    }),
+    [mode, findText, replaceText, caseSensitive, prefix, suffix, startNumber, step, digits]
+  );
 
   const previewData = useMemo(() => {
     return files.map((file, index) => {
-      const newName = computeNewName(
-        file.name,
-        mode,
-        findText,
-        replaceText,
-        caseSensitive,
-        prefix,
-        suffix,
-        startNumber,
-        step,
-        digits,
-        index
-      );
+      const newName = computeNewName(file.name, index, renameOptions);
       return {
         key: file.path,
         original: file.name,
@@ -114,7 +69,7 @@ export default function BatchRename({ open, onClose, onRefresh, files }: Props) 
         changed: newName !== file.name,
       };
     });
-  }, [files, mode, findText, replaceText, caseSensitive, prefix, suffix, startNumber, step, digits]);
+  }, [files, renameOptions]);
 
   const hasChanges = previewData.some((item) => item.changed);
 
@@ -124,9 +79,11 @@ export default function BatchRename({ open, onClose, onRefresh, files }: Props) 
       return;
     }
     setLoading(true);
-    try {
-      await invoke("batch_rename", {
-        paths: files.map((f) => f.path),
+    operation.reset();
+    const operationId = await operation.start(
+      "rename",
+      files.map((f) => f.path),
+      {
         mode,
         findText,
         replaceText,
@@ -135,15 +92,34 @@ export default function BatchRename({ open, onClose, onRefresh, files }: Props) 
         startNumber,
         step,
         digits,
-      });
-      message.success("批量重命名成功");
-      onRefresh();
-      onClose();
-    } catch (err) {
-      message.error("批量重命名失败: " + err);
-    } finally {
+        caseSensitive,
+      }
+    );
+    if (!operationId) {
       setLoading(false);
+      message.error("批量重命名失败: " + (operation.error ?? "启动失败"));
+      return;
     }
+    // 命令立刻返回任务 id，真正的改名在后台跑；这里等进度事件收尾。
+    // 不用「等 invoke 返回」——那是 fire-and-forget，用户看不到也停不下来。
+    await new Promise<void>((resolve) => {
+      const stop = setInterval(() => {
+        if (!operation.running) {
+          clearInterval(stop);
+          resolve();
+        }
+      }, 120);
+    });
+    setLoading(false);
+    if (operation.progress?.phase === "cancelled") {
+      message.warning("批量重命名已取消");
+    } else if (operation.progress?.phase === "error") {
+      message.error("批量重命名失败: " + (operation.progress.message || "未知错误"));
+    } else {
+      message.success("批量重命名完成");
+    }
+    onRefresh();
+    onClose();
   };
 
   const columns = [
@@ -263,11 +239,11 @@ export default function BatchRename({ open, onClose, onRefresh, files }: Props) 
       title="批量重命名"
       open={open}
       onOk={handleOk}
-      onCancel={onClose}
+      onCancel={operation.running ? () => void operation.cancel() : onClose}
       okText="应用重命名"
-      cancelText="取消"
+      cancelText={operation.running ? "停止" : "取消"}
       confirmLoading={loading}
-      okButtonProps={{ disabled: !hasChanges }}
+      okButtonProps={{ disabled: !hasChanges || operation.running }}
       width={700}
     >
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
@@ -278,6 +254,27 @@ export default function BatchRename({ open, onClose, onRefresh, files }: Props) 
         />
 
         {renderModeContent()}
+
+        {/* 进行中的进度与取消入口：没有这一段，用户只能看着转圈等它跑完 */}
+        {operation.running && operation.progress && (
+          <div>
+            <Progress
+              percent={operation.progress.percent}
+              status="active"
+            />
+            <Typography.Text type="secondary">
+              {describeProgress(operation.progress)}
+            </Typography.Text>
+            <Button
+              size="small"
+              danger
+              style={{ marginLeft: 12 }}
+              onClick={() => void operation.cancel()}
+            >
+              停止
+            </Button>
+          </div>
+        )}
 
         <div>
           <Typography.Text

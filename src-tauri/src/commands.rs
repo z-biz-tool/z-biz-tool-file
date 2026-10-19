@@ -137,6 +137,136 @@ pub fn list_directory_blocking(path: &str) -> Result<Vec<FileEntry>, String> {
     Ok(result)
 }
 
+/// 分页列目录的返回结果
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagedDirectory {
+    /// 当前页的条目
+    pub entries: Vec<FileEntry>,
+    /// 页码，0 起
+    pub page: usize,
+    /// 每页多少条（已按上下限裁剪过的实际值）
+    pub page_size: usize,
+    /// 目录里一共多少条（不含隐藏文件，取决于 show_hidden）
+    pub total: u64,
+    /// 一共多少页
+    pub total_pages: u64,
+    /// 还有下一页吗
+    pub has_more: bool,
+    /// 这次列目录花了多少毫秒
+    pub elapsed_ms: u64,
+}
+
+/// 每页最少/最多多少条。0 会退化成 1（否则永远返回空页），太大则一次拉太多又变回老问题。
+pub const MIN_PAGE_SIZE: usize = 1;
+pub const MAX_PAGE_SIZE: usize = 1000;
+
+/// 分页列出目录内容
+///
+/// 与 `list_directory` **并存**（老命令签名不动，前端渐进切换）。
+///
+/// ## 为什么比 `list_directory` 快
+///
+/// 老实现会把目录里**每一个**条目都 `metadata()` 一遍（size / mtime），然后整份返回。
+/// 一万个文件的目录就是一万次 stat，而且前端一次拿到全部条目，滚动条还没动就已经
+/// 序列化了一兆多的 JSON。
+///
+/// 这里只对**当前页**的条目做 stat：排序只需要「是不是目录」，而 `DirEntry::file_type()`
+/// 在 macOS/Linux 上直接用 readdir 给的 `d_type`，不额外发起系统调用。
+/// 于是首页的代价 = 一次 readdir + 一次排序 + page_size 次 stat。
+///
+/// ## 排序口径必须和 `list_directory` 一致
+///
+/// 否则同一个目录在两个命令下会给出不同的顺序，前端切换命令时列表会整体重排。
+/// `paged_order_matches_the_full_listing` 那条测试钉住这一点。
+#[tauri::command]
+pub async fn list_directory_paged(
+    path: String,
+    page: usize,
+    page_size: usize,
+    show_hidden: bool,
+) -> Result<PagedDirectory, String> {
+    // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
+    tauri::async_runtime::spawn_blocking(move || {
+        list_directory_paged_blocking(&path, page, page_size, show_hidden)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub fn list_directory_paged_blocking(
+    path: &str,
+    page: usize,
+    page_size: usize,
+    show_hidden: bool,
+) -> Result<PagedDirectory, String> {
+    let started = std::time::Instant::now();
+    let dir_path = Path::new(path);
+    if !dir_path.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+    if !dir_path.is_dir() {
+        return Err(format!("不是目录: {}", path));
+    }
+
+    let page_size = page_size.clamp(MIN_PAGE_SIZE, MAX_PAGE_SIZE);
+    let entries = fs::read_dir(dir_path).map_err(|e| format!("读取目录失败: {}", e))?;
+
+    // 第一遍：只收「名字 + 是不是目录」，不 stat。
+    // file_type() 在 unix 上用 readdir 返回的 d_type，不额外发起系统调用；
+    // 万一某个文件系统给的是 DT_UNKNOWN，它内部才回落到 lstat——仍然比全量 metadata 便宜。
+    let mut collected: Vec<(String, bool, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !show_hidden && file_name.starts_with('.') {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        collected.push((file_name, is_dir, entry.path()));
+    }
+
+    // 目录优先，然后按名称排序——与 list_directory_blocking 同一口径
+    collected.sort_by(|a, b| match (a.1, b.1) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.0.to_lowercase().cmp(&b.0.to_lowercase()),
+    });
+
+    let total = collected.len() as u64;
+    let total_pages = total.div_ceil(page_size as u64);
+    let start = (page as u64).saturating_mul(page_size as u64).min(total) as usize;
+    let end = (start + page_size).min(collected.len());
+
+    // 第二遍：只对当前页做 stat，填 size / mtime
+    let mut page_entries: Vec<FileEntry> = Vec::with_capacity(end - start);
+    for (name, is_dir, full) in &collected[start..end] {
+        let metadata = fs::symlink_metadata(full).ok();
+        let modified = metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        page_entries.push(FileEntry {
+            name: name.clone(),
+            path: full.to_string_lossy().to_string(),
+            is_dir: *is_dir,
+            size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+            modified,
+        });
+    }
+
+    Ok(PagedDirectory {
+        entries: page_entries,
+        page,
+        page_size,
+        total,
+        total_pages,
+        has_more: (end as u64) < total,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
 /// 读取文件内容（文本文件）
 #[tauri::command]
 pub async fn read_file_content(path: String) -> Result<ReadFileResult, String> {
@@ -888,13 +1018,199 @@ pub struct BatchRenameResult {
     pub errors: Vec<String>,
 }
 
+/// 批量重命名的参数。
+///
+/// `batch_rename`（老命令，签名不能动）与 `batch_operation`（新命令，带进度与取消）
+/// **共用这一份参数与同一份实现**：新命令不是另起炉灶的第二套重命名逻辑。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameOptions {
+    /// find_replace / prefix_suffix / auto_number
+    pub mode: String,
+    pub find_text: Option<String>,
+    pub replace_text: Option<String>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+    pub start_number: Option<u32>,
+    /// auto_number 的步长：第 n 项的编号 = 起始 + n * 步长。
+    ///
+    /// ⚠️ 这一项以前**根本没有**：界面上有「步长」输入框，预览也按它算，
+    /// 但后端签名里没有这个参数 ⇒ 那个输入框是摆设，预览还跟实际结果对不上。
+    #[serde(default)]
+    pub step: Option<u32>,
+    /// auto_number 的编号位数，不足用 0 补齐（`01` / `002`）。
+    ///
+    /// ⚠️ 同上：界面上的帮助文字写着「不足位数用 0 补齐」，后端却从来没补过。
+    #[serde(default)]
+    pub digits: Option<u32>,
+    /// find_replace 是否区分大小写。缺省 = **不区分**（与界面默认一致）。
+    #[serde(default)]
+    pub case_sensitive: Option<bool>,
+}
+
+/// JS 正则 `i` 标志（非 Unicode 模式）下的「字符规范化」。
+///
+/// JS 的 Canonicalize 分三步（ES 规范 22.1.1.1）：
+/// 1. Unicode `CaseFolding.txt` 里有**单字符**折叠条目 → 用它；
+/// 2. 字符码位 ≥ 128 且 `toUpperCase()` 恰好一个字符 → 用那个大写字符；
+/// 3. 否则原样返回。
+///
+/// Rust 没有等价物，但照着实现即可 —— 目的只有一个：**两侧的替换结果必须逐字相同**。
+///
+/// 落到可实现的规则上（与 node 实测一致）：
+/// - ASCII 一律折成**小写**（`'R'` → `'r'`，这是 ASCII 段的单字符折叠）；
+/// - 非 ASCII 若 `toUpperCase()` 恰好一个字符就用它（`'é'`/`'É'` 都归一为 `'É'`，因而能互相匹配）；
+/// - 非 ASCII 若大写是多个字符（`'ß'` → `"SS"`）就原样保留 ⇒ `'ß'` **不**与 `'SS'` 匹配。
+///   同理 `'İ'`(U+0130) 归一后仍是 `'İ'`，与 `'i'` 不匹配。
+///
+/// 这三条都用 node 实测过，不是照着规范脑补的。
+fn canonicalize(c: char) -> char {
+    if c.is_ascii() {
+        return c.to_ascii_lowercase();
+    }
+    let mut up = c.to_uppercase();
+    match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    }
+}
+
+/// 忽略大小写的全局替换。
+///
+/// Rust 标准库的 `replace` 只认完全相等，而前端预览用的是 JS 正则的 `gi`。
+/// 两侧必须一样，否则又是"预览说一套、实际做一套"。
+fn replace_ignore_case(haystack: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let mut out = String::with_capacity(haystack.len());
+    let mut rest = haystack;
+    while !rest.is_empty() {
+        match match_ignore_case_at(rest, needle) {
+            Some(consumed) => {
+                out.push_str(replacement);
+                rest = &rest[consumed..];
+            }
+            None => {
+                let ch = rest.chars().next().expect("非空");
+                out.push(ch);
+                rest = &rest[ch.len_utf8()..];
+            }
+        }
+    }
+    out
+}
+
+/// 从 `haystack` 开头处匹配 `needle`（忽略大小写），返回**在 haystack 里实际吃掉多少字节**。
+///
+/// 返回字节数而不是字符数，是因为大小写折叠后长度可能变（`ß` 的大写是 "SS"）；
+/// 直接用 `needle.len()` 去切 haystack 有切在字符中间的风险。
+fn match_ignore_case_at(haystack: &str, needle: &str) -> Option<usize> {
+    let mut h = haystack.chars();
+    let mut n = needle.chars();
+    let mut consumed = 0usize;
+    loop {
+        match (h.next(), n.next()) {
+            // 两边都读完：完全匹配
+            (None, None) => return Some(consumed),
+            // needle 比 haystack 长：不是匹配
+            (None, Some(_)) => return None,
+            // haystack 比 needle 长：**needle 已经匹配上了**（前缀命中），多出来的部分归调用方处理
+            (Some(_), None) => return Some(consumed),
+            (Some(hc), Some(nc)) => {
+                if canonicalize(hc) != canonicalize(nc) {
+                    return None;
+                }
+                consumed += hc.len_utf8();
+            }
+        }
+    }
+}
+
+/// 重命名规则的**纯函数**：给定主名、扩展名、批次序号与参数，算出新文件名。
+///
+/// 抽成纯函数不是为了"好看着"，而是为了让**前端预览与后端实际是同一套规则**：
+/// 预览表里写「文件01.txt」，点下去真变成「文件1.txt」，用户就没法相信这个预览了。
+/// 两侧现在共用 `tests/fixtures/rename-cases.json` 这一份夹具，谁改规则谁先红。
+///
+/// 规则（与界面上的说明一一对应）：
+/// - `find_replace`：只在**主名**里替换，扩展名原样保留；默认忽略大小写。
+/// - `prefix_suffix`：前缀加在主名前，后缀加在主名后、**扩展名前**。
+/// - `auto_number`：编号 = 起始 + 序号 * 步长，不足位数用 0 补齐，插在主名后、扩展名前。
+pub fn compute_renamed_name(
+    stem: &str,
+    extension: Option<&str>,
+    index: usize,
+    opts: &RenameOptions,
+) -> Result<String, String> {
+    let ext = extension.unwrap_or("");
+    match opts.mode.as_str() {
+        "find_replace" => {
+            let find = opts.find_text.as_deref().unwrap_or("");
+            if find.is_empty() {
+                return Ok(format!("{}{}", stem, ext));
+            }
+            let replace = opts.replace_text.as_deref().unwrap_or("");
+            let replaced = if opts.case_sensitive.unwrap_or(false) {
+                stem.replace(find, replace)
+            } else {
+                replace_ignore_case(stem, find, replace)
+            };
+            Ok(format!("{}{}", replaced, ext))
+        }
+        "prefix_suffix" => {
+            let p = opts.prefix.as_deref().unwrap_or("");
+            let s = opts.suffix.as_deref().unwrap_or("");
+            Ok(format!("{}{}{}{}", p, stem, s, ext))
+        }
+        "auto_number" => {
+            let start = opts.start_number.unwrap_or(1);
+            let step = opts.step.unwrap_or(1);
+            let digits = opts.digits.unwrap_or(0) as usize;
+            let num = start.saturating_add((index as u32).saturating_mul(step));
+            // 与 JS 的 padStart(digits, "0") 同语义：只补齐，不截断
+            let num_str = if digits > 0 {
+                format!("{:0width$}", num, width = digits)
+            } else {
+                num.to_string()
+            };
+            Ok(format!("{}{}{}", stem, num_str, ext))
+        }
+        _ => Err(format!("不支持的重命名模式: {}", opts.mode)),
+    }
+}
+
 /// 批量重命名文件
 #[tauri::command]
-pub async fn batch_rename(paths: Vec<String>, mode: String, find_text: Option<String>, replace_text: Option<String>, prefix: Option<String>, suffix: Option<String>, start_number: Option<u32>) -> Result<BatchRenameResult, String> {
+pub async fn batch_rename(
+    paths: Vec<String>,
+    mode: String,
+    find_text: Option<String>,
+    replace_text: Option<String>,
+    prefix: Option<String>,
+    suffix: Option<String>,
+    start_number: Option<u32>,
+    step: Option<u32>,
+    digits: Option<u32>,
+    case_sensitive: Option<bool>,
+) -> Result<BatchRenameResult, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || batch_rename_blocking(paths, &mode, find_text, replace_text, prefix, suffix, start_number))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        batch_rename_blocking(
+            paths,
+            &mode,
+            find_text,
+            replace_text,
+            prefix,
+            suffix,
+            start_number,
+            step,
+            digits,
+            case_sensitive,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub fn batch_rename_blocking(
@@ -905,85 +1221,31 @@ pub fn batch_rename_blocking(
     prefix: Option<String>,
     suffix: Option<String>,
     start_number: Option<u32>,
+    step: Option<u32>,
+    digits: Option<u32>,
+    case_sensitive: Option<bool>,
 ) -> Result<BatchRenameResult, String> {
+    let opts = RenameOptions {
+        mode: mode.to_string(),
+        find_text,
+        replace_text,
+        prefix,
+        suffix,
+        start_number,
+        step,
+        digits,
+        case_sensitive,
+    };
+
     let mut renamed: Vec<BatchRenameItem> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
-    let start_num = start_number.unwrap_or(1);
 
     for (index, path_str) in paths.iter().enumerate() {
-        // 批量重命名也接 path_guard：拒绝任何黑名单路径
-        let canonical = match crate::path_guard::validate(path_str) {
-            Ok(p) => p,
-            Err(e) => {
-                errors.push(format!("拒绝 {}: {}", path_str, e));
-                continue;
-            }
-        };
-        if !canonical.exists() {
-            errors.push(format!("路径不存在: {}", path_str));
-            continue;
-        }
-
-        let old_name = canonical
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        let new_name = match mode {
-            "find_replace" => {
-                let find = find_text.as_deref().unwrap_or("");
-                let replace = replace_text.as_deref().unwrap_or("");
-                old_name.replace(find, replace)
-            }
-            "prefix_suffix" => {
-                let p = prefix.as_deref().unwrap_or("");
-                let s = suffix.as_deref().unwrap_or("");
-                format!("{}{}{}", p, old_name, s)
-            }
-            "auto_number" => {
-                let num = start_num + index as u32;
-                if let Some(ext) = canonical.extension() {
-                    let stem = canonical
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    format!("{}{}.{}", stem, num, ext.to_string_lossy())
-                } else {
-                    format!("{}{}", old_name, num)
-                }
-            }
-            _ => {
-                errors.push(format!("不支持的重命名模式: {}", mode));
-                continue;
-            }
-        };
-
-        if new_name == old_name {
-            continue;
-        }
-
-        let parent = match canonical.parent() {
-            Some(p) => p,
-            None => {
-                errors.push(format!("无法获取父目录: {}", path_str));
-                continue;
-            }
-        };
-
-        let new_path = parent.join(&new_name);
-
-        match fs::rename(&canonical, &new_path) {
-            Ok(_) => {
-                renamed.push(BatchRenameItem {
-                    old_path: path_str.clone(),
-                    new_path: new_path.to_string_lossy().to_string(),
-                    old_name,
-                    new_name,
-                });
-            }
-            Err(e) => {
-                errors.push(format!("重命名 {} 失败: {}", path_str, e));
-            }
+        match rename_one(path_str, index, &opts) {
+            Ok(Some(item)) => renamed.push(item),
+            // 新旧同名：这一项什么都不用做，也不算错误
+            Ok(None) => {}
+            Err(e) => errors.push(e),
         }
     }
 
@@ -992,6 +1254,76 @@ pub fn batch_rename_blocking(
         renamed,
         errors,
     })
+}
+
+/// 重命名**一个**文件。
+///
+/// 批量重命名（`batch_rename`）与批量操作（`batch_operation`，带进度事件与取消）
+/// 共用这一份实现——新命令只是在外面多套了一层进度/取消，逐项的活还是这一段。
+///
+/// 返回 `Ok(None)` 表示「新旧同名，这一项不用动」，调用方直接跳过。
+///
+/// `index` 是这一项在批次里的序号：`auto_number` 模式按它编号（编号跟着选中顺序走）。
+pub fn rename_one(
+    path_str: &str,
+    index: usize,
+    opts: &RenameOptions,
+) -> Result<Option<BatchRenameItem>, String> {
+    // 批量重命名也接 path_guard：拒绝任何黑名单路径
+    let canonical = match crate::path_guard::validate(path_str) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(format!("拒绝 {}: {}", path_str, e));
+        }
+    };
+    if !canonical.exists() {
+        return Err(format!("路径不存在: {}", path_str));
+    }
+
+    let old_name = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // 新规则一律走纯函数：前端预览与后端实际必须是同一套规则（见 compute_renamed_name 的注释）
+    let stem = canonical
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| old_name.clone());
+    // 扩展名**带点**（".txt"），与前端 `splitFileName` 的切法一致。
+    // Rust 的 `Path::extension()` 返回的是不带点的 "txt"，直接拼会得到 "report01txt"。
+    let extension = canonical
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()));
+    let new_name = compute_renamed_name(
+        &stem,
+        extension.as_deref(),
+        index,
+        opts,
+    )?;
+
+    if new_name == old_name {
+        return Ok(None);
+    }
+
+    let parent = match canonical.parent() {
+        Some(p) => p,
+        None => {
+            return Err(format!("无法获取父目录: {}", path_str));
+        }
+    };
+
+    let new_path = parent.join(&new_name);
+
+    match fs::rename(&canonical, &new_path) {
+        Ok(_) => Ok(Some(BatchRenameItem {
+            old_path: path_str.to_string(),
+            new_path: new_path.to_string_lossy().to_string(),
+            old_name,
+            new_name,
+        })),
+        Err(e) => Err(format!("重命名 {} 失败: {}", path_str, e)),
+    }
 }
 
 /// 列出目录内容（支持显示隐藏文件）
@@ -3011,5 +3343,311 @@ mod external_open_tests {
         assert!(external_open_target("report.txt", false).is_err());
         assert!(external_open_target("", false).is_err());
         assert!(external_open_target("/etc/..", true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod paged_listing_tests {
+    use super::*;
+    use crate::test_bridge::TempDir;
+
+    /// 建一个目录，返回它和里面所有条目的名字
+    fn case(tag: &str, files: &[&str], dirs: &[&str]) -> TempDir {
+        let dir = TempDir::new(tag);
+        for f in files {
+            fs::write(dir.join(f), "x").unwrap();
+        }
+        for d in dirs {
+            fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        dir
+    }
+
+    fn paged(dir: &Path, page: usize, page_size: usize, show_hidden: bool) -> PagedDirectory {
+        list_directory_paged_blocking(&dir.to_string_lossy(), page, page_size, show_hidden).unwrap()
+    }
+
+    fn names(p: &PagedDirectory) -> Vec<String> {
+        p.entries.iter().map(|e| e.name.clone()).collect()
+    }
+
+    #[test]
+    fn first_page_returns_the_requested_slice() {
+        let dir = case(
+            "paged-first",
+            &["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"],
+            &[],
+        );
+        let p = paged(&dir, 0, 2, false);
+        assert_eq!(names(&p), vec!["a.txt", "b.txt"]);
+        assert_eq!(p.page, 0);
+        assert_eq!(p.page_size, 2);
+        assert_eq!(p.total, 5);
+        assert_eq!(p.total_pages, 3);
+        assert!(p.has_more);
+    }
+
+    #[test]
+    fn last_page_is_the_boundary_page_and_ends_the_list() {
+        let dir = case(
+            "paged-last",
+            &["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"],
+            &[],
+        );
+        // 5 条 / 每页 2 条 = 3 页，最后一页只有 1 条
+        let p = paged(&dir, 2, 2, false);
+        assert_eq!(names(&p), vec!["e.txt"]);
+        assert_eq!(p.total_pages, 3);
+        assert!(!p.has_more, "最后一页之后没有下一页");
+    }
+
+    #[test]
+    fn page_exactly_at_the_end_is_empty_but_still_reports_the_total() {
+        let dir = case("paged-exact", &["a.txt", "b.txt", "c.txt", "d.txt"], &[]);
+        // 4 条 / 每页 2 条 = 整除，最后一页之后是空的
+        let p = paged(&dir, 2, 2, false);
+        assert!(p.entries.is_empty());
+        assert_eq!(p.total, 4);
+        assert_eq!(p.total_pages, 2);
+        assert!(!p.has_more);
+    }
+
+    #[test]
+    fn page_beyond_the_end_is_empty_and_does_not_panic() {
+        let dir = case("paged-beyond", &["a.txt", "b.txt"], &[]);
+        let p = paged(&dir, 99, 2, false);
+        assert!(p.entries.is_empty());
+        assert_eq!(p.total, 2);
+        assert!(!p.has_more);
+    }
+
+    #[test]
+    fn page_size_is_clamped_to_a_sane_range() {
+        let dir = case("paged-clamp", &["a.txt", "b.txt"], &[]);
+        // 0 不能当"无限大"，也不能变成空页
+        let p = paged(&dir, 0, 0, false);
+        assert_eq!(p.page_size, MIN_PAGE_SIZE);
+        assert_eq!(names(&p), vec!["a.txt"]);
+
+        // 太大要被裁到上限
+        let p = paged(&dir, 0, 1_000_000, false);
+        assert_eq!(p.page_size, MAX_PAGE_SIZE);
+        assert_eq!(p.entries.len(), 2);
+    }
+
+    #[test]
+    fn hidden_files_are_skipped_unless_asked_for() {
+        let dir = case("paged-hidden", &[".secret", "a.txt"], &[]);
+        let p = paged(&dir, 0, 10, false);
+        assert_eq!(names(&p), vec!["a.txt"]);
+        assert_eq!(p.total, 1);
+
+        let p = paged(&dir, 0, 10, true);
+        assert_eq!(p.total, 2);
+        assert!(names(&p).contains(&".secret".to_string()));
+    }
+
+    #[test]
+    fn directories_come_first() {
+        let dir = case("paged-dirs", &["b.txt", "a.txt"], &["zdir", "adir"]);
+        let p = paged(&dir, 0, 10, false);
+        assert_eq!(names(&p), vec!["adir", "zdir", "a.txt", "b.txt"]);
+        assert!(p.entries[0].is_dir);
+        assert!(!p.entries[2].is_dir);
+    }
+
+    #[test]
+    fn paged_order_matches_the_full_listing() {
+        // 换命令不能让列表重排：分页版的顺序必须与 list_directory 完全一致
+        let dir = case(
+            "paged-order",
+            &["b.txt", "A.txt", "c.txt", "10.txt", "2.txt"],
+            &["zdir", "Adir"],
+        );
+        let full = list_directory_blocking(&dir.to_string_lossy()).unwrap();
+        let full_names: Vec<String> = full.iter().map(|e| e.name.clone()).collect();
+
+        let mut paged_names: Vec<String> = Vec::new();
+        let mut page = 0;
+        loop {
+            let p = paged(&dir, page, 2, false);
+            paged_names.extend(names(&p));
+            if !p.has_more {
+                break;
+            }
+            page += 1;
+        }
+        assert_eq!(paged_names, full_names);
+    }
+
+    #[test]
+    fn empty_directory_is_a_valid_empty_page() {
+        let dir = case("paged-empty", &[], &[]);
+        let p = paged(&dir, 0, 10, false);
+        assert!(p.entries.is_empty());
+        assert_eq!(p.total, 0);
+        assert_eq!(p.total_pages, 0);
+        assert!(!p.has_more);
+    }
+
+    #[test]
+    fn missing_path_and_file_path_are_rejected() {
+        let dir = case("paged-err", &["a.txt"], &[]);
+        let missing = dir.join("nope");
+        let e = list_directory_paged_blocking(&missing.to_string_lossy(), 0, 10, false).unwrap_err();
+        assert!(e.contains("路径不存在"), "实际: {}", e);
+
+        let file = dir.join("a.txt");
+        let e = list_directory_paged_blocking(&file.to_string_lossy(), 0, 10, false).unwrap_err();
+        assert!(e.contains("不是目录"), "实际: {}", e);
+    }
+
+    #[test]
+    fn entries_carry_size_and_mtime() {
+        let dir = case("paged-meta", &["a.txt"], &[]);
+        fs::write(dir.join("a.txt"), "hello").unwrap();
+        let p = paged(&dir, 0, 10, false);
+        assert_eq!(p.entries[0].size, 5);
+        assert!(p.entries[0].modified > 0, "mtime 不该是 0");
+        assert!(p.entries[0].path.ends_with("a.txt"));
+    }
+
+    #[test]
+    fn first_page_of_a_ten_thousand_file_directory_stays_under_the_budget() {
+        // T3-04 的验收：10000 文件目录首页 <100ms。
+        // 这里用 1000ms 作断言上限（比验收线宽 10 倍，避免 CI 机器抖动误报），
+        // 实测值见 doc/优化方案/08_本轮深度优化实施记录.md。
+        let dir = TempDir::new("paged-10k");
+        for i in 0..10_000 {
+            fs::write(dir.join(format!("f{:05}.txt", i)), "").unwrap();
+        }
+        let p = paged(&dir, 0, 100, false);
+        eprintln!("MEASURE paged10k elapsed_ms={}", p.elapsed_ms);
+        let full = list_directory_blocking(&dir.to_string_lossy()).unwrap();
+        let t = std::time::Instant::now();
+        let _ = list_directory_blocking(&dir.to_string_lossy()).unwrap();
+        eprintln!("MEASURE full10k elapsed_ms={}", t.elapsed().as_millis());
+        eprintln!("MEASURE full10k entries={}", full.len());
+        assert_eq!(p.entries.len(), 100);
+        assert_eq!(p.total, 10_000);
+        assert_eq!(p.total_pages, 100);
+        assert!(p.has_more);
+        assert!(
+            p.elapsed_ms < 1000,
+            "首页取了 {}ms，超过预算",
+            p.elapsed_ms
+        );
+    }
+}
+
+#[cfg(test)]
+mod rename_contract_tests {
+    use super::*;
+
+    /// 夹具里的一个用例。
+    ///
+    /// `opts` 直接反序列化成 `RenameOptions` —— 夹具里的字段名就是**前后端的线上格式**
+    /// （camelCase），所以这份夹具顺带验了 serde 的字段名映射。
+    #[derive(Deserialize)]
+    struct Case {
+        name: String,
+        #[serde(rename = "oldName")]
+        old_name: String,
+        index: usize,
+        opts: RenameOptions,
+        expected: String,
+    }
+
+    /// 按「最后一个点」切分主名与扩展名（**扩展名带点**）。
+    ///
+    /// 必须与前端 `splitFileName` 的切法逐字一致，否则夹具测的不是同一件事：
+    /// 前端在点位于开头（".gitignore"）或没有点时，扩展名是空串。
+    fn split_like_frontend(file_name: &str) -> (String, Option<String>) {
+        match file_name.rfind('.') {
+            Some(dot) if dot > 0 => (
+                file_name[..dot].to_string(),
+                Some(file_name[dot..].to_string()),
+            ),
+            _ => (file_name.to_string(), None),
+        }
+    }
+
+    fn cases() -> Vec<Case> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tests/fixtures/rename-cases.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读不到重命名夹具 {}: {}", path, e));
+        let v: serde_json::Value = serde_json::from_str(&raw).expect("夹具不是合法 JSON");
+        let arr = v
+            .get("cases")
+            .and_then(|c| c.as_array())
+            .expect("夹具缺 cases 数组");
+        arr.iter()
+            .map(|c| serde_json::from_value(c.clone()).expect("用例结构不对"))
+            .collect()
+    }
+
+    /// 夹具读空的话，后面的断言会「全绿」而什么也没测 —— 先证明尺是有效的。
+    #[test]
+    fn fixture_is_actually_loaded() {
+        let cs = cases();
+        assert!(cs.len() >= 10, "夹具用例太少: {}", cs.len());
+    }
+
+    /// 后端算出来的名字必须与夹具一致。
+    ///
+    /// 前端侧同一份夹具的断言在 `tests/renameContract.test.ts`。
+    #[test]
+    fn every_case_matches_the_expected_name() {
+        for c in cases() {
+            let (stem, ext) = split_like_frontend(&c.old_name);
+            let got = compute_renamed_name(&stem, ext.as_deref(), c.index, &c.opts)
+                .unwrap_or_else(|e| panic!("用例「{}」算不出新名: {}", c.name, e));
+            assert_eq!(got, c.expected, "用例「{}」后端算出的名字与夹具不符", c.name);
+        }
+    }
+
+    /// 步长与位数以前根本传不到后端（签名里没有），补上后必须有测试钉住。
+    #[test]
+    fn step_and_digits_are_honoured() {
+        let opts = RenameOptions {
+            mode: "auto_number".to_string(),
+            start_number: Some(1),
+            step: Some(5),
+            digits: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(
+            compute_renamed_name("report", Some(".txt"), 1, &opts).unwrap(),
+            "report006.txt"
+        );
+    }
+
+    /// 忽略大小写的全局替换：Rust 没有 `gi` 模式，得自己实现。
+    #[test]
+    fn ignore_case_replace_follows_js_canonicalization() {
+        assert_eq!(replace_ignore_case("aXbXc", "X", "-"), "a-b-c");
+        assert_eq!(replace_ignore_case("abc", "", "-"), "abc");
+        assert_eq!(replace_ignore_case("ABC", "b", "-"), "A-C");
+        // 与 JS 的 `/i` 规范化规则对齐：'İ'(U+0130) 规范化后不等于 'i'，因此**不匹配**。
+        // 这条看着反直觉，但正是"两侧必须逐字一致"的要求 —— JS 那边也是不匹配。
+        assert_eq!(replace_ignore_case("İstanbul", "i̇stanbul", "City"), "İstanbul");
+    }
+
+    /// 缺省语义：区分大小写 = false（与界面默认一致）。
+    #[test]
+    fn case_sensitive_defaults_to_false() {
+        let opts = RenameOptions {
+            mode: "find_replace".to_string(),
+            find_text: Some("REPORT".to_string()),
+            replace_text: Some("Doc".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            compute_renamed_name("report2024", Some(".txt"), 0, &opts).unwrap(),
+            "Doc2024.txt"
+        );
     }
 }

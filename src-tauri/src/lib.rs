@@ -37,6 +37,7 @@ mod ocr;
 mod aria2;
 mod library;
 mod updater;
+mod operation;
 
 use watcher::WatcherState;
 
@@ -49,8 +50,10 @@ pub fn run() {
         .manage(WatcherState::default())
         .manage(aria2::Aria2State::default())
         .manage(archive::job::Jobs::default())
+        .manage(operation::Operations::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_directory,
+            commands::list_directory_paged,
             commands::read_file_content,
             commands::search_files,
             commands::get_file_info,
@@ -63,6 +66,9 @@ pub fn run() {
             commands::create_file,
             commands::create_directory,
             commands::batch_rename,
+            operation::batch_operation,
+            operation::cancel_operation,
+            operation::operation_state,
             commands::cleanup_epub_temp,
             commands::list_directory_with_hidden,
             commands::get_file_permissions,
@@ -449,6 +455,53 @@ pub mod test_bridge {
     pub fn call_read_file_content(path: &str) -> Result<crate::commands::ReadFileResult, String> {
         crate::commands::read_file_content_blocking(path)
     }
+
+    // ---- 批量操作（operation/）：进度事件 + 取消 ----
+    //
+    // 集成测试里同样没有 WebView 也没有 AppHandle，所以走 `run_operation(None, ...)`：
+    // 它只更新内存里的快照、不发事件，但驱动的是**和命令完全同一条生产代码路径**
+    // （账本 → 令牌 → 批量循环 → 逐项干活 → 终态）。
+    pub use crate::commands::RenameOptions;
+    pub use crate::operation::{Kind as OperationKind, Operations, Progress as OperationProgress};
+
+    /// 跑一次批量操作，返回 operation_id。走的是命令同一条路径。
+    pub fn call_batch_operation(
+        ops: &Operations,
+        kind: &str,
+        paths: Vec<String>,
+        rename: Option<RenameOptions>,
+    ) -> Result<String, String> {
+        let k = crate::operation::Kind::from_str(kind)
+            .ok_or_else(|| format!("不支持的批量操作类型: {}", kind))?;
+        if paths.is_empty() {
+            return Err("没有要处理的文件".to_string());
+        }
+        let id = crate::operation::new_operation_id(k);
+        // 先登记再干活，和命令里的顺序一致（前端拿到 id 立刻点取消也不至于撞空）
+        ops.token(&id);
+        crate::operation::run_operation(None, ops, id.clone(), k, paths, rename);
+        Ok(id)
+    }
+
+    /// 请求取消（与 `cancel_operation` 命令同一条路径）。
+    pub fn call_cancel_operation(ops: &Operations, operation_id: &str) -> bool {
+        ops.cancel(operation_id)
+    }
+
+    /// 拿任务快照（与 `operation_state` 命令同一条路径）。
+    pub fn call_operation_state(ops: &Operations, operation_id: &str) -> Option<OperationProgress> {
+        ops.snapshot(operation_id)
+    }
+
+    /// 分页列目录（与 `list_directory_paged` 命令同一条路径）。
+    pub fn call_list_directory_paged(
+        path: &str,
+        page: usize,
+        page_size: usize,
+        show_hidden: bool,
+    ) -> Result<crate::commands::PagedDirectory, String> {
+        crate::commands::list_directory_paged_blocking(path, page, page_size, show_hidden)
+    }
     pub fn call_search_files(
         path: &str,
         query: &str,
@@ -492,5 +545,51 @@ pub mod test_bridge {
             Some(quality),
             Some(max_dimension),
         )
+    }
+}
+
+#[cfg(test)]
+mod handler_registration_tests {
+    /// **写进文件 ≠ 注册进 handler。**
+    ///
+    /// Tauri 是在运行时查这张表的：命令函数存在但没写进 `generate_handler!`，
+    /// 编译期一点提示都没有，前端 invoke 时才报 "command xxx not found"。
+    /// 台账里 T2-05/T2-06/T3-04 记的就是"注册表里有符号 ≠ 注册了"这个坑，
+    /// 所以这里直接把源码翻开查一遍。
+    #[test]
+    fn new_commands_are_registered_in_the_invoke_handler() {
+        let src = include_str!("lib.rs");
+        let anchor = "invoke_handler(tauri::generate_handler![";
+        let start = src
+            .find(anchor)
+            .expect("找不到 invoke_handler(tauri::generate_handler![ 这一段");
+        let end = src[start..]
+            .find(']')
+            .expect("generate_handler! 的块没有闭合") + start;
+        let block = &src[start..end];
+
+        for cmd in [
+            "operation::batch_operation",
+            "operation::cancel_operation",
+            "operation::operation_state",
+            "commands::list_directory_paged",
+        ] {
+            assert!(
+                block.contains(cmd),
+                "命令 {} 没有注册进 invoke_handler",
+                cmd
+            );
+        }
+    }
+
+    /// managed state 也得挂上：命令签名里的 `State<'_, Operations>` 拿不到状态，
+    /// 运行时才会炸。
+    #[test]
+    fn operation_registry_is_managed_state() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.contains(".manage(operation::Operations::default())"),
+            "Operations 没有挂成 managed state"
+        );
     }
 }
