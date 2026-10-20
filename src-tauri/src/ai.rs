@@ -185,3 +185,62 @@ pub async fn ai_chat(
     let cfg = load_llm_config(app)?;
     call_llm(&cfg, &system, &user).await
 }
+
+#[cfg(test)]
+mod minimax_live_tests {
+    use super::call_llm;
+    use crate::llm_config::LlmConfig;
+
+    /// **真实 API 实测**：用真的 MiniMax 端点跑一遍本仓自己的 `call_llm`。
+    ///
+    /// 本仓的 provider 取值是 `"openai" | "anthropic" | "ollama" | "custom"`
+    /// —— MiniMax 是 OpenAI 兼容的，填 `provider = "openai"` + MiniMax 的
+    /// base_url 即可（"custom" 同为 OpenAI 兼容路径）。
+    /// 2026-10-20 实测 `https://api.minimaxi.com/v1/chat/completions` 返回 200。
+    ///
+    /// 跑法：`MINIMAX_API_KEY=<key> cargo test --lib minimax`
+    /// 没设 key 时**显式打印跳过原因**。
+    #[tokio::test]
+    async fn minimax_live_call_llm() {
+        let Ok(key) = std::env::var("MINIMAX_API_KEY") else {
+            eprintln!("[LIVE] 跳过 minimax 真实 API 实测：未设置 MINIMAX_API_KEY（这是「没跑」，不是「跑过了」）");
+            return;
+        };
+        let cfg = LlmConfig {
+            provider: "openai".to_string(),
+            api_key: key,
+            base_url: std::env::var("MINIMAX_BASE_URL")
+                .unwrap_or_else(|_| "https://api.minimaxi.com/v1".to_string()),
+            model: std::env::var("MINIMAX_MODEL")
+                .unwrap_or_else(|_| "MiniMax-M3.1-Flash".to_string()),
+            timeout_secs: 60,
+            temperature: 0.2,
+        };
+        let out = call_llm(&cfg, "你是助手", "只回两个字：收到")
+            .await
+            .expect("真实调用应成功");
+        assert!(!out.trim().is_empty(), "返回内容为空");
+        eprintln!("[LIVE] file call_llm 真实调用成功：{}", &out.chars().take(40).collect::<String>());
+    }
+
+    /// 反向钉：假 key 必须被服务端拒。
+    #[tokio::test]
+    async fn minimax_live_rejects_bad_key() {
+        let Ok(_key) = std::env::var("MINIMAX_API_KEY") else {
+            eprintln!("[LIVE] 跳过（未设置 MINIMAX_API_KEY）");
+            return;
+        };
+        let cfg = LlmConfig {
+            provider: "openai".to_string(),
+            api_key: "sk-cp-definitely-invalid-key".to_string(),
+            base_url: "https://api.minimaxi.com/v1".to_string(),
+            model: "MiniMax-M3.1-Flash".to_string(),
+            timeout_secs: 60,
+            temperature: 0.2,
+        };
+        let err = call_llm(&cfg, "你是助手", "hi")
+            .await
+            .expect_err("假 key 必须被拒");
+        assert!(err.contains("401") || err.contains("403"), "期望 401/403，实际：{err}");
+    }
+}
