@@ -220,7 +220,7 @@ mod minimax_live_tests {
             .await
             .expect("真实调用应成功");
         assert!(!out.trim().is_empty(), "返回内容为空");
-        eprintln!("[LIVE] file call_llm 真实调用成功：{}", &out.chars().take(40).collect::<String>());
+        eprintln!("[LIVE] file call_llm 真实调用成功：{}", out.chars().take(40).collect::<String>());
     }
 
     /// 反向钉：假 key 必须被服务端拒。
