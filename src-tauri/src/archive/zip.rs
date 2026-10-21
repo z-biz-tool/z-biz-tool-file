@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 // Datelike/Timelike 要显式引进来：`unix_to_dos` 取的 year()/month()/hour() 都是
 // 这两个 trait 上的方法，不在作用域里就是"方法不存在"
-use chrono::{Datelike, Timelike, TimeZone};
+use chrono::{Datelike, TimeZone, Timelike};
 use zip::read::ZipArchive;
 use zip::write::{FileOptions, ZipWriter};
 use zip::{AesMode, CompressionMethod, DateTime};
@@ -102,7 +102,8 @@ fn scan(ar: &mut Ar) -> Result<Vec<Meta>, String> {
 fn dos_to_unix(dt: Option<DateTime>) -> i64 {
     let Some(t) = dt else { return 0 };
     let date = chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32);
-    let time = chrono::NaiveTime::from_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32);
+    let time =
+        chrono::NaiveTime::from_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32);
     let (Some(d), Some(tm)) = (date, time) else {
         return 0;
     };
@@ -285,15 +286,16 @@ fn write_one(
     reporter: &mut Reporter,
     stats: &mut Stats,
 ) -> Result<(), String> {
-    let target = match guard::resolve_target(dest, out_rel, opts.overwrite).map_err(|e| e.to_string())? {
-        Some(t) => t,
-        None => {
-            stats.skipped += 1;
-            // 跳过的条目也要把字节数记上，否则进度条永远到不了 100%
-            reporter.advance_bytes(m.size);
-            return Ok(());
-        }
-    };
+    let target =
+        match guard::resolve_target(dest, out_rel, opts.overwrite).map_err(|e| e.to_string())? {
+            Some(t) => t,
+            None => {
+                stats.skipped += 1;
+                // 跳过的条目也要把字节数记上，否则进度条永远到不了 100%
+                reporter.advance_bytes(m.size);
+                return Ok(());
+            }
+        };
 
     if m.is_dir {
         fs::create_dir_all(&target).map_err(|e| format!("建目录失败: {}", e))?;
@@ -571,8 +573,8 @@ fn add_path(
         stats.skipped += 1;
         return Ok(());
     }
-    let meta = fs::symlink_metadata(src)
-        .map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
+    let meta =
+        fs::symlink_metadata(src).map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
     let name = super::tar::archive_name_for(src, base, opts.store_full_path)?;
     if name.is_empty() {
         return Ok(());
@@ -582,7 +584,10 @@ fn add_path(
         writer
             // 目录条目不加密也不需要压缩参数，所以这里可以用 `'static`；
             // 类型参数必须写全，`FileOptions::default()` 推不出 T
-            .add_directory(format!("{}/", name), FileOptions::<'static, 'static, ()>::default())
+            .add_directory(
+                format!("{}/", name),
+                FileOptions::<'static, 'static, ()>::default(),
+            )
             .map_err(|e| format!("写入目录 {} 失败: {}", name, e))?;
         stats.entries_done += 1;
         for child in read_dir_sorted(src)? {
@@ -747,7 +752,10 @@ pub fn add(
 
 fn unique_temp_sibling(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or(Path::new("."));
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("archive");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archive");
     parent.join(format!("{}.{}.zbtzip.tmp", stem, uuid::Uuid::new_v4()))
 }
 
@@ -756,7 +764,10 @@ fn unique_temp_sibling(path: &Path) -> PathBuf {
 /// 用途只有一个：追加时把**同名的旧条目**丢掉。ZIP 格式允许重名条目，但解压时
 /// 遇到哪个算哪个，用户看到的是"我明明加进去了，内容还是旧的"。7-Zip 在这种情况下
 /// 是直接替换的，跟上。
-fn collect_names(sources: &[PathBuf], opts: &CreateOptions) -> Result<std::collections::HashSet<String>, String> {
+fn collect_names(
+    sources: &[PathBuf],
+    opts: &CreateOptions,
+) -> Result<std::collections::HashSet<String>, String> {
     let mut names = std::collections::HashSet::new();
     fn walk(
         src: &Path,
@@ -767,7 +778,8 @@ fn collect_names(sources: &[PathBuf], opts: &CreateOptions) -> Result<std::colle
         if super::tar::excluded(src, &opts.exclude_patterns) {
             return Ok(());
         }
-        let meta = fs::symlink_metadata(src).map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
+        let meta =
+            fs::symlink_metadata(src).map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
         let name = super::tar::archive_name_for(src, base, opts.store_full_path)?;
         if name.is_empty() {
             return Ok(());
@@ -844,7 +856,7 @@ mod tests {
 
         let dest = tmp.join("out.zip");
         create(
-            &[src.clone()],
+            std::slice::from_ref(&src),
             &dest,
             &base_create_opts(),
             &mut rep("c"),
@@ -862,13 +874,16 @@ mod tests {
 
         let out = tmp.join("out");
         let ex = ExtractOptions {
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         let stats = extract(&dest, &out, &ex, &mut rep("e"), &flag()).unwrap();
         assert_eq!(stats.entries_done, 3, "entries_done 只数文件，目录不计");
         assert_eq!(fs::read(out.join("src/a.txt")).unwrap(), b"hello world");
-        assert_eq!(fs::read(out.join("src/sub/deep/c.bin")).unwrap().len(), 5000);
+        assert_eq!(
+            fs::read(out.join("src/sub/deep/c.bin")).unwrap().len(),
+            5000
+        );
     }
 
     #[test]
@@ -894,11 +909,17 @@ mod tests {
                 level: Some(6),
                 ..Default::default()
             };
-            create(&[src.clone()], &dest, &opts, &mut rep("c"), &flag())
-                .unwrap_or_else(|e| panic!("方法 {:?} 压缩失败: {}", method, e));
+            create(
+                std::slice::from_ref(&src),
+                &dest,
+                &opts,
+                &mut rep("c"),
+                &flag(),
+            )
+            .unwrap_or_else(|e| panic!("方法 {:?} 压缩失败: {}", method, e));
             let out = tmp.join(format!("o{}", i));
             let ex = ExtractOptions {
-                overwrite: guard::Overwrite::Overwrite,
+                overwrite: guard::Overwrite::Replace,
                 ..Default::default()
             };
             extract(&dest, &out, &ex, &mut rep("e"), &flag())
@@ -946,7 +967,14 @@ mod tests {
             password: Some("hunter2".to_string()),
             ..Default::default()
         };
-        create(&[src.clone()], &dest, &opts, &mut rep("c"), &flag()).unwrap();
+        create(
+            std::slice::from_ref(&src),
+            &dest,
+            &opts,
+            &mut rep("c"),
+            &flag(),
+        )
+        .unwrap();
 
         let entries = list(&dest).unwrap();
         assert!(
@@ -955,13 +983,20 @@ mod tests {
         );
 
         let out = tmp.join("nopw");
-        let err = extract(&dest, &out, &ExtractOptions::default(), &mut rep("e"), &flag()).unwrap_err();
+        let err = extract(
+            &dest,
+            &out,
+            &ExtractOptions::default(),
+            &mut rep("e"),
+            &flag(),
+        )
+        .unwrap_err();
         assert!(err.contains("密码"), "错误信息应该说密码: {}", err);
 
         let out = tmp.join("ok");
         let ex = ExtractOptions {
             password: Some("hunter2".to_string()),
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         extract(&dest, &out, &ex, &mut rep("e"), &flag()).unwrap();
@@ -970,7 +1005,7 @@ mod tests {
         let out = tmp.join("bad");
         let ex = ExtractOptions {
             password: Some("wrong-password".to_string()),
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         let err = extract(&dest, &out, &ex, &mut rep("e"), &flag()).unwrap_err();
@@ -992,26 +1027,47 @@ mod tests {
             password: Some("pw".to_string()),
             ..Default::default()
         };
-        create(&[s1.clone()], &dest, &opts, &mut rep("c"), &flag()).unwrap();
+        create(
+            std::slice::from_ref(&s1),
+            &dest,
+            &opts,
+            &mut rep("c"),
+            &flag(),
+        )
+        .unwrap();
 
         let s2 = tmp.join("s2");
         fs::create_dir_all(&s2).unwrap();
         fs::write(s2.join("new.txt"), b"new content").unwrap();
         // 追加时不提供密码也要成功：原条目是密文搬运，新条目不加密
-        add(&dest, &[s2], &CreateOptions::default(), &mut rep("a"), &flag()).unwrap();
+        add(
+            &dest,
+            &[s2],
+            &CreateOptions::default(),
+            &mut rep("a"),
+            &flag(),
+        )
+        .unwrap();
 
         let entries = list(&dest).unwrap();
         assert!(
-            entries.iter().any(|e| e.path == "s1/old.txt" && e.encrypted),
+            entries
+                .iter()
+                .any(|e| e.path == "s1/old.txt" && e.encrypted),
             "原条目应仍然是加密的: {:?}",
-            entries.iter().map(|e| (&e.path, e.encrypted)).collect::<Vec<_>>()
+            entries
+                .iter()
+                .map(|e| (&e.path, e.encrypted))
+                .collect::<Vec<_>>()
         );
-        assert!(entries.iter().any(|e| e.path == "s2/new.txt" && !e.encrypted));
+        assert!(entries
+            .iter()
+            .any(|e| e.path == "s2/new.txt" && !e.encrypted));
 
         let out = tmp.join("out");
         let ex = ExtractOptions {
             password: Some("pw".to_string()),
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         extract(&dest, &out, &ex, &mut rep("e"), &flag()).unwrap();
@@ -1029,8 +1085,7 @@ mod tests {
         {
             let f = File::create(&zip).unwrap();
             let mut w = ZipWriter::new(f);
-            w.start_file("../escaped.txt", plain_opts())
-                .unwrap();
+            w.start_file("../escaped.txt", plain_opts()).unwrap();
             w.write_all(b"pwned").unwrap();
             w.start_file("sub/../../escaped2.txt", plain_opts())
                 .unwrap();
@@ -1041,14 +1096,17 @@ mod tests {
             w.finish().unwrap();
         }
         let ex = ExtractOptions {
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         // 不该 panic，也不该把文件写到 dest 外面
         let _ = extract(&zip, &dest_dir, &ex, &mut rep("e"), &flag());
         assert!(!tmp.join("escaped.txt").exists(), "zip-slip 逃逸 = 漏洞");
         assert!(!tmp.join("escaped2.txt").exists(), "zip-slip 逃逸 = 漏洞");
-        assert!(!Path::new("C:\\Windows\\evil3.txt").exists(), "盘符绝对路径逃逸 = 漏洞");
+        assert!(
+            !Path::new("C:\\Windows\\evil3.txt").exists(),
+            "盘符绝对路径逃逸 = 漏洞"
+        );
     }
 
     #[test]
@@ -1086,7 +1144,7 @@ mod tests {
         let stopped = AtomicBool::new(true);
         let out = tmp.join("out");
         let ex = ExtractOptions {
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         let err = extract(&dest, &out, &ex, &mut rep("e"), &stopped).unwrap_err();
@@ -1155,17 +1213,36 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
         fs::write(src.join("f.txt"), b"version 1").unwrap();
         let dest = tmp.join("d.zip");
-        create(&[src.clone()], &dest, &base_create_opts(), &mut rep("c"), &flag()).unwrap();
+        create(
+            std::slice::from_ref(&src),
+            &dest,
+            &base_create_opts(),
+            &mut rep("c"),
+            &flag(),
+        )
+        .unwrap();
 
         fs::write(src.join("f.txt"), b"version 2 is longer").unwrap();
-        add(&dest, &[src], &CreateOptions::default(), &mut rep("a"), &flag()).unwrap();
+        add(
+            &dest,
+            &[src],
+            &CreateOptions::default(),
+            &mut rep("a"),
+            &flag(),
+        )
+        .unwrap();
 
         let entries = list(&dest).unwrap();
         let same: Vec<&Entry> = entries.iter().filter(|e| e.path == "s/f.txt").collect();
-        assert_eq!(same.len(), 1, "不该留下两个同名条目: {:?}", entries.iter().map(|e| &e.path).collect::<Vec<_>>());
+        assert_eq!(
+            same.len(),
+            1,
+            "不该留下两个同名条目: {:?}",
+            entries.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
         let out = tmp.join("out");
         let ex = ExtractOptions {
-            overwrite: guard::Overwrite::Overwrite,
+            overwrite: guard::Overwrite::Replace,
             ..Default::default()
         };
         extract(&dest, &out, &ex, &mut rep("e"), &flag()).unwrap();

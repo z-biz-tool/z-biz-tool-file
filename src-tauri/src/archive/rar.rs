@@ -30,12 +30,16 @@ use super::types::{ArchiveMeta, Entry, ExtractOptions, Stats};
 
 /// RAR 的密码是**整个归档**级别的（`RARSetPassword` 设一次管全程），
 /// 不像 zip 那样每个条目可以有不同密码。
-fn open_list(path: &Path, pw: Option<&str>) -> Result<unrar::OpenArchive<unrar::List, unrar::CursorBeforeHeader>, String> {
+fn open_list(
+    path: &Path,
+    pw: Option<&str>,
+) -> Result<unrar::OpenArchive<unrar::List, unrar::CursorBeforeHeader>, String> {
     let arc = match pw {
         Some(p) => Archive::with_password(path, p.as_bytes()),
         None => Archive::new(path),
     };
-    arc.open_for_listing().map_err(|e| open_err(e, pw.is_some()))
+    arc.open_for_listing()
+        .map_err(|e| open_err(e, pw.is_some()))
 }
 
 fn open_process(
@@ -46,7 +50,8 @@ fn open_process(
         Some(p) => Archive::with_password(path, p.as_bytes()),
         None => Archive::new(path),
     };
-    arc.open_for_processing().map_err(|e| open_err(e, pw.is_some()))
+    arc.open_for_processing()
+        .map_err(|e| open_err(e, pw.is_some()))
 }
 
 /// 打开失败的措辞要能区分"包坏了"和"要密码"。缺密码时报"归档损坏"的话，
@@ -78,11 +83,11 @@ fn dos_to_unix(v: u32) -> i64 {
         return 0;
     }
     use chrono::TimeZone;
-    let sec = ((v & 0x1F) * 2) as u32;
-    let min = ((v >> 5) & 0x3F) as u32;
-    let hour = ((v >> 11) & 0x1F) as u32;
-    let day = ((v >> 16) & 0x1F) as u32;
-    let month = ((v >> 21) & 0x0F) as u32;
+    let sec = (v & 0x1F) * 2;
+    let min = (v >> 5) & 0x3F;
+    let hour = (v >> 11) & 0x1F;
+    let day = (v >> 16) & 0x1F;
+    let month = (v >> 21) & 0x0F;
     let year = 1980 + ((v >> 25) & 0x7F) as i32;
     let (Some(d), Some(t)) = (
         chrono::NaiveDate::from_ymd_opt(year, month, day),
@@ -209,15 +214,14 @@ pub fn list(path: &Path, pw: Option<&str>) -> Result<(Vec<Entry>, ArchiveMeta), 
     let comment = String::new(); // UnRAR 库明确说注释还不支持（set_comments 是空实现）
 
     let mut entries = Vec::new();
-    let mut idx = 0u32;
     let mut any_encrypted = false;
-    for item in arc {
+    for (idx, item) in arc.into_iter().enumerate() {
         let h = item.map_err(|e| format!("读取 RAR 目录失败: {}", e))?;
         let raw = h.filename.to_string_lossy().replace('\\', "/");
         let p = normalize(&raw);
         any_encrypted |= h.is_encrypted();
         entries.push(Entry {
-            index: idx,
+            index: idx as u32,
             name: p.rsplit('/').next().unwrap_or("").to_string(),
             is_dir: h.is_directory(),
             size: h.unpacked_size,
@@ -237,7 +241,6 @@ pub fn list(path: &Path, pw: Option<&str>) -> Result<(Vec<Entry>, ArchiveMeta), 
             symlink_target: String::new(),
             path: p,
         });
-        idx += 1;
         if entries.len() >= super::MAX_ENTRIES {
             break;
         }
@@ -359,7 +362,9 @@ pub fn extract(
             return Err(msg);
         }
 
-        let target = match guard::resolve_target(dest, &out_rel, opts.overwrite).map_err(|e| e.to_string())? {
+        let target = match guard::resolve_target(dest, &out_rel, opts.overwrite)
+            .map_err(|e| e.to_string())?
+        {
             Some(t) => t,
             None => {
                 stats.skipped += 1;
@@ -463,7 +468,7 @@ pub fn test(
             break;
         };
         let s = snap(before_file.entry());
-        if entries_full(&mut stats) {
+        if entries_full(&stats) {
             break;
         }
         reporter.set_entry(&s.path);
@@ -514,11 +519,7 @@ mod tests {
         // 2024-03-05 14:30:00 的 MS-DOS 编码
         // 位布局：0-4 秒/2 · 5-10 分 · 11-15 时 · 16-20 日 · 21-24 月 · 25-31 年-1980
         // 秒字段（位 0-4）= 0，秒的偶数编码就是 0/2 = 0，直接不写这一段。
-        let v: u32 = ((2024 - 1980) << 25)
-            | (3 << 21)
-            | (5 << 16)
-            | (14 << 11)
-            | (30 << 5);
+        let v: u32 = ((2024 - 1980) << 25) | (3 << 21) | (5 << 16) | (14 << 11) | (30 << 5);
         let got = dos_to_unix(v);
         use chrono::TimeZone;
         let want = chrono::Local
@@ -553,10 +554,7 @@ mod tests {
         let not_rar = tmp.join("nope.rar");
         fs::write(&not_rar, b"this is not a rar archive at all").unwrap();
         let err = list(&not_rar, None).unwrap_err();
-        assert!(
-            !err.is_empty(),
-            "坏包要给出可读的错误，不是 panic"
-        );
+        assert!(!err.is_empty(), "坏包要给出可读的错误，不是 panic");
     }
 
     #[test]
@@ -565,6 +563,9 @@ mod tests {
         let single = tmp.join("one.rar");
         fs::write(&single, b"Rar!\x1a\x07\x01\x00").unwrap();
         assert_eq!(secondary_volume_hint(&single), None);
-        assert_eq!(volumes_of(&single), vec![single.to_string_lossy().to_string()]);
+        assert_eq!(
+            volumes_of(&single),
+            vec![single.to_string_lossy().to_string()]
+        );
     }
 }

@@ -73,7 +73,10 @@ fn add_font(doc: &mut Document, cjk: bool, text: &str) -> ObjectId {
         font.set("Subtype", name("Type1"));
         font.set("BaseFont", name("Helvetica"));
         font.set("Encoding", name("WinAnsiEncoding"));
-        font.set("ToUnicode", Object::Reference(add_to_unicode(doc, text, false)));
+        font.set(
+            "ToUnicode",
+            Object::Reference(add_to_unicode(doc, text, false)),
+        );
         return doc.add_object(Object::Dictionary(font));
     }
 
@@ -96,12 +99,15 @@ fn add_font(doc: &mut Document, cjk: bool, text: &str) -> ObjectId {
         dict.set("FontName", name("STSong-Light"));
         // Flags 4 = Symbolic：中日韩字形不按拉丁的宽度和基线来量
         dict.set("Flags", Object::Integer(4));
-        dict.set("FontBBox", Object::Array(vec![
-            Object::Integer(-34),
-            Object::Integer(-226),
-            Object::Integer(1007),
-            Object::Integer(906),
-        ]));
+        dict.set(
+            "FontBBox",
+            Object::Array(vec![
+                Object::Integer(-34),
+                Object::Integer(-226),
+                Object::Integer(1007),
+                Object::Integer(906),
+            ]),
+        );
         dict.set("ItalicAngle", Object::Integer(0));
         dict.set("Ascent", Object::Integer(880));
         dict.set("Descent", Object::Integer(-120));
@@ -118,8 +124,14 @@ fn add_font(doc: &mut Document, cjk: bool, text: &str) -> ObjectId {
     font.set("Subtype", name("Type0"));
     font.set("BaseFont", name("STSong-Light"));
     font.set("Encoding", name("UniGB-UCS2-H"));
-    font.set("DescendantFonts", Object::Array(vec![Object::Reference(descendant)]));
-    font.set("ToUnicode", Object::Reference(add_to_unicode(doc, text, true)));
+    font.set(
+        "DescendantFonts",
+        Object::Array(vec![Object::Reference(descendant)]),
+    );
+    font.set(
+        "ToUnicode",
+        Object::Reference(add_to_unicode(doc, text, true)),
+    );
     doc.add_object(Object::Dictionary(font))
 }
 
@@ -159,7 +171,12 @@ fn add_to_unicode(doc: &mut Document, text: &str, cjk: bool) -> ObjectId {
     for chunk in pairs.chunks(100) {
         body.push_str(&format!("{} beginbfchar\n", chunk.len()));
         for (code, unicode) in chunk {
-            body.push_str(&format!("<{:>0width$}> <{}>\n", code, unicode, width = width));
+            body.push_str(&format!(
+                "<{:>0width$}> <{}>\n",
+                code,
+                unicode,
+                width = width
+            ));
         }
         body.push_str("endbfchar\n");
     }
@@ -300,7 +317,12 @@ fn page_box(doc: &Document, page: ObjectId) -> PageBox {
         _ => Vec::new(),
     };
     if array.len() < 4 {
-        return PageBox { x: 0.0, y: 0.0, width: 595.0, height: 842.0 };
+        return PageBox {
+            x: 0.0,
+            y: 0.0,
+            width: 595.0,
+            height: 842.0,
+        };
     }
     let value = |index: usize| crate::pdf_ops::number_of(doc, &array[index]) as f32;
     let (x0, y0, x1, y1) = (value(0), value(1), value(2), value(3));
@@ -318,7 +340,11 @@ fn overlay_ops(box_: &PageBox, text: &str, cjk: bool) -> Vec<u8> {
     let diagonal = {
         let value = box_.width.hypot(box_.height);
         // 退化页（零宽零高的 MediaBox）按 45° 走，别把旋转矩阵算成 0
-        if value > 1.0 { value } else { std::f32::consts::SQRT_2 }
+        if value > 1.0 {
+            value
+        } else {
+            std::f32::consts::SQRT_2
+        }
     };
     let (cos, sin) = if box_.width + box_.height > 0.0 {
         (box_.width / diagonal, box_.height / diagonal)
@@ -525,10 +551,13 @@ mod tests {
         let pages = doc.add_object(Object::Dictionary({
             let mut dict = Dictionary::new();
             dict.set("Type", name("Pages"));
-            dict.set("Kids", Object::Array(vec![
-                Object::Reference(page_one),
-                Object::Reference(page_two),
-            ]));
+            dict.set(
+                "Kids",
+                Object::Array(vec![
+                    Object::Reference(page_one),
+                    Object::Reference(page_two),
+                ]),
+            );
             dict.set("Count", Object::Integer(2));
             // 只有继承这一页才有 Font 资源
             let mut fonts = Dictionary::new();
@@ -622,11 +651,7 @@ mod tests {
             font.get(b"Encoding").unwrap().as_name().unwrap(),
             b"UniGB-UCS2-H"
         );
-        let descendant = font
-            .get(b"DescendantFonts")
-            .unwrap()
-            .as_array()
-            .unwrap()[0]
+        let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]
             .as_reference()
             .unwrap();
         assert_eq!(
@@ -673,7 +698,10 @@ mod tests {
             .unwrap()
             .as_stream()
             .unwrap();
-        assert_eq!(original.content, b"BT /F1 24 Tf 60 720 Td (FirstPage) Tj ET".to_vec());
+        assert_eq!(
+            original.content,
+            b"BT /F1 24 Tf 60 720 Td (FirstPage) Tj ET".to_vec()
+        );
 
         // 第二页没有自己的 Resources，靠继承也要拿到 /Fwm
         assert!(font_of(&doc, ids[1]).as_reference().is_ok());
@@ -747,7 +775,12 @@ mod tests {
             b"ExtGState"
         );
         assert!(
-            dict.get(b"Font").unwrap().as_dict().unwrap().get(b"F1").is_ok(),
+            dict.get(b"Font")
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"F1")
+                .is_ok(),
             "原有的 /F1 不能丢"
         );
     }
@@ -781,7 +814,12 @@ mod tests {
     #[test]
     fn long_watermark_shrinks_to_fit_instead_of_being_clipped() {
         let text = "内部资料 机密 CONFIDENTIAL";
-        let narrow = PageBox { x: 0.0, y: 0.0, width: 300.0, height: 300.0 };
+        let narrow = PageBox {
+            x: 0.0,
+            y: 0.0,
+            width: 300.0,
+            height: 300.0,
+        };
         let ops = String::from_utf8_lossy(&overlay_ops(&narrow, text, true)).to_string();
 
         let size: f32 = ops
@@ -820,7 +858,12 @@ mod tests {
         );
 
         // 旋转角跟着页面自己的对角线走，而不是死写 45°
-        let wide = PageBox { x: 0.0, y: 0.0, width: 800.0, height: 400.0 };
+        let wide = PageBox {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 400.0,
+        };
         let ops = String::from_utf8_lossy(&overlay_ops(&wide, "DRAFT", true)).to_string();
         assert!(
             ops.contains("0.8944 0.4472 -0.4472 0.8944 0 0 cm"),
@@ -841,6 +884,10 @@ mod tests {
             0.3,
         )
         .unwrap_err();
-        assert!(!std::path::Path::new("/Users/zifang/.ssh/evil.pdf").exists(), "{}", err);
+        assert!(
+            !std::path::Path::new("/Users/zifang/.ssh/evil.pdf").exists(),
+            "{}",
+            err
+        );
     }
 }

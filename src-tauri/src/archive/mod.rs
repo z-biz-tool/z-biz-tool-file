@@ -202,11 +202,15 @@ fn unsupported_message(f: Format) -> String {
 /// 探测 + 路由 + 能力检查。所有对外操作的共同前置。
 fn route_of(path: &Path) -> Result<(format::Detection, Route), ArchiveError> {
     if !path.exists() {
-        return Err(ArchiveError::failed(format!("文件不存在: {}", path.display())));
+        return Err(ArchiveError::failed(format!(
+            "文件不存在: {}",
+            path.display()
+        )));
     }
     let det = format::detect(path);
     let caps = det.format.caps();
-    let route = Route::of(det.format).ok_or_else(|| ArchiveError::failed(unsupported_message(det.format)))?;
+    let route = Route::of(det.format)
+        .ok_or_else(|| ArchiveError::failed(unsupported_message(det.format)))?;
     if !caps.list && !caps.extract {
         return Err(ArchiveError::failed(unsupported_message(det.format)));
     }
@@ -330,10 +334,12 @@ fn list_entries(
     match route {
         Route::Zip => match zip::list(path) {
             Ok(entries) => {
-                let mut meta = ArchiveMeta::default();
-                meta.comment = zip::archive_comment(path);
-                meta.needs_password = entries.iter().any(|e| e.encrypted);
-                meta.multipart = det.volume_index.is_some() || zip_split_sibling(path).is_some();
+                let meta = ArchiveMeta {
+                    comment: zip::archive_comment(path),
+                    needs_password: entries.iter().any(|e| e.encrypted),
+                    multipart: det.volume_index.is_some() || zip_split_sibling(path).is_some(),
+                    ..Default::default()
+                };
                 Ok((entries, meta))
             }
             // 打不开且有兄弟卷 → 几乎可以肯定是分卷，说清楚比丢一句"不是有效的 ZIP"有用
@@ -735,7 +741,10 @@ mod tests {
         let once: Vec<u64> = v.iter().map(|e| e.size).collect();
         rollup_dir_sizes(&mut v);
         let twice: Vec<u64> = v.iter().map(|e| e.size).collect();
-        assert_eq!(once, twice, "跑两遍必须同结果，否则调用点顺序会变成隐式依赖");
+        assert_eq!(
+            once, twice,
+            "跑两遍必须同结果，否则调用点顺序会变成隐式依赖"
+        );
     }
 
     #[test]
@@ -824,7 +833,10 @@ mod tests {
         let f = dir.join("notes.txt");
         fs::write(&f, b"just text").unwrap();
         let p = probe(&f);
-        assert!(!p.is_archive, "普通文本不能自称归档，否则右键会多出一排没用的菜单");
+        assert!(
+            !p.is_archive,
+            "普通文本不能自称归档，否则右键会多出一排没用的菜单"
+        );
         assert_eq!(p.format, "unknown");
     }
 
@@ -871,7 +883,10 @@ mod tests {
         assert_eq!(fs::read(out.join("src/sub/a.txt")).unwrap(), b"hello");
 
         let (total, preview) = conflicts(&dest, &out, &ex).unwrap();
-        assert_eq!(total, 2, "两个文件都该报冲突，目录不算（解到已存在目录是合并）");
+        assert_eq!(
+            total, 2,
+            "两个文件都该报冲突，目录不算（解到已存在目录是合并）"
+        );
         assert_eq!(preview.len(), 2);
     }
 
@@ -884,11 +899,11 @@ mod tests {
 
         // 压缩包放在被压目录里面：右键"压缩到此处"最容易撞上
         let inside = sub.join("out.zip");
-        let e = prepare_sources(&[sub.clone()], &inside).unwrap_err();
+        let e = prepare_sources(std::slice::from_ref(&sub), &inside).unwrap_err();
         assert!(e.contains("边压边把自己写进去"), "实际: {}", e);
         // 和被压文件同名
         let f = sub.join("a.txt");
-        assert!(prepare_sources(&[f.clone()], &f).is_err());
+        assert!(prepare_sources(std::slice::from_ref(&f), &f).is_err());
         // 正常情况放行
         assert!(prepare_sources(&[sub], &dir.join("ok.zip")).is_ok());
         // 源不存在 / 没有源
@@ -938,7 +953,10 @@ mod tests {
         fs::write(&dest, &bytes).unwrap();
         let det = preflight(&dest, None).unwrap();
         let st = test(&dest, &det, None, &mut rep(Kind::Test), &flag()).unwrap();
-        assert!(!st.errors.is_empty(), "翻了数据位却没查出损坏，CRC 白校验了");
+        assert!(
+            !st.errors.is_empty(),
+            "翻了数据位却没查出损坏，CRC 白校验了"
+        );
         assert_eq!(st.entries_done, 0, "坏条目不该被算成校验通过");
         assert!(st.errors[0].contains("a.bin"), "{}", st.errors[0]);
     }
@@ -974,7 +992,10 @@ mod tests {
         create(
             &[src],
             &real,
-            &CreateOptions { format: "zip".into(), ..Default::default() },
+            &CreateOptions {
+                format: "zip".into(),
+                ..Default::default()
+            },
             &mut rep(Kind::Create),
             &flag(),
         )
@@ -983,4 +1004,3 @@ mod tests {
         assert!(info(&real, None).is_ok());
     }
 }
-

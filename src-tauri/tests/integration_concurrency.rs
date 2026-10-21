@@ -60,8 +60,7 @@ fn atomic_write_concurrent_writers_no_corruption() {
     // 偶发一次之后完全无从判断是竞态还是环境（磁盘/文件描述符）。
     let errors: Vec<String> = handles
         .into_iter()
-        .map(|h| h.join().expect("写入线程不该 panic"))
-        .flatten()
+        .flat_map(|h| h.join().expect("写入线程不该 panic"))
         .collect();
     assert!(errors.is_empty(), "并发写入出现失败: {:#?}", errors);
 
@@ -72,7 +71,6 @@ fn atomic_write_concurrent_writers_no_corruption() {
         .unwrap_or_else(|e| panic!("文件不是完整 JSON（长度 {}）: {}", s.len(), e));
     assert!(v.get("payload").is_some(), "got malformed payload: {:?}", v);
 }
-
 
 /// 本机时钟粒度实测 1 µs（连续 199 次取时间戳，185 次值相同），所以临时目录
 /// 名不能只靠纳秒戳去重。之前两个并行测试会分到同一个目录，先结束的那个 Drop
@@ -132,7 +130,8 @@ fn atomic_write_crash_leaves_no_corrupted_final() {
     // 断言主文件未受影响
     let after = fs::read(&target).unwrap();
     assert_eq!(
-        before, after,
+        before,
+        after,
         "未完成 rename 的 tmp 文件不应污染主文件; before={:?} after={:?}",
         String::from_utf8_lossy(&before),
         String::from_utf8_lossy(&after)

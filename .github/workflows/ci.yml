@@ -35,6 +35,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       # 同 Build & Release：GitHub 新 token 会写坏 dtolnay 生成的 cargo config
       - name: Reset broken cargo config
@@ -71,3 +73,20 @@ jobs:
         # ⇒ 本仓「[LIVE] 跳过 minimax 真实 API 实测…」这类跳过标记在 CI 日志里
         # 看不见 ⇒ 「没跑」看着跟「跑过了」一样。打开捕获后可核对。
         run: cargo test -- --nocapture
+
+      # 2026-10-21 新增：静态门此前**一条都没有**（本仓 CI 只跑 typecheck/build/测试），
+      # 而本地实测 `cargo clippy --all-targets -- -D warnings` 有 42 条、
+      # `cargo fmt --all --check` 有 475 处差异 ——
+      # 「静态门红了但 CI 不跑那个门 ⇒ 没人看见」（家族 R12）。
+      # 债已在同一次提交里清零：clippy 的 42 条逐条修（自动修 23 条 + 手工 19 条），
+      # fmt 475 处整仓重排。纯行为改动只有三处，都单独说明过：
+      # ① 读目录的 `if let Ok(entry)` → `entries.flatten()`（行为相同）；
+      # ② markdown 转换器的 `starts_with` + `&s[n..]` → `strip_prefix`（切片长度不再靠人工对齐）；
+      # ③ archive 策略枚举的变体 `Overwrite` → `Replace`（**序列化名仍为 "overwrite"**，IPC 契约不变）。
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --all --check

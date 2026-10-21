@@ -211,7 +211,7 @@ pub fn archive_extensions() -> Vec<String> {
     format::all_extensions()
         .into_iter()
         .map(|s| s.to_string())
-    .collect()
+        .collect()
 }
 
 /// 双击路由表：哪些扩展名该进本应用的归档浏览器，而不是交给系统默认程序。
@@ -251,9 +251,10 @@ pub async fn archive_extract(
     let pw = options.password.clone().filter(|s| !s.is_empty());
 
     let probe_src = src.clone();
-    let det = tauri::async_runtime::spawn_blocking(move || super::preflight(&probe_src, pw.as_deref()))
-        .await
-        .map_err(|e| ArchiveError::failed(e.to_string()))??;
+    let det =
+        tauri::async_runtime::spawn_blocking(move || super::preflight(&probe_src, pw.as_deref()))
+            .await
+            .map_err(|e| ArchiveError::failed(e.to_string()))??;
 
     let (a, d) = (src.display().to_string(), dst.display().to_string());
     Ok(spawn_job(&app, Kind::Extract, a, d, move |rep, cancel| {
@@ -337,9 +338,13 @@ pub async fn archive_test(
     .map_err(|e| ArchiveError::failed(e.to_string()))??;
 
     let a = src.display().to_string();
-    Ok(spawn_job(&app, Kind::Test, a, String::new(), move |rep, cancel| {
-        super::test(&src, &det, pw.as_deref(), rep, cancel)
-    }))
+    Ok(spawn_job(
+        &app,
+        Kind::Test,
+        a,
+        String::new(),
+        move |rep, cancel| super::test(&src, &det, pw.as_deref(), rep, cancel),
+    ))
 }
 
 /// 双击归档里的一个条目：解到系统临时目录，再用默认程序打开它（7-Zip 的行为）。
@@ -370,13 +375,13 @@ pub async fn archive_open_entry(
     let root = preview_root(&src);
     // 落点必须在解压前就算出来：解压内部走的也是 safe_join，两边算的是同一个地方，
     // 而前端不该自己去拼（拼错了就会打开一个不存在的文件，报一句莫名其妙的错）
-    let target = super::guard::safe_join(&root, &entry)
-        .map_err(|e| ArchiveError::failed(e.to_string()))?;
+    let target =
+        super::guard::safe_join(&root, &entry).map_err(|e| ArchiveError::failed(e.to_string()))?;
 
     let opts = ExtractOptions {
         entries: Some(vec![entry]),
         password: pw,
-        overwrite: super::guard::Overwrite::Overwrite,
+        overwrite: super::guard::Overwrite::Replace,
         ..Default::default()
     };
     let label = target
@@ -384,16 +389,22 @@ pub async fn archive_open_entry(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| src.display().to_string());
 
-    Ok(spawn_job(&app, Kind::Extract, label, String::new(), move |rep, cancel| {
-        let s = super::extract(&src, &det, &root, &opts, rep, cancel)?;
-        // 解出来是个目录（条目名以 '/' 结尾）就不该交给 opener：Windows 上打开目录
-        // 会弹一个资源管理器窗口，而用户点的是"预览这个文件"
-        if target.is_dir() {
-            return Err(format!("{} 是目录，不能直接打开。", target.display()));
-        }
-        opener::open(&target).map_err(|e| format!("打开文件失败: {}", e))?;
-        Ok(s)
-    }))
+    Ok(spawn_job(
+        &app,
+        Kind::Extract,
+        label,
+        String::new(),
+        move |rep, cancel| {
+            let s = super::extract(&src, &det, &root, &opts, rep, cancel)?;
+            // 解出来是个目录（条目名以 '/' 结尾）就不该交给 opener：Windows 上打开目录
+            // 会弹一个资源管理器窗口，而用户点的是"预览这个文件"
+            if target.is_dir() {
+                return Err(format!("{} 是目录，不能直接打开。", target.display()));
+            }
+            opener::open(&target).map_err(|e| format!("打开文件失败: {}", e))?;
+            Ok(s)
+        },
+    ))
 }
 
 /// 请求取消。返回 false 表示没这个任务（已经结束并被清出账本，或 id 写错了）。
@@ -432,8 +443,7 @@ fn resolve_sources(sources: &[String]) -> Result<Vec<PathBuf>, ArchiveError> {
 fn source_label(srcs: &[PathBuf]) -> String {
     let first = srcs
         .first()
-        .map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .flatten()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "?".to_string());
     match srcs.len() {
         // 0 项时也走这条：否则任务列表里会出现一句"? 等 0 项"，
@@ -496,7 +506,11 @@ mod tests {
             ..Default::default()
         };
         let m = done_message(&plain);
-        assert!(m.contains("12 个条目") && m.contains("2.0 KB") && m.contains("1.5 秒"), "{}", m);
+        assert!(
+            m.contains("12 个条目") && m.contains("2.0 KB") && m.contains("1.5 秒"),
+            "{}",
+            m
+        );
         assert!(!m.contains("跳过") && !m.contains("出错"));
 
         let messy = Stats {
@@ -509,13 +523,20 @@ mod tests {
         let m = done_message(&messy);
         assert!(m.contains("跳过 2"), "{}", m);
         assert!(m.contains("5 个条目出错"), "{}", m);
-        assert!(m.contains("坏条目 2") && !m.contains("坏条目 3"), "只带前 3 条: {}", m);
+        assert!(
+            m.contains("坏条目 2") && !m.contains("坏条目 3"),
+            "只带前 3 条: {}",
+            m
+        );
         assert!(m.contains("…"), "{}", m);
     }
 
     #[test]
     fn test_failure_message_names_the_count_and_first_entries() {
-        let one = Stats { errors: vec!["a.bin CRC 不符".into()], ..Default::default() };
+        let one = Stats {
+            errors: vec!["a.bin CRC 不符".into()],
+            ..Default::default()
+        };
         let m = test_failure_message(&one);
         assert_eq!(m, "校验失败：1 个条目损坏（a.bin CRC 不符）");
 
@@ -525,7 +546,11 @@ mod tests {
         };
         let m = test_failure_message(&many);
         assert!(m.contains("5 个条目损坏"), "{}", m);
-        assert!(m.contains("坏条目 2") && !m.contains("坏条目 3"), "只带前 3 条: {}", m);
+        assert!(
+            m.contains("坏条目 2") && !m.contains("坏条目 3"),
+            "只带前 3 条: {}",
+            m
+        );
         assert!(m.contains("…"), "{}", m);
     }
 
@@ -533,7 +558,9 @@ mod tests {
     fn source_label_collapses_long_selections() {
         let one = vec![PathBuf::from("D:/a/movie.mkv")];
         assert_eq!(source_label(&one), "movie.mkv");
-        let many: Vec<PathBuf> = (0..200).map(|i| PathBuf::from(format!("D:/a/f{}", i))).collect();
+        let many: Vec<PathBuf> = (0..200)
+            .map(|i| PathBuf::from(format!("D:/a/f{}", i)))
+            .collect();
         let l = source_label(&many);
         assert!(l.starts_with("f0 等 200 项"), "{}", l);
         assert_eq!(source_label(&[]), "?");
@@ -545,8 +572,15 @@ mod tests {
         let a = preview_root(Path::new("D:/a/movie.rar"));
         let b = preview_root(Path::new("E:/backup/movie.rar"));
         assert!(a.starts_with(&base), "{:?}", a);
-        assert_ne!(a, b, "同名不同目录的归档必须落在不同预览目录，否则会打开错的文件");
-        assert_eq!(preview_root(Path::new("D:/a/movie.rar")), a, "同一个归档要能复用");
+        assert_ne!(
+            a, b,
+            "同名不同目录的归档必须落在不同预览目录，否则会打开错的文件"
+        );
+        assert_eq!(
+            preview_root(Path::new("D:/a/movie.rar")),
+            a,
+            "同一个归档要能复用"
+        );
         // 目录名里带分隔符会被 create_dir_all 当成多级目录，指纹就白加了
         let name = a.file_name().unwrap().to_string_lossy().to_string();
         assert!(!name.contains('/') && !name.contains('\\'), "{}", name);

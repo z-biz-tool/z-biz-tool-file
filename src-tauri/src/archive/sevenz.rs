@@ -46,12 +46,12 @@ use sevenz_rust2::{
     Error as SzError, NtTime, Password, SourceReader,
 };
 
+use super::guard;
 use super::io::{cancelled_error, is_cancelled};
 use super::job::Reporter;
 use super::select::{map_output, normalize, single_root, Selector};
 use super::tar::{archive_name_for, clamp, excluded};
 use super::types::{ArchiveMeta, CreateOptions, Entry, ExtractOptions, Stats};
-use super::guard;
 
 /// solid 块的输入上限（未压缩字节）。见模块头"sold 分批的依据"。
 const SOLID_BLOCK_BYTES: u64 = 512 * 1024 * 1024;
@@ -94,9 +94,9 @@ fn open_err(path: &Path, e: SzError, pw: Option<&str>) -> String {
                 "这个 7z 需要密码。".to_string()
             }
         }
-        SzError::BadSignature(_) => volume_hint(path).unwrap_or_else(|| {
-            "不是有效的 7z 文件（签名不匹配）。".to_string()
-        }),
+        SzError::BadSignature(_) => {
+            volume_hint(path).unwrap_or_else(|| "不是有效的 7z 文件（签名不匹配）。".to_string())
+        }
         SzError::UnsupportedCompressionMethod(m) => {
             format!("暂不支持的 7z 压缩方法: {}（可用 7-Zip 解开）", m)
         }
@@ -239,11 +239,7 @@ pub fn list(path: &Path, pw: Option<&str>) -> Result<(Vec<Entry>, ArchiveMeta), 
             size: if is_dir { 0 } else { f.size },
             // solid 归档里所有条目共享字典，单条目的压缩后大小没有意义（crate 也只在
             // 每块第一个文件上填这个值），如实填 0 比填个误导性的数字强
-            packed: if arc.is_solid {
-                0
-            } else {
-                f.compressed_size
-            },
+            packed: if arc.is_solid { 0 } else { f.compressed_size },
             modified: nt_to_unix(f.last_modified_date(), f.has_last_modified_date) as i64,
             method: if is_dir {
                 String::new()
@@ -336,11 +332,7 @@ impl Cb<'_> {
 }
 
 /// `for_each_entries` 的回调体。返回 `Ok(false)` 表示"停下"，用于取消和致命错误。
-fn handle(
-    cb: &mut Cb<'_>,
-    entry: &ArchiveEntry,
-    data: &mut dyn Read,
-) -> Result<bool, SzError> {
+fn handle(cb: &mut Cb<'_>, entry: &ArchiveEntry, data: &mut dyn Read) -> Result<bool, SzError> {
     if cb.stopped() {
         cb.cancelled = true;
         return Ok(false);
@@ -479,7 +471,12 @@ pub fn extract(
     cancel: &AtomicBool,
 ) -> Result<Stats, String> {
     let mut ar = open(path, opts.password.as_deref())?;
-    let names: Vec<String> = ar.archive().files.iter().map(|f| normalize(&f.name)).collect();
+    let names: Vec<String> = ar
+        .archive()
+        .files
+        .iter()
+        .map(|f| normalize(&f.name))
+        .collect();
     let all_bytes: u64 = ar.archive().files.iter().map(|f| f.size).sum();
     let sel = Selector::new(opts.entries.clone(), opts.include_children);
     let strip_root = if opts.strip_root {
@@ -522,7 +519,10 @@ pub fn test(
     let mut ar = open(path, opts.password.as_deref())?;
     let (count, all_bytes) = {
         let files = &ar.archive().files;
-        (files.len() as u64, files.iter().map(|f| f.size).sum::<u64>())
+        (
+            files.len() as u64,
+            files.iter().map(|f| f.size).sum::<u64>(),
+        )
     };
     reporter.set_totals(count, all_bytes);
     reporter.set_phase("working");
@@ -573,7 +573,12 @@ pub fn test(
 
 fn methods_of(opts: &CreateOptions) -> Result<Vec<EncoderConfiguration>, String> {
     let level = clamp(opts.level.unwrap_or(5), 0, 9) as u32;
-    let name = opts.method.as_deref().unwrap_or("lzma2").trim().to_ascii_lowercase();
+    let name = opts
+        .method
+        .as_deref()
+        .unwrap_or("lzma2")
+        .trim()
+        .to_ascii_lowercase();
     let base: EncoderConfiguration = match name.as_str() {
         "" | "lzma2" => Lzma2Options::from_level(level).into(),
         "copy" | "store" | "none" => EncoderMethod::COPY.into(),
@@ -595,7 +600,11 @@ fn methods_of(opts: &CreateOptions) -> Result<Vec<EncoderConfiguration>, String>
 /// 压缩计划里的一项。目录单独列出来，7z 才有真正的目录条目（否则空文件夹会丢）。
 enum Plan {
     Dir(String),
-    File { name: String, path: PathBuf, size: u64 },
+    File {
+        name: String,
+        path: PathBuf,
+        size: u64,
+    },
 }
 
 /// 递归收集要压进去的东西。
@@ -611,12 +620,17 @@ fn plan_sources(sources: &[PathBuf], opts: &CreateOptions) -> Result<Vec<Plan>, 
     Ok(out)
 }
 
-fn plan_path(src: &Path, base: &Path, opts: &CreateOptions, out: &mut Vec<Plan>) -> Result<(), String> {
+fn plan_path(
+    src: &Path,
+    base: &Path,
+    opts: &CreateOptions,
+    out: &mut Vec<Plan>,
+) -> Result<(), String> {
     if excluded(src, &opts.exclude_patterns) {
         return Ok(());
     }
-    let meta = fs::symlink_metadata(src)
-        .map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
+    let meta =
+        fs::symlink_metadata(src).map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
     let name = archive_name_for(src, base, opts.store_full_path)?;
     if name.is_empty() {
         return Ok(());
@@ -681,7 +695,10 @@ impl Read for LazySrc<'_> {
             self.inner = Some(BufReader::with_capacity(
                 256 * 1024,
                 File::open(&self.path).map_err(|e| {
-                    io::Error::new(e.kind(), format!("打开 {} 失败: {}", self.path.display(), e))
+                    io::Error::new(
+                        e.kind(),
+                        format!("打开 {} 失败: {}", self.path.display(), e),
+                    )
                 })?,
             ));
         }
@@ -710,7 +727,12 @@ pub fn create(
     if sources.is_empty() {
         return Err("没有要压缩的内容。".to_string());
     }
-    if opts.comment.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+    if opts
+        .comment
+        .as_deref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
         // 静默忽略会让用户以为注释存进去了，下次打开发现没有更难受
         return Err("7z 暂不支持写入注释。请清空注释，或改用 zip 格式。".to_string());
     }
@@ -721,7 +743,10 @@ pub fn create(
         return Err("所有源都被排除规则过滤掉了，没有可压缩的内容。".to_string());
     }
 
-    let file_count = plan.iter().filter(|p| matches!(p, Plan::File { .. })).count();
+    let file_count = plan
+        .iter()
+        .filter(|p| matches!(p, Plan::File { .. }))
+        .count();
     let byte_total: u64 = plan
         .iter()
         .filter_map(|p| match p {
@@ -735,11 +760,19 @@ pub fn create(
     if let Some(p) = dest.parent() {
         fs::create_dir_all(p).map_err(|e| format!("创建目标目录失败: {}", e))?;
     }
-    let mut w = ArchiveWriter::create(dest).map_err(|e| format!("创建 {} 失败: {}", dest.display(), e))?;
+    let mut w =
+        ArchiveWriter::create(dest).map_err(|e| format!("创建 {} 失败: {}", dest.display(), e))?;
     w.set_content_methods(methods);
     // crate 的默认值是 true（等于 7z 的 -mhe），必须显式设成用户的选择：
     // 不设的话"只加密内容"会变成"连文件名一起加密"，用户下次不看密码框根本列不出内容
-    w.set_encrypt_header(opts.encrypt_header && opts.password.as_deref().map(|s| !s.is_empty()).unwrap_or(false));
+    w.set_encrypt_header(
+        opts.encrypt_header
+            && opts
+                .password
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false),
+    );
 
     let started = std::time::Instant::now();
     let mut stats = Stats::default();
@@ -796,11 +829,10 @@ fn push_each(
         }
         let f = File::open(path).map_err(|e| format!("打开 {} 失败: {}", path.display(), e))?;
         reporter.set_entry(name);
-        let tracked = super::io::TrackingReader::new(
-            BufReader::with_capacity(256 * 1024, f),
-            cancel,
-            |n| reporter.advance_bytes(n),
-        );
+        let tracked =
+            super::io::TrackingReader::new(BufReader::with_capacity(256 * 1024, f), cancel, |n| {
+                reporter.advance_bytes(n)
+            });
         match w.push_archive_entry(ArchiveEntry::from_path(path, name.clone()), Some(tracked)) {
             Ok(_) => {
                 stats.entries_done += 1;
@@ -947,7 +979,14 @@ mod tests {
         let out = dir.join("x");
         fs::create_dir_all(&out).unwrap();
         let cancel = AtomicBool::new(false);
-        let stats = extract(&dest, &out, &ExtractOptions::default(), &mut rep(Kind::Extract), &cancel).unwrap();
+        let stats = extract(
+            &dest,
+            &out,
+            &ExtractOptions::default(),
+            &mut rep(Kind::Extract),
+            &cancel,
+        )
+        .unwrap();
         assert!(stats.errors.is_empty(), "{:?}", stats.errors);
         assert_eq!(fs::read(out.join("src/a.txt")).unwrap(), b"hello 7z");
         assert_eq!(fs::read(out.join("src/sub/b.bin")).unwrap().len(), 5000);
@@ -970,7 +1009,10 @@ mod tests {
         // 目录大小的子树汇总已经上移到 mod.rs（六个后端共用一份），
         // 这里照样跑一遍：验证的是 7z 的目录条目喂给那份共享实现能不能算对
         crate::archive::rollup_dir_sizes(&mut entries);
-        let sub = entries.iter().find(|e| e.path == "src/sub" && e.is_dir).unwrap();
+        let sub = entries
+            .iter()
+            .find(|e| e.path == "src/sub" && e.is_dir)
+            .unwrap();
         assert_eq!(sub.size, 5000, "目录大小要按子树汇总");
         // solid 下单条目的 packed 没有意义，必须如实填 0
         assert!(entries.iter().filter(|e| !e.is_dir).all(|e| e.packed == 0));
@@ -978,7 +1020,14 @@ mod tests {
         let out = dir.join("x");
         fs::create_dir_all(&out).unwrap();
         let cancel = AtomicBool::new(false);
-        extract(&dest, &out, &ExtractOptions::default(), &mut rep(Kind::Extract), &cancel).unwrap();
+        extract(
+            &dest,
+            &out,
+            &ExtractOptions::default(),
+            &mut rep(Kind::Extract),
+            &cancel,
+        )
+        .unwrap();
         assert_eq!(fs::read(out.join("src/sub/b.bin")).unwrap().len(), 5000);
     }
 
@@ -1003,7 +1052,10 @@ mod tests {
             ..Default::default()
         };
         extract(&dest, &out, &opts, &mut rep(Kind::Extract), &cancel).unwrap();
-        assert_eq!(fs::read(out.join("src/sub/b.bin")).unwrap(), vec![0xABu8; 5000]);
+        assert_eq!(
+            fs::read(out.join("src/sub/b.bin")).unwrap(),
+            vec![0xABu8; 5000]
+        );
         assert!(!out.join("src/a.txt").exists(), "没选中的不该解出来");
     }
 
@@ -1087,7 +1139,13 @@ mod tests {
         let dir = crate::test_bridge::TempDir::new("7z-test");
         let dest = roundtrip(&dir, CreateOptions::default());
         let cancel = AtomicBool::new(false);
-        let stats = test(&dest, &ExtractOptions::default(), &mut rep(Kind::Test), &cancel).unwrap();
+        let stats = test(
+            &dest,
+            &ExtractOptions::default(),
+            &mut rep(Kind::Test),
+            &cancel,
+        )
+        .unwrap();
         assert!(stats.entries_done >= 2, "{:?}", stats);
         assert!(stats.errors.is_empty());
 
@@ -1097,7 +1155,12 @@ mod tests {
         bytes[n / 2] ^= 0xFF;
         fs::write(&dest, &bytes).unwrap();
         let cancel = AtomicBool::new(false);
-        let r = test(&dest, &ExtractOptions::default(), &mut rep(Kind::Test), &cancel);
+        let r = test(
+            &dest,
+            &ExtractOptions::default(),
+            &mut rep(Kind::Test),
+            &cancel,
+        );
         assert!(r.is_err(), "坏数据没被 CRC 抓出来");
     }
 
@@ -1156,7 +1219,14 @@ mod tests {
         let out = dir.join("x");
         fs::create_dir_all(&out).unwrap();
         let cancel = AtomicBool::new(true);
-        let err = extract(&dest, &out, &ExtractOptions::default(), &mut rep(Kind::Extract), &cancel).unwrap_err();
+        let err = extract(
+            &dest,
+            &out,
+            &ExtractOptions::default(),
+            &mut rep(Kind::Extract),
+            &cancel,
+        )
+        .unwrap_err();
         assert!(err.contains("已取消"), "{}", err);
     }
 

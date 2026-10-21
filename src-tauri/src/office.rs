@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Office 文档转换结果
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -76,7 +76,9 @@ pub async fn convert_office_to_pdf(path: String) -> Result<OfficeConvertResult, 
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let supported = ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf"];
+    let supported = [
+        "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf",
+    ];
     if !supported.contains(&ext.as_str()) {
         return Err(format!("不支持的 Office 格式: .{}", ext));
     }
@@ -126,10 +128,7 @@ pub async fn convert_office_to_pdf(path: String) -> Result<OfficeConvertResult, 
     }
 
     // soffice 输出文件名 = 源文件名.pdf
-    let base = src
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
+    let base = src.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let produced = outdir.join(format!("{}.pdf", base));
     if !produced.exists() {
         return Err(format!(
@@ -139,8 +138,7 @@ pub async fn convert_office_to_pdf(path: String) -> Result<OfficeConvertResult, 
     }
 
     // 移到 cache
-    std::fs::rename(&produced, &cached_pdf)
-        .map_err(|e| format!("移动到缓存失败: {}", e))?;
+    std::fs::rename(&produced, &cached_pdf).map_err(|e| format!("移动到缓存失败: {}", e))?;
     // 清理 outdir
     let _ = std::fs::remove_dir_all(&outdir);
 

@@ -60,8 +60,8 @@ fn owned(doc: &Document, object: &Object) -> Option<Object> {
 /// 收集一页可用的字体映射，键是页面 Resources/Font 里的名字（如 `F1`）。
 pub(crate) fn font_maps(doc: &Document, page: ObjectId) -> HashMap<Vec<u8>, FontMap> {
     let mut maps = HashMap::new();
-    let Some(resources) = crate::pdf_ops::inheritable(doc, page, b"Resources")
-        .and_then(|object| owned(doc, &object))
+    let Some(resources) =
+        crate::pdf_ops::inheritable(doc, page, b"Resources").and_then(|object| owned(doc, &object))
     else {
         return maps;
     };
@@ -208,22 +208,134 @@ fn win_ansi(byte: u8) -> Option<char> {
 
 /// MacRomanEncoding 的 0x80–0xFF，逐字节取自 Apple 的 codec 表。
 const MAC_ROMAN_HIGH: [Option<char>; 128] = [
-    Some('\u{00C4}'), Some('\u{00C5}'), Some('\u{00C7}'), Some('\u{00C9}'), Some('\u{00D1}'), Some('\u{00D6}'), Some('\u{00DC}'), Some('\u{00E1}'),
-    Some('\u{00E0}'), Some('\u{00E2}'), Some('\u{00E4}'), Some('\u{00E3}'), Some('\u{00E5}'), Some('\u{00E7}'), Some('\u{00E9}'), Some('\u{00E8}'),
-    Some('\u{00EA}'), Some('\u{00EB}'), Some('\u{00ED}'), Some('\u{00EC}'), Some('\u{00EE}'), Some('\u{00EF}'), Some('\u{00F1}'), Some('\u{00F3}'),
-    Some('\u{00F2}'), Some('\u{00F4}'), Some('\u{00F6}'), Some('\u{00F5}'), Some('\u{00FA}'), Some('\u{00F9}'), Some('\u{00FB}'), Some('\u{00FC}'),
-    Some('\u{2020}'), Some('\u{00B0}'), Some('\u{00A2}'), Some('\u{00A3}'), Some('\u{00A7}'), Some('\u{2022}'), Some('\u{00B6}'), Some('\u{00DF}'),
-    Some('\u{00AE}'), Some('\u{00A9}'), Some('\u{2122}'), Some('\u{00B4}'), Some('\u{00A8}'), Some('\u{2260}'), Some('\u{00C6}'), Some('\u{00D8}'),
-    Some('\u{221E}'), Some('\u{00B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{00A5}'), Some('\u{00B5}'), Some('\u{2202}'), Some('\u{2211}'),
-    Some('\u{220F}'), Some('\u{03C0}'), Some('\u{222B}'), Some('\u{00AA}'), Some('\u{00BA}'), Some('\u{03A9}'), Some('\u{00E6}'), Some('\u{00F8}'),
-    Some('\u{00BF}'), Some('\u{00A1}'), Some('\u{00AC}'), Some('\u{221A}'), Some('\u{0192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{00AB}'),
-    Some('\u{00BB}'), Some('\u{2026}'), Some('\u{00A0}'), Some('\u{00C0}'), Some('\u{00C3}'), Some('\u{00D5}'), Some('\u{0152}'), Some('\u{0153}'),
-    Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{00F7}'), Some('\u{25CA}'),
-    Some('\u{00FF}'), Some('\u{0178}'), Some('\u{2044}'), Some('\u{20AC}'), Some('\u{2039}'), Some('\u{203A}'), Some('\u{FB01}'), Some('\u{FB02}'),
-    Some('\u{2021}'), Some('\u{00B7}'), Some('\u{201A}'), Some('\u{201E}'), Some('\u{2030}'), Some('\u{00C2}'), Some('\u{00CA}'), Some('\u{00C1}'),
-    Some('\u{00CB}'), Some('\u{00C8}'), Some('\u{00CD}'), Some('\u{00CE}'), Some('\u{00CF}'), Some('\u{00CC}'), Some('\u{00D3}'), Some('\u{00D4}'),
-    Some('\u{F8FF}'), Some('\u{00D2}'), Some('\u{00DA}'), Some('\u{00DB}'), Some('\u{00D9}'), Some('\u{0131}'), Some('\u{02C6}'), Some('\u{02DC}'),
-    Some('\u{00AF}'), Some('\u{02D8}'), Some('\u{02D9}'), Some('\u{02DA}'), Some('\u{00B8}'), Some('\u{02DD}'), Some('\u{02DB}'), Some('\u{02C7}'),
+    Some('\u{00C4}'),
+    Some('\u{00C5}'),
+    Some('\u{00C7}'),
+    Some('\u{00C9}'),
+    Some('\u{00D1}'),
+    Some('\u{00D6}'),
+    Some('\u{00DC}'),
+    Some('\u{00E1}'),
+    Some('\u{00E0}'),
+    Some('\u{00E2}'),
+    Some('\u{00E4}'),
+    Some('\u{00E3}'),
+    Some('\u{00E5}'),
+    Some('\u{00E7}'),
+    Some('\u{00E9}'),
+    Some('\u{00E8}'),
+    Some('\u{00EA}'),
+    Some('\u{00EB}'),
+    Some('\u{00ED}'),
+    Some('\u{00EC}'),
+    Some('\u{00EE}'),
+    Some('\u{00EF}'),
+    Some('\u{00F1}'),
+    Some('\u{00F3}'),
+    Some('\u{00F2}'),
+    Some('\u{00F4}'),
+    Some('\u{00F6}'),
+    Some('\u{00F5}'),
+    Some('\u{00FA}'),
+    Some('\u{00F9}'),
+    Some('\u{00FB}'),
+    Some('\u{00FC}'),
+    Some('\u{2020}'),
+    Some('\u{00B0}'),
+    Some('\u{00A2}'),
+    Some('\u{00A3}'),
+    Some('\u{00A7}'),
+    Some('\u{2022}'),
+    Some('\u{00B6}'),
+    Some('\u{00DF}'),
+    Some('\u{00AE}'),
+    Some('\u{00A9}'),
+    Some('\u{2122}'),
+    Some('\u{00B4}'),
+    Some('\u{00A8}'),
+    Some('\u{2260}'),
+    Some('\u{00C6}'),
+    Some('\u{00D8}'),
+    Some('\u{221E}'),
+    Some('\u{00B1}'),
+    Some('\u{2264}'),
+    Some('\u{2265}'),
+    Some('\u{00A5}'),
+    Some('\u{00B5}'),
+    Some('\u{2202}'),
+    Some('\u{2211}'),
+    Some('\u{220F}'),
+    Some('\u{03C0}'),
+    Some('\u{222B}'),
+    Some('\u{00AA}'),
+    Some('\u{00BA}'),
+    Some('\u{03A9}'),
+    Some('\u{00E6}'),
+    Some('\u{00F8}'),
+    Some('\u{00BF}'),
+    Some('\u{00A1}'),
+    Some('\u{00AC}'),
+    Some('\u{221A}'),
+    Some('\u{0192}'),
+    Some('\u{2248}'),
+    Some('\u{2206}'),
+    Some('\u{00AB}'),
+    Some('\u{00BB}'),
+    Some('\u{2026}'),
+    Some('\u{00A0}'),
+    Some('\u{00C0}'),
+    Some('\u{00C3}'),
+    Some('\u{00D5}'),
+    Some('\u{0152}'),
+    Some('\u{0153}'),
+    Some('\u{2013}'),
+    Some('\u{2014}'),
+    Some('\u{201C}'),
+    Some('\u{201D}'),
+    Some('\u{2018}'),
+    Some('\u{2019}'),
+    Some('\u{00F7}'),
+    Some('\u{25CA}'),
+    Some('\u{00FF}'),
+    Some('\u{0178}'),
+    Some('\u{2044}'),
+    Some('\u{20AC}'),
+    Some('\u{2039}'),
+    Some('\u{203A}'),
+    Some('\u{FB01}'),
+    Some('\u{FB02}'),
+    Some('\u{2021}'),
+    Some('\u{00B7}'),
+    Some('\u{201A}'),
+    Some('\u{201E}'),
+    Some('\u{2030}'),
+    Some('\u{00C2}'),
+    Some('\u{00CA}'),
+    Some('\u{00C1}'),
+    Some('\u{00CB}'),
+    Some('\u{00C8}'),
+    Some('\u{00CD}'),
+    Some('\u{00CE}'),
+    Some('\u{00CF}'),
+    Some('\u{00CC}'),
+    Some('\u{00D3}'),
+    Some('\u{00D4}'),
+    Some('\u{F8FF}'),
+    Some('\u{00D2}'),
+    Some('\u{00DA}'),
+    Some('\u{00DB}'),
+    Some('\u{00D9}'),
+    Some('\u{0131}'),
+    Some('\u{02C6}'),
+    Some('\u{02DC}'),
+    Some('\u{00AF}'),
+    Some('\u{02D8}'),
+    Some('\u{02D9}'),
+    Some('\u{02DA}'),
+    Some('\u{00B8}'),
+    Some('\u{02DD}'),
+    Some('\u{02DB}'),
+    Some('\u{02C7}'),
 ];
 
 fn mac_roman(byte: u8) -> Option<char> {
@@ -257,7 +369,8 @@ pub(crate) fn parse_cmap(stream: &[u8]) -> (HashMap<u32, String>, usize) {
                         }
                     }
                 } else if keyword == "beginbfrange" && items.len() >= 3 {
-                    let (Some(low), Some(high)) = (single_code(&items[0]), single_code(&items[1])) else {
+                    let (Some(low), Some(high)) = (single_code(&items[0]), single_code(&items[1]))
+                    else {
                         continue;
                     };
                     if let Some(list) = items[2].strip_prefix('[') {
@@ -543,9 +656,15 @@ endcmap
         assert_eq!(glyph_to_unicode(b"uni4E2D").as_deref(), Some("中"));
         assert_eq!(glyph_to_unicode(b"u1F600").as_deref(), Some("\u{1F600}"));
         // 代理对要成对才能拼出字符；落单的代理位只能替换成 U+FFFD
-        assert_eq!(glyph_to_unicode(b"uniD83DDE00").as_deref(), Some("\u{1F600}"));
+        assert_eq!(
+            glyph_to_unicode(b"uniD83DDE00").as_deref(),
+            Some("\u{1F600}")
+        );
         assert_eq!(glyph_to_unicode(b"uniD83D").as_deref(), Some("\u{FFFD}"));
-        assert_eq!(glyph_to_unicode(b"quotedblleft").as_deref(), Some("\u{201C}"));
+        assert_eq!(
+            glyph_to_unicode(b"quotedblleft").as_deref(),
+            Some("\u{201C}")
+        );
         assert_eq!(glyph_to_unicode(b"endash").as_deref(), Some("\u{2013}"));
         assert_eq!(glyph_to_unicode(b"fi").as_deref(), Some("\u{FB01}"));
         assert_eq!(glyph_to_unicode(b"g").as_deref(), Some("g"));
@@ -557,11 +676,19 @@ endcmap
     fn differences_remap_codes_on_top_of_the_base_encoding() {
         let mut codes = standard_codes(b"MacRomanEncoding");
         assert_eq!(codes.get(&0x41).map(String::as_str), Some("A"));
-        let items = vec![Object::Integer(65), Object::Name(b"bracketleft".to_vec()), Object::Name(b"bracketright".to_vec())];
+        let items = vec![
+            Object::Integer(65),
+            Object::Name(b"bracketleft".to_vec()),
+            Object::Name(b"bracketright".to_vec()),
+        ];
         apply_differences(&mut codes, &items);
         // /Differences 覆盖了 0x41 起的两个码位
         assert_eq!(codes.get(&65).map(String::as_str), Some("["));
         assert_eq!(codes.get(&66).map(String::as_str), Some("]"));
-        assert_eq!(codes.get(&67).map(String::as_str), Some("C"), "表外的码位保持原编码");
+        assert_eq!(
+            codes.get(&67).map(String::as_str),
+            Some("C"),
+            "表外的码位保持原编码"
+        );
     }
 }

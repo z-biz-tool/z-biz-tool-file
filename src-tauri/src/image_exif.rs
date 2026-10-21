@@ -3,14 +3,14 @@ use serde::{Deserialize, Serialize};
 /// EXIF 提取结果（精简版，按常见字段映射）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExifInfo {
-    pub make: Option<String>,            // 相机制造商
-    pub model: Option<String>,           // 相机型号
-    pub date_time: Option<String>,       // 拍摄时间
-    pub orientation: Option<String>,    // 方向
-    pub exposure_time: Option<String>,  // 曝光时间
-    pub f_number: Option<String>,        // 光圈
-    pub iso: Option<String>,            // ISO
-    pub focal_length: Option<String>,   // 焦距
+    pub make: Option<String>,          // 相机制造商
+    pub model: Option<String>,         // 相机型号
+    pub date_time: Option<String>,     // 拍摄时间
+    pub orientation: Option<String>,   // 方向
+    pub exposure_time: Option<String>, // 曝光时间
+    pub f_number: Option<String>,      // 光圈
+    pub iso: Option<String>,           // ISO
+    pub focal_length: Option<String>,  // 焦距
     pub white_balance: Option<String>,
     pub flash: Option<String>,
     pub pixel_x_dimension: Option<u32>,
@@ -55,10 +55,10 @@ pub fn read_exif(path: String) -> Result<ExifInfo, String> {
 
     let gps_lat = exif
         .get_field(exif::Tag::GPSLatitude, exif::In::PRIMARY)
-        .and_then(|f| parse_gps_dms(f));
+        .and_then(parse_gps_dms);
     let gps_lon = exif
         .get_field(exif::Tag::GPSLongitude, exif::In::PRIMARY)
-        .and_then(|f| parse_gps_dms(f));
+        .and_then(parse_gps_dms);
     let gps_alt = exif
         .get_field(exif::Tag::GPSAltitude, exif::In::PRIMARY)
         .and_then(|f| match &f.value {

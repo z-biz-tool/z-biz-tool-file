@@ -1,6 +1,6 @@
+use crate::path_guard;
 use crate::pdf_font::FontMap;
 use crate::pdf_ops::load_doc;
-use crate::path_guard;
 use lopdf::{Document, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ pub(crate) fn decode_pdf_string(raw: &[u8]) -> String {
         return utf16be_to_string(body);
     }
     // 不带 BOM 的 ASCII UTF-16BE（00 41 00 42 …）本身也是合法 UTF-8，必须先于 UTF-8 分支判断
-    if raw.len() >= 4 && raw.len() % 2 == 0 && raw.iter().step_by(2).all(|&b| b == 0) {
+    if raw.len() >= 4 && raw.len().is_multiple_of(2) && raw.iter().step_by(2).all(|&b| b == 0) {
         return utf16be_to_string(raw);
     }
     if let Ok(text) = std::str::from_utf8(raw) {
@@ -29,7 +29,7 @@ pub(crate) fn decode_pdf_string(raw: &[u8]) -> String {
         }
     }
     // 中文标题常被写成无 BOM 的 UTF-16BE；解不出可读字符就退回逐字节
-    if raw.len() >= 2 && raw.len() % 2 == 0 {
+    if raw.len() >= 2 && raw.len().is_multiple_of(2) {
         let guess = utf16be_to_string(raw);
         if !guess.is_empty() && guess.chars().all(|c| !c.is_control()) {
             return guess;
@@ -77,7 +77,8 @@ fn read_literal(buf: &[u8], start: usize) -> (Vec<u8>, usize) {
                     digit @ b'0'..=b'7' => {
                         let mut value = (digit - b'0') as u32;
                         let mut taken = 1;
-                        while taken < 3 && i + 1 < buf.len() && (b'0'..=b'7').contains(&buf[i + 1]) {
+                        while taken < 3 && i + 1 < buf.len() && (b'0'..=b'7').contains(&buf[i + 1])
+                        {
                             i += 1;
                             value = value * 8 + (buf[i] - b'0') as u32;
                             taken += 1;
@@ -121,8 +122,8 @@ fn read_hex(buf: &[u8], i: usize) -> Option<(Vec<u8>, usize)> {
         .copied()
         .collect();
     let mut out = Vec::with_capacity(digits.len() / 2);
-    let mut pair = digits.chunks(2);
-    while let Some(chunk) = pair.next() {
+    let pair = digits.chunks(2);
+    for chunk in pair {
         if chunk.len() == 2 {
             let hi = (chunk[0] as char).to_digit(16)?;
             let lo = (chunk[1] as char).to_digit(16)?;
@@ -211,12 +212,7 @@ struct LastDraw {
 
 /// 把一段文字接到 `out` 末尾：基线移动超过阈值才补换行。
 /// 行内不插空格——中文按字绘制，插空格会把句子切断（空格本身由内容流里的 `( )` 提供）。
-fn append_text(
-    out: &mut String,
-    state: &TextState,
-    line: &mut Option<LastDraw>,
-    text: &str,
-) {
+fn append_text(out: &mut String, state: &TextState, line: &mut Option<LastDraw>, text: &str) {
     if text.is_empty() {
         return;
     }
@@ -351,7 +347,7 @@ fn page_text(content: &[u8], fonts: &HashMap<Vec<u8>, FontMap>) -> String {
                 pending.clear();
             }
             b"TJ" => {
-                let texts: Vec<String> = pending.drain(..).collect();
+                let texts: Vec<String> = std::mem::take(&mut pending);
                 let joined = texts.concat();
                 append_text(&mut out, &state, &mut line, &joined);
             }
@@ -415,11 +411,7 @@ fn page_text(content: &[u8], fonts: &HashMap<Vec<u8>, FontMap>) -> String {
 }
 
 /// 字形码 → 文本：有字体映射就走编码表/CMap，否则退回 PDF 字符串编码启发式。
-fn decode_glyphs(
-    raw: &[u8],
-    font: Option<&[u8]>,
-    fonts: &HashMap<Vec<u8>, FontMap>,
-) -> String {
+fn decode_glyphs(raw: &[u8], font: Option<&[u8]>, fonts: &HashMap<Vec<u8>, FontMap>) -> String {
     let text = if let Some(map) = font.and_then(|name| fonts.get(name)) {
         let mapped = map.decode(raw);
         if mapped.is_empty() {
@@ -442,9 +434,8 @@ fn decode_glyphs(
 /// 换行与制表保留（那是内容流自己表达的排版），回车归一为换行；其余 C0、DEL、
 /// 软连字符丢弃。 bidi/连字这类影响字形拼接的 Cf 标记保留，删了会改坏阿拉伯文排版。
 fn scrub_invisible(text: &str) -> String {
-    let dirty = |c: char| {
-        (c.is_control() || matches!(c, '\u{7f}' | '\u{ad}')) && !matches!(c, '\n' | '\t')
-    };
+    let dirty =
+        |c: char| (c.is_control() || matches!(c, '\u{7f}' | '\u{ad}')) && !matches!(c, '\n' | '\t');
     if !text.chars().any(dirty) {
         return text.to_string();
     }
@@ -467,39 +458,29 @@ fn scrub_invisible(text: &str) -> String {
 /// 定义为兼容字符，NFKC 归一结果就是下表；部首码位本身没有别的用途，替换不丢信息。
 /// 代价是部首索引页（词典那种）会退化成普通汉字——真实语料里没出现过这种文档。
 const KANGXI_IDEOGRAPH: [char; 214] = [
-    '一', '丨', '丶', '丿', '乙', '亅', '二', '亠',
-    '人', '儿', '入', '八', '冂', '冖', '冫', '几',
-    '凵', '刀', '力', '勹', '匕', '匚', '匸', '十',
-    '卜', '卩', '厂', '厶', '又', '口', '囗', '土',
-    '士', '夂', '夊', '夕', '大', '女', '子', '宀',
-    '寸', '小', '尢', '尸', '屮', '山', '巛', '工',
-    '己', '巾', '干', '幺', '广', '廴', '廾', '弋',
-    '弓', '彐', '彡', '彳', '心', '戈', '戶', '手',
-    '支', '攴', '文', '斗', '斤', '方', '无', '日',
-    '曰', '月', '木', '欠', '止', '歹', '殳', '毋',
-    '比', '毛', '氏', '气', '水', '火', '爪', '父',
-    '爻', '爿', '片', '牙', '牛', '犬', '玄', '玉',
-    '瓜', '瓦', '甘', '生', '用', '田', '疋', '疒',
-    '癶', '白', '皮', '皿', '目', '矛', '矢', '石',
-    '示', '禸', '禾', '穴', '立', '竹', '米', '糸',
-    '缶', '网', '羊', '羽', '老', '而', '耒', '耳',
-    '聿', '肉', '臣', '自', '至', '臼', '舌', '舛',
-    '舟', '艮', '色', '艸', '虍', '虫', '血', '行',
-    '衣', '襾', '見', '角', '言', '谷', '豆', '豕',
-    '豸', '貝', '赤', '走', '足', '身', '車', '辛',
-    '辰', '辵', '邑', '酉', '釆', '里', '金', '長',
-    '門', '阜', '隶', '隹', '雨', '靑', '非', '面',
-    '革', '韋', '韭', '音', '頁', '風', '飛', '食',
-    '首', '香', '馬', '骨', '高', '髟', '鬥', '鬯',
-    '鬲', '鬼', '魚', '鳥', '鹵', '鹿', '麥', '麻',
-    '黃', '黍', '黑', '黹', '黽', '鼎', '鼓', '鼠',
+    '一', '丨', '丶', '丿', '乙', '亅', '二', '亠', '人', '儿', '入', '八', '冂', '冖', '冫', '几',
+    '凵', '刀', '力', '勹', '匕', '匚', '匸', '十', '卜', '卩', '厂', '厶', '又', '口', '囗', '土',
+    '士', '夂', '夊', '夕', '大', '女', '子', '宀', '寸', '小', '尢', '尸', '屮', '山', '巛', '工',
+    '己', '巾', '干', '幺', '广', '廴', '廾', '弋', '弓', '彐', '彡', '彳', '心', '戈', '戶', '手',
+    '支', '攴', '文', '斗', '斤', '方', '无', '日', '曰', '月', '木', '欠', '止', '歹', '殳', '毋',
+    '比', '毛', '氏', '气', '水', '火', '爪', '父', '爻', '爿', '片', '牙', '牛', '犬', '玄', '玉',
+    '瓜', '瓦', '甘', '生', '用', '田', '疋', '疒', '癶', '白', '皮', '皿', '目', '矛', '矢', '石',
+    '示', '禸', '禾', '穴', '立', '竹', '米', '糸', '缶', '网', '羊', '羽', '老', '而', '耒', '耳',
+    '聿', '肉', '臣', '自', '至', '臼', '舌', '舛', '舟', '艮', '色', '艸', '虍', '虫', '血', '行',
+    '衣', '襾', '見', '角', '言', '谷', '豆', '豕', '豸', '貝', '赤', '走', '足', '身', '車', '辛',
+    '辰', '辵', '邑', '酉', '釆', '里', '金', '長', '門', '阜', '隶', '隹', '雨', '靑', '非', '面',
+    '革', '韋', '韭', '音', '頁', '風', '飛', '食', '首', '香', '馬', '骨', '高', '髟', '鬥', '鬯',
+    '鬲', '鬼', '魚', '鳥', '鹵', '鹿', '麥', '麻', '黃', '黍', '黑', '黹', '黽', '鼎', '鼓', '鼠',
     '鼻', '齊', '齒', '龍', '龜', '龠',
 ];
 
 /// 抽取出来的文本 → 面板可读文本：丢掉看不见的码位，再把兼容字形归一成正经汉字。
 fn display_text(text: &str) -> String {
     let cleaned = scrub_invisible(text);
-    if !cleaned.chars().any(|c| matches!(c, '\u{2f00}'..='\u{2fd5}')) {
+    if !cleaned
+        .chars()
+        .any(|c| matches!(c, '\u{2f00}'..='\u{2fd5}'))
+    {
         return cleaned;
     }
     cleaned
@@ -609,9 +590,7 @@ mod tests {
 
         let mut objects: Vec<Vec<u8>> = Vec::new();
         objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
-        objects.push(
-            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_vec(),
-        );
+        objects.push(b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_vec());
         objects.push(
             b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
                 .to_vec(),
@@ -659,7 +638,11 @@ mod tests {
     #[test]
     fn text_extracts_from_plain_content_stream() {
         let dir = crate::test_bridge::TempDir::new("pdftext-plain");
-        let file = write_fixture(&dir, "plain.pdf", &make_pdf(&["Hello PDF", "second line"], false));
+        let file = write_fixture(
+            &dir,
+            "plain.pdf",
+            &make_pdf(&["Hello PDF", "second line"], false),
+        );
         let text = extract_pdf_text(file.to_str().unwrap()).unwrap();
         assert!(text.contains("Hello PDF"), "{}", text);
         assert!(text.contains("second line"), "{}", text);
@@ -848,13 +831,16 @@ mod tests {
         assert_eq!(page_text(stream, &HashMap::new()).trim(), "Hello world");
     }
 
-/// `Tf` 只有字号是数字（字体名走 /Name）。取"末尾两个数字"会一个都取不到，
+    /// `Tf` 只有字号是数字（字体名走 /Name）。取"末尾两个数字"会一个都取不到，
     /// 字高停在默认值，上标这种 3.6pt 的抬升就被当成了换行。
     #[test]
     fn font_size_from_tf_drives_the_break_threshold() {
         let joined =
             b"BT /F1 10 Tf 1 0 0 1 340 458 Tm (model BERT) Tj ET                BT /F2 7 Tf 1 0 0 1 365 461.955 Tm ([1]) Tj ET                BT /F1 10 Tf 1 0 0 1 374 458 Tm (, and on) Tj ET";
-        assert_eq!(page_text(joined, &HashMap::new()).trim(), "model BERT[1], and on");
+        assert_eq!(
+            page_text(joined, &HashMap::new()).trim(),
+            "model BERT[1], and on"
+        );
     }
 
     /// Apple 许可证的真实写法：`10 0 0 10 40 374 Tm /TT2 1 Tf`，字号 1、缩放在矩阵里。
@@ -863,7 +849,10 @@ mod tests {
     fn font_size_scaled_in_the_matrix_is_not_overestimated() {
         let stream = b"BT 10 0 0 10 40 386 Tm /TT2 1 Tf (Line one) Tj ET \
                        BT 10 0 0 10 40 374 Tm /TT2 1 Tf (Line two) Tj ET";
-        assert_eq!(page_text(stream, &HashMap::new()).trim(), "Line one\nLine two");
+        assert_eq!(
+            page_text(stream, &HashMap::new()).trim(),
+            "Line one\nLine two"
+        );
         let same = b"BT 10 0 0 10 40 374 Tm /TT2 1 Tf (So) Tj ET \
                      BT 10 0 0 10 60 374 Tm /TT2 1 Tf (ft) Tj ET";
         assert_eq!(page_text(same, &HashMap::new()).trim(), "Soft");
@@ -874,7 +863,10 @@ mod tests {
     #[test]
     fn pieces_sharing_a_baseline_join_into_one_line() {
         let stream = b"BT /F1 24 Tf 72 700 Td (SOFT) Tj 30 0 Td (WARE) Tj 24 0 Td ( LICENSE) Tj ET";
-        assert_eq!(page_text(stream, &HashMap::new()).trim(), "SOFTWARE LICENSE");
+        assert_eq!(
+            page_text(stream, &HashMap::new()).trim(),
+            "SOFTWARE LICENSE"
+        );
     }
 
     /// 基线抖动（浮点定位、0.5pt 以内的偏移）不算换行
@@ -948,7 +940,12 @@ mod tests {
 
     /// 把若干对象拼成可直接 `Document::load` 的 PDF；对象号即数组下标 + 1。
     fn flat_pdf(objects: &[String]) -> Vec<u8> {
-        raw_pdf(&objects.iter().map(|o| o.as_bytes().to_vec()).collect::<Vec<_>>())
+        raw_pdf(
+            &objects
+                .iter()
+                .map(|o| o.as_bytes().to_vec())
+                .collect::<Vec<_>>(),
+        )
     }
 
     /// 字节版对象体，供压缩流这类含二进制的对象使用。
@@ -1173,9 +1170,18 @@ mod tests {
                 target
             );
         }
-        assert_eq!(display_text(&char::from_u32(0x2F00).unwrap().to_string()), "一");
-        assert_eq!(display_text(&char::from_u32(0x2F42).unwrap().to_string()), "文");
-        assert_eq!(display_text(&char::from_u32(0x2FD5).unwrap().to_string()), "龠");
+        assert_eq!(
+            display_text(&char::from_u32(0x2F00).unwrap().to_string()),
+            "一"
+        );
+        assert_eq!(
+            display_text(&char::from_u32(0x2F42).unwrap().to_string()),
+            "文"
+        );
+        assert_eq!(
+            display_text(&char::from_u32(0x2FD5).unwrap().to_string()),
+            "龠"
+        );
         // 正经汉字、以及部首补充区(U+2E80起，不在归一范围)都不该被改动
         assert_eq!(display_text("本文⻛"), "本文⻛");
     }

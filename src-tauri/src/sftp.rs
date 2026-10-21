@@ -54,7 +54,8 @@ fn connect(conn: &SshConn, timeout_secs: u64) -> Result<Session, String> {
         .ok();
     let mut sess = Session::new().map_err(|e| format!("SSH session 创建失败: {}", e))?;
     sess.set_tcp_stream(tcp);
-    sess.handshake().map_err(|e| format!("SSH 握手失败: {}", e))?;
+    sess.handshake()
+        .map_err(|e| format!("SSH 握手失败: {}", e))?;
     match &conn.auth {
         SshAuth::Password { password } => {
             sess.userauth_password(&conn.user, password)
@@ -91,7 +92,7 @@ pub async fn ssh_test_connection(
     let conn_clone = conn.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _sess = connect(&conn_clone, timeout)?;
-        Ok::<String, String>(format!("ok"))
+        Ok::<String, String>("ok".to_string())
     })
     .await
     .map_err(|e| format!("join 失败: {}", e))?;

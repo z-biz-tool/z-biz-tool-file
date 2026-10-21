@@ -79,9 +79,9 @@ pub fn search_file_content(
 
     // 可搜索的文本文件扩展名
     let text_exts = [
-        "txt", "md", "rs", "go", "py", "js", "ts", "tsx", "jsx", "json", "yaml", "yml",
-        "toml", "xml", "html", "css", "scss", "less", "sh", "bat", "java", "c", "cpp", "h",
-        "hpp", "cs", "rb", "php", "swift", "kt", "sql", "log", "csv", "conf", "ini", "env",
+        "txt", "md", "rs", "go", "py", "js", "ts", "tsx", "jsx", "json", "yaml", "yml", "toml",
+        "xml", "html", "css", "scss", "less", "sh", "bat", "java", "c", "cpp", "h", "hpp", "cs",
+        "rb", "php", "swift", "kt", "sql", "log", "csv", "conf", "ini", "env",
     ];
 
     for entry in WalkDir::new(root)
@@ -103,10 +103,7 @@ pub fn search_file_content(
         }
 
         let path = entry.path();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         if !text_exts.contains(&ext.to_lowercase().as_str()) {
             continue;
@@ -123,10 +120,7 @@ pub fn search_file_content(
         if let Ok(content) = fs::read_to_string(path) {
             for line in content.lines() {
                 if line.to_lowercase().contains(&query_lower) {
-                    let file_name = entry
-                        .file_name()
-                        .to_string_lossy()
-                        .to_string();
+                    let file_name = entry.file_name().to_string_lossy().to_string();
                     let metadata = entry.metadata().ok();
                     results.push(DiskSearchResult {
                         name: file_name,

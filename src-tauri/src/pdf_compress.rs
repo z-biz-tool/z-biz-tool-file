@@ -60,7 +60,9 @@ pub(crate) fn compress_pdf_blocking(
     max_dimension: Option<u32>,
 ) -> Result<CompressReport, String> {
     let quality = quality.unwrap_or(DEFAULT_QUALITY).clamp(20, 95);
-    let max_dimension = max_dimension.unwrap_or(DEFAULT_MAX_DIMENSION).clamp(64, 8000);
+    let max_dimension = max_dimension
+        .unwrap_or(DEFAULT_MAX_DIMENSION)
+        .clamp(64, 8000);
 
     let file = crate::path_guard::readable(&input_path)?;
     // 先过写保护再干活：敏感目录不该被创建，几百 MB 的重编码也不该白跑
@@ -181,7 +183,9 @@ fn flate_safe_streams(doc: &mut Document) -> usize {
         if deflated.len() + 19 >= stream.content.len() {
             continue;
         }
-        stream.dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
+        stream
+            .dict
+            .set("Filter", Object::Name(b"FlateDecode".to_vec()));
         stream.set_content(deflated);
         done += 1;
     }
@@ -207,7 +211,11 @@ fn rewrite_image(
             .ok()
             .and_then(|object| object.as_stream().ok())
             .ok_or_else(|| "对象不是流".to_string())?;
-        for key in [b"SMask".as_slice(), b"Mask".as_slice(), b"ImageMask".as_slice()] {
+        for key in [
+            b"SMask".as_slice(),
+            b"Mask".as_slice(),
+            b"ImageMask".as_slice(),
+        ] {
             if stream.dict.get(key).is_ok() {
                 // 透明蒙板是独立对象，换掉底图后蒙板尺寸/内容都对不上了
                 let mut name = String::from_utf8_lossy(key).to_string();
@@ -217,7 +225,10 @@ fn rewrite_image(
                 return Err(format!("带 /{}，换掉会丢透明度", name));
             }
         }
-        (stream.content.len() as u64, crate::pdf_image::decode_image(doc, stream, 0)?)
+        (
+            stream.content.len() as u64,
+            crate::pdf_image::decode_image(doc, stream, 0)?,
+        )
     };
 
     let image = match decoded {
@@ -252,7 +263,13 @@ fn rewrite_image(
                 image::imageops::FilterType::Lanczos3,
             );
         }
-        encode_jpeg(plane.as_raw(), target_width, target_height, ColorType::L8, quality)?
+        encode_jpeg(
+            plane.as_raw(),
+            target_width,
+            target_height,
+            ColorType::L8,
+            quality,
+        )?
     } else {
         let mut plane = image.to_rgb8();
         if (plane.width(), plane.height()) != (target_width, target_height) {
@@ -263,7 +280,13 @@ fn rewrite_image(
                 image::imageops::FilterType::Lanczos3,
             );
         }
-        encode_jpeg(plane.as_raw(), target_width, target_height, ColorType::Rgb8, quality)?
+        encode_jpeg(
+            plane.as_raw(),
+            target_width,
+            target_height,
+            ColorType::Rgb8,
+            quality,
+        )?
     };
 
     if encoded.len() as u64 >= original_bytes {
@@ -287,7 +310,8 @@ fn rewrite_image(
     dict.set("Filter", Object::Name(b"DCTDecode".to_vec()));
     // /Decode 用缺省值即可：JPEG 的样本本身就是 0~255 的显示值
     let stream = Stream::new(dict, encoded);
-    *doc.get_object_mut(id).map_err(|_| "对象无法写入".to_string())? = Object::Stream(stream);
+    *doc.get_object_mut(id)
+        .map_err(|_| "对象无法写入".to_string())? = Object::Stream(stream);
     Ok(())
 }
 
@@ -337,8 +361,16 @@ mod tests {
         let mut data = Vec::with_capacity((width * height * 3) as usize);
         for y in 0..height {
             for x in 0..width {
-                let r = if width > 1 { (x * 255 / (width - 1)) as u8 } else { 0 };
-                let g = if height > 1 { (y * 255 / (height - 1)) as u8 } else { 0 };
+                let r = if width > 1 {
+                    (x * 255 / (width - 1)) as u8
+                } else {
+                    0
+                };
+                let g = if height > 1 {
+                    (y * 255 / (height - 1)) as u8
+                } else {
+                    0
+                };
                 data.extend_from_slice(&[r, g, 128]);
             }
         }
@@ -350,7 +382,8 @@ mod tests {
         a.iter()
             .zip(b)
             .map(|(x, y)| x.abs_diff(*y) as f64)
-            .sum::<f64>() / a.len() as f64
+            .sum::<f64>()
+            / a.len() as f64
     }
 
     struct Fixture {
@@ -369,28 +402,29 @@ mod tests {
         }
 
         /// 建一条完整的字体链 Font → FontDescriptor → FontFile2，并挂进页面 Resources。
-    /// 必须可达，否则 `prune_objects` 会先替我们把字体流删掉，测试就成了空跑。
-    fn embed_font(&mut self, program: Vec<u8>) -> ObjectId {
-        let mut file = Dictionary::new();
-        file.set("Length1", Object::Integer(program.len() as i64));
-        let mut descriptor = Dictionary::new();
-        descriptor.set("Type", name("FontDescriptor"));
-        descriptor.set("FontName", name("Fake-Regular"));
-        descriptor.set("FontFile2", Object::Reference(self.stream(file, program)));
-        let descriptor = self.doc.add_object(Object::Dictionary(descriptor));
-        let mut font = Dictionary::new();
-        font.set("Type", name("Font"));
-        font.set("Subtype", name("Type1"));
-        font.set("BaseFont", name("Fake-Regular"));
-        font.set("FontDescriptor", Object::Reference(descriptor));
-        let font = self.doc.add_object(Object::Dictionary(font));
-        self.fonts.push(("F1".to_string(), font));
-        font
-    }
+        /// 必须可达，否则 `prune_objects` 会先替我们把字体流删掉，测试就成了空跑。
+        fn embed_font(&mut self, program: Vec<u8>) -> ObjectId {
+            let mut file = Dictionary::new();
+            file.set("Length1", Object::Integer(program.len() as i64));
+            let mut descriptor = Dictionary::new();
+            descriptor.set("Type", name("FontDescriptor"));
+            descriptor.set("FontName", name("Fake-Regular"));
+            descriptor.set("FontFile2", Object::Reference(self.stream(file, program)));
+            let descriptor = self.doc.add_object(Object::Dictionary(descriptor));
+            let mut font = Dictionary::new();
+            font.set("Type", name("Font"));
+            font.set("Subtype", name("Type1"));
+            font.set("BaseFont", name("Fake-Regular"));
+            font.set("FontDescriptor", Object::Reference(descriptor));
+            let font = self.doc.add_object(Object::Dictionary(font));
+            self.fonts.push(("F1".to_string(), font));
+            font
+        }
 
-    /// 只建对象、不挂到页面 Resources 上：/SMask 这类图本来就是从图片字典引用的
+        /// 只建对象、不挂到页面 Resources 上：/SMask 这类图本来就是从图片字典引用的
         fn stream(&mut self, dict: Dictionary, content: Vec<u8>) -> ObjectId {
-            self.doc.add_object(Object::Stream(Stream::new(dict, content)))
+            self.doc
+                .add_object(Object::Stream(Stream::new(dict, content)))
         }
 
         fn image(&mut self, key: &str, dict: Dictionary, content: Vec<u8>) -> ObjectId {
@@ -422,15 +456,20 @@ mod tests {
                 )));
                 let mut dict = Dictionary::new();
                 dict.set("Type", name("Page"));
-                dict.set("MediaBox", Object::Array(vec![
-                    Object::Integer(0),
-                    Object::Integer(0),
-                    Object::Integer(200),
-                    Object::Integer(200),
-                ]));
+                dict.set(
+                    "MediaBox",
+                    Object::Array(vec![
+                        Object::Integer(0),
+                        Object::Integer(0),
+                        Object::Integer(200),
+                        Object::Integer(200),
+                    ]),
+                );
                 dict.set("Resources", Object::Reference(resources));
                 dict.set("Contents", Object::Reference(content));
-                kids.push(Object::Reference(self.doc.add_object(Object::Dictionary(dict))));
+                kids.push(Object::Reference(
+                    self.doc.add_object(Object::Dictionary(dict)),
+                ));
             }
             let mut pages_dict = Dictionary::new();
             pages_dict.set("Type", name("Pages"));
@@ -526,7 +565,10 @@ mod tests {
         assert_eq!(int_of(&stream.dict, b"Width"), Some(48));
         assert_eq!(int_of(&stream.dict, b"Height"), Some(32));
         assert_eq!(int_of(&stream.dict, b"BitsPerComponent"), Some(8));
-        assert!(stream.dict.get(b"Decode").is_err(), "/Decode 必须换掉，否则样本被映射两次");
+        assert!(
+            stream.dict.get(b"Decode").is_err(),
+            "/Decode 必须换掉，否则样本被映射两次"
+        );
         // 换上去的必须真是一张解得开、且画的就是原图的 JPEG
         let decoded = image::load_from_memory(bytes).expect("换上去的不是合法 JPEG");
         assert_eq!((decoded.width(), decoded.height()), (48, 32));
@@ -554,7 +596,10 @@ mod tests {
         let report = compress(&input, &dir.join("out.pdf"), 70, DEFAULT_MAX_DIMENSION);
         assert_eq!(report.rewritten, 0);
         assert!(
-            report.skipped.iter().any(|r| r.contains("SMask") && r.contains("Im0")),
+            report
+                .skipped
+                .iter()
+                .any(|r| r.contains("SMask") && r.contains("Im0")),
             "原因里要带上是哪张图: {:?}",
             report.skipped
         );
@@ -562,7 +607,9 @@ mod tests {
         let streams = image_streams(&dir.join("out.pdf"));
         assert_eq!(streams.len(), 2);
         assert!(
-            streams.iter().all(|(stream, _)| filter_of(stream) != "DCTDecode"),
+            streams
+                .iter()
+                .all(|(stream, _)| filter_of(stream) != "DCTDecode"),
             "带透明通道的图不该被换成 JPEG"
         );
         assert!(streams.iter().any(|(_, bytes)| *bytes == content));
@@ -584,7 +631,11 @@ mod tests {
 
         let report = compress(&input, &dir.join("out.pdf"), 70, DEFAULT_MAX_DIMENSION);
         assert_eq!(report.rewritten, 0);
-        assert!(report.skipped[0].contains("ImageMask"), "{:?}", report.skipped);
+        assert!(
+            report.skipped[0].contains("ImageMask"),
+            "{:?}",
+            report.skipped
+        );
     }
 
     #[test]
@@ -598,7 +649,11 @@ mod tests {
 
         let report = compress(&input, &dir.join("out.pdf"), 70, DEFAULT_MAX_DIMENSION);
         assert_eq!(report.rewritten, 0);
-        assert!(report.skipped[0].contains("没有更小"), "{:?}", report.skipped);
+        assert!(
+            report.skipped[0].contains("没有更小"),
+            "{:?}",
+            report.skipped
+        );
         let streams = image_streams(&dir.join("out.pdf"));
         assert_eq!(streams.len(), 1);
         assert_eq!(streams[0].1, content, "不该变小却换了图，等于白损一次画质");
@@ -615,7 +670,10 @@ mod tests {
         let streams = image_streams(&dir.join("big-out.pdf"));
         assert_eq!(streams.len(), 1);
         assert_eq!(
-            (int_of(&streams[0].0.dict, b"Width"), int_of(&streams[0].0.dict, b"Height")),
+            (
+                int_of(&streams[0].0.dict, b"Width"),
+                int_of(&streams[0].0.dict, b"Height")
+            ),
             (Some(120), Some(60)),
             "长边要正好压到上限且保持比例"
         );
@@ -634,7 +692,10 @@ mod tests {
         assert_eq!(report.rewritten, 1, "{:?}", report.skipped);
         let streams = image_streams(&dir.join("small-out.pdf"));
         assert_eq!(
-            (int_of(&streams[0].0.dict, b"Width"), int_of(&streams[0].0.dict, b"Height")),
+            (
+                int_of(&streams[0].0.dict, b"Width"),
+                int_of(&streams[0].0.dict, b"Height")
+            ),
             (Some(60), Some(40)),
             "小图被放大了"
         );
@@ -657,8 +718,13 @@ mod tests {
     fn has_alpha_only_matches_images_that_actually_carry_transparency() {
         let rgb = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 2, image::Rgb([9, 9, 9])));
         let gray = DynamicImage::ImageLuma8(image::GrayImage::from_pixel(2, 2, image::Luma([9])));
-        let rgba = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 0])));
-        let luma_a = DynamicImage::ImageLumaA8(image::ImageBuffer::from_pixel(2, 2, image::LumaA([9, 0])));
+        let rgba = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            2,
+            2,
+            image::Rgba([9, 9, 9, 0]),
+        ));
+        let luma_a =
+            DynamicImage::ImageLumaA8(image::ImageBuffer::from_pixel(2, 2, image::LumaA([9, 0])));
         assert!(!has_alpha(&rgb));
         assert!(!has_alpha(&gray));
         assert!(has_alpha(&rgba));
@@ -726,7 +792,11 @@ mod tests {
         let dir = crate::test_bridge::TempDir::new("cmp-fallback");
         let mut fixture = Fixture::new();
         // 2x2 随机样：既压不出 JPEG，也压不动 Flate
-        fixture.image("Im0", base_dict(2, 2), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        fixture.image(
+            "Im0",
+            base_dict(2, 2),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        );
         let input = fixture.save(&dir, "in.pdf", 1);
         let output = dir.join("out.pdf");
 
@@ -776,7 +846,11 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("不能覆盖"), "{}", err);
-        assert_eq!(fs::read(&input).unwrap(), before, "被拒绝的调用不该动原文件");
+        assert_eq!(
+            fs::read(&input).unwrap(),
+            before,
+            "被拒绝的调用不该动原文件"
+        );
     }
 
     #[test]
@@ -796,4 +870,3 @@ mod tests {
         assert!(!Path::new(dest).exists(), "{}", err);
     }
 }
-

@@ -189,7 +189,11 @@ impl Format {
                 encrypt_read: false,
                 encrypt_write: false,
             },
-            Format::TarGz | Format::TarBz2 | Format::TarXz | Format::TarZst | Format::TarLz4
+            Format::TarGz
+            | Format::TarBz2
+            | Format::TarXz
+            | Format::TarZst
+            | Format::TarLz4
             | Format::TarBr => Caps {
                 list: true,
                 extract: true,
@@ -199,7 +203,12 @@ impl Format {
                 encrypt_read: false,
                 encrypt_write: false,
             },
-            Format::Gz | Format::Bz2 | Format::Xz | Format::Zst | Format::Lz4 | Format::Br
+            Format::Gz
+            | Format::Bz2
+            | Format::Xz
+            | Format::Zst
+            | Format::Lz4
+            | Format::Br
             | Format::LzmaAlone => Caps {
                 list: true,
                 extract: true,
@@ -290,22 +299,26 @@ fn read_head(path: &Path) -> std::io::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     head.truncate(n);
 
     let mut tar_spot = Vec::new();
-    if f.metadata().map(|m| m.len() > TAR_MAGIC_OFF + 5).unwrap_or(false) {
-        if f.seek(SeekFrom::Start(TAR_MAGIC_OFF)).is_ok() {
-            let mut b = [0u8; 5];
-            if f.read_exact(&mut b).is_ok() {
-                tar_spot = b.to_vec();
-            }
+    if f.metadata()
+        .map(|m| m.len() > TAR_MAGIC_OFF + 5)
+        .unwrap_or(false)
+        && f.seek(SeekFrom::Start(TAR_MAGIC_OFF)).is_ok()
+    {
+        let mut b = [0u8; 5];
+        if f.read_exact(&mut b).is_ok() {
+            tar_spot = b.to_vec();
         }
     }
 
     let mut iso_spot = Vec::new();
-    if f.metadata().map(|m| m.len() > ISO_MAGIC_OFF + 5).unwrap_or(false) {
-        if f.seek(SeekFrom::Start(ISO_MAGIC_OFF)).is_ok() {
-            let mut b = [0u8; 5];
-            if f.read_exact(&mut b).is_ok() {
-                iso_spot = b.to_vec();
-            }
+    if f.metadata()
+        .map(|m| m.len() > ISO_MAGIC_OFF + 5)
+        .unwrap_or(false)
+        && f.seek(SeekFrom::Start(ISO_MAGIC_OFF)).is_ok()
+    {
+        let mut b = [0u8; 5];
+        if f.read_exact(&mut b).is_ok() {
+            iso_spot = b.to_vec();
         }
     }
     Ok((head, tar_spot, iso_spot))
@@ -383,7 +396,8 @@ fn volume_index_of(lower: &str) -> Option<u32> {
         if tail.len() == 3 && tail.chars().all(|c| c.is_ascii_digit()) {
             return tail.parse().ok();
         }
-        if tail.len() == 2 && tail.starts_with('z') && tail[1..].chars().all(|c| c.is_ascii_digit()) {
+        if tail.len() == 2 && tail.starts_with('z') && tail[1..].chars().all(|c| c.is_ascii_digit())
+        {
             return tail[1..].parse().ok();
         }
         if tail == "rar" {
@@ -475,9 +489,8 @@ fn format_from_ext(lower: &str) -> Format {
 fn strip_volume_suffix(lower: &str) -> String {
     if let Some(idx) = lower.rfind('.') {
         let tail = &lower[idx + 1..];
-        let is_num = !tail.is_empty()
-            && tail.len() <= 3
-            && tail.chars().all(|c| c.is_ascii_digit());
+        let is_num =
+            !tail.is_empty() && tail.len() <= 3 && tail.chars().all(|c| c.is_ascii_digit());
         if is_num || zip_split_volume(lower) {
             return lower[..idx].to_string();
         }
@@ -493,7 +506,9 @@ fn zip_split_volume(lower: &str) -> bool {
     match lower.rfind('.') {
         Some(idx) => {
             let tail = &lower[idx + 1..];
-            tail.len() >= 2 && tail.starts_with('z') && tail[1..].chars().all(|c| c.is_ascii_digit())
+            tail.len() >= 2
+                && tail.starts_with('z')
+                && tail[1..].chars().all(|c| c.is_ascii_digit())
         }
         None => false,
     }
@@ -532,15 +547,35 @@ pub fn detect(path: &Path) -> Detection {
     } else if magic(b"Rar!\x1a\x07") {
         Format::Rar
     } else if magic(&[0x1F, 0x8B]) {
-        if inner_tar_check(path, Format::Gz) { Format::TarGz } else { Format::Gz }
+        if inner_tar_check(path, Format::Gz) {
+            Format::TarGz
+        } else {
+            Format::Gz
+        }
     } else if magic(b"BZh") {
-        if inner_tar_check(path, Format::Bz2) { Format::TarBz2 } else { Format::Bz2 }
+        if inner_tar_check(path, Format::Bz2) {
+            Format::TarBz2
+        } else {
+            Format::Bz2
+        }
     } else if magic(&[0xFD, b'7', b'z', b'X', b'Z', 0x00]) {
-        if inner_tar_check(path, Format::Xz) { Format::TarXz } else { Format::Xz }
+        if inner_tar_check(path, Format::Xz) {
+            Format::TarXz
+        } else {
+            Format::Xz
+        }
     } else if magic(&[0x28, 0xB5, 0x2F, 0xFD]) {
-        if inner_tar_check(path, Format::Zst) { Format::TarZst } else { Format::Zst }
+        if inner_tar_check(path, Format::Zst) {
+            Format::TarZst
+        } else {
+            Format::Zst
+        }
     } else if magic(&[0x04, 0x22, 0x4D, 0x18]) {
-        if inner_tar_check(path, Format::Lz4) { Format::TarLz4 } else { Format::Lz4 }
+        if inner_tar_check(path, Format::Lz4) {
+            Format::TarLz4
+        } else {
+            Format::Lz4
+        }
     } else if magic(b"MSCF") {
         Format::Cab
     } else if magic(&[b'M', b'S', b'W', b'I', b'M', 0, 0, 0]) {
@@ -556,7 +591,11 @@ pub fn detect(path: &Path) -> Detection {
     } else if head.len() >= 3 && head[0] == 0x5D && head[1] == 0 && head[2] == 0 {
         // LZMA alone 的魔数很弱（属性字节 + 字典大小），单独出现时只在扩展名也说
         // 是 lzma 的情况下才认，避免把随机二进制误判
-        if ext_guess == Format::LzmaAlone { Format::LzmaAlone } else { Format::Unknown }
+        if ext_guess == Format::LzmaAlone {
+            Format::LzmaAlone
+        } else {
+            Format::Unknown
+        }
     } else {
         Format::Unknown
     };
@@ -624,95 +663,248 @@ fn no_methods() -> Vec<MethodOption> {
 pub fn writable_formats() -> Vec<FormatOption> {
     use Format::*;
     vec![
-        FormatOption { id: SevenZ.id().into(), label: "7-Zip (.7z)".into(), extension: ".7z".into(),
+        FormatOption {
+            id: SevenZ.id().into(),
+            label: "7-Zip (.7z)".into(),
+            extension: ".7z".into(),
             description: "压缩率最高，LZMA2 算法，支持 AES-256 加密".into(),
-            max_level: 9, default_level: 5, supports_password: true, supports_solid: true,
+            max_level: 9,
+            default_level: 5,
+            supports_password: true,
+            supports_solid: true,
             // 引擎写不出分卷（输出是单个 Write+Seek，7z 的分卷还要求后续卷复制签名头），
             // 所以这里如实给 false，前端就不渲染分卷那一栏——比渲染出来再报错好
-            supports_volumes: false, supports_comment: false,
+            supports_volumes: false,
+            supports_comment: false,
             methods: vec![
                 m("lzma2", "LZMA2", "默认，压缩率与速度平衡最好", 9, 5),
                 m("copy", "Copy（不压缩）", "只打包，速度最快", 0, 0),
-            ] },
-        FormatOption { id: Zip.id().into(), label: "ZIP (.zip)".into(), extension: ".zip".into(),
+            ],
+        },
+        FormatOption {
+            id: Zip.id().into(),
+            label: "ZIP (.zip)".into(),
+            extension: ".zip".into(),
             description: "兼容性最好，Windows/macOS 原生可解".into(),
-            max_level: 9, default_level: 6, supports_password: true, supports_solid: false,
-            supports_volumes: false, supports_comment: true,
+            max_level: 9,
+            default_level: 6,
+            supports_password: true,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: true,
             methods: vec![
                 m("deflate", "Deflate", "标准 ZIP 算法，兼容性最好", 9, 6),
-                m("store", "Store（不压缩）", "已压缩过的文件（视频/图片/安装包）用这个，白跑一遍压缩毫无收益", 0, 0),
-                m("zstd", "Zstd", "比 Deflate 小 10-20%，但只有本 App 和 7-Zip 能解", 22, 9),
+                m(
+                    "store",
+                    "Store（不压缩）",
+                    "已压缩过的文件（视频/图片/安装包）用这个，白跑一遍压缩毫无收益",
+                    0,
+                    0,
+                ),
+                m(
+                    "zstd",
+                    "Zstd",
+                    "比 Deflate 小 10-20%，但只有本 App 和 7-Zip 能解",
+                    22,
+                    9,
+                ),
                 m("bzip2", "BZip2", "老式，压缩率一般", 9, 9),
                 m("xz", "XZ", "压缩率高但慢，Windows 自带的解压不了", 9, 6),
-            ] },
-        FormatOption { id: TarGz.id().into(), label: "TAR.GZ (.tar.gz)".into(), extension: ".tar.gz".into(),
+            ],
+        },
+        FormatOption {
+            id: TarGz.id().into(),
+            label: "TAR.GZ (.tar.gz)".into(),
+            extension: ".tar.gz".into(),
             description: "Linux 发行包标准格式".into(),
-            max_level: 9, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: TarXz.id().into(), label: "TAR.XZ (.tar.xz)".into(), extension: ".tar.xz".into(),
+            max_level: 9,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: TarXz.id().into(),
+            label: "TAR.XZ (.tar.xz)".into(),
+            extension: ".tar.xz".into(),
             description: "比 gzip 压得更小，更慢".into(),
-            max_level: 9, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: TarZst.id().into(), label: "TAR.ZST (.tar.zst)".into(), extension: ".tar.zst".into(),
+            max_level: 9,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: TarZst.id().into(),
+            label: "TAR.ZST (.tar.zst)".into(),
+            extension: ".tar.zst".into(),
             description: "多线程压缩，速度与压缩率平衡最好".into(),
-            max_level: 22, default_level: 3, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: TarBz2.id().into(), label: "TAR.BZ2 (.tar.bz2)".into(), extension: ".tar.bz2".into(),
+            max_level: 22,
+            default_level: 3,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: TarBz2.id().into(),
+            label: "TAR.BZ2 (.tar.bz2)".into(),
+            extension: ".tar.bz2".into(),
             description: "老式 bzip2，兼容性考虑".into(),
-            max_level: 9, default_level: 9, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: TarLz4.id().into(), label: "TAR.LZ4 (.tar.lz4)".into(), extension: ".tar.lz4".into(),
+            max_level: 9,
+            default_level: 9,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: TarLz4.id().into(),
+            label: "TAR.LZ4 (.tar.lz4)".into(),
+            extension: ".tar.lz4".into(),
             description: "极快，压缩率换速度".into(),
-            max_level: 12, default_level: 1, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: TarBr.id().into(), label: "TAR.BR (.tar.br)".into(), extension: ".tar.br".into(),
+            max_level: 12,
+            default_level: 1,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: TarBr.id().into(),
+            label: "TAR.BR (.tar.br)".into(),
+            extension: ".tar.br".into(),
             description: "Brotli，Web 分发常用".into(),
-            max_level: 11, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Tar.id().into(), label: "TAR (.tar)".into(), extension: ".tar".into(),
+            max_level: 11,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Tar.id().into(),
+            label: "TAR (.tar)".into(),
+            extension: ".tar".into(),
             description: "只打包不压缩".into(),
-            max_level: 0, default_level: 0, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Gz.id().into(), label: "GZIP (.gz)".into(), extension: ".gz".into(),
+            max_level: 0,
+            default_level: 0,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Gz.id().into(),
+            label: "GZIP (.gz)".into(),
+            extension: ".gz".into(),
             description: "单文件 gzip".into(),
-            max_level: 9, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Zst.id().into(), label: "Zstandard (.zst)".into(), extension: ".zst".into(),
+            max_level: 9,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Zst.id().into(),
+            label: "Zstandard (.zst)".into(),
+            extension: ".zst".into(),
             description: "单文件 zstd".into(),
-            max_level: 22, default_level: 3, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Bz2.id().into(), label: "BZIP2 (.bz2)".into(), extension: ".bz2".into(),
+            max_level: 22,
+            default_level: 3,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Bz2.id().into(),
+            label: "BZIP2 (.bz2)".into(),
+            extension: ".bz2".into(),
             description: "单文件 bzip2".into(),
-            max_level: 9, default_level: 9, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Xz.id().into(), label: "XZ (.xz)".into(), extension: ".xz".into(),
+            max_level: 9,
+            default_level: 9,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Xz.id().into(),
+            label: "XZ (.xz)".into(),
+            extension: ".xz".into(),
             description: "单文件 xz".into(),
-            max_level: 9, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Lz4.id().into(), label: "LZ4 (.lz4)".into(), extension: ".lz4".into(),
+            max_level: 9,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Lz4.id().into(),
+            label: "LZ4 (.lz4)".into(),
+            extension: ".lz4".into(),
             description: "单文件 lz4，极快".into(),
-            max_level: 12, default_level: 1, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
-        FormatOption { id: Br.id().into(), label: "Brotli (.br)".into(), extension: ".br".into(),
+            max_level: 12,
+            default_level: 1,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
+        FormatOption {
+            id: Br.id().into(),
+            label: "Brotli (.br)".into(),
+            extension: ".br".into(),
             description: "单文件 brotli".into(),
-            max_level: 11, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
+            max_level: 11,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
         // `.lzma` 是 LZMA1 裸流（没有 xz 的头尾），7-Zip 能造，Linux 的 `lzma` 命令也认。
         // 留在这里是为了"从 7-Zip 迁过来的老脚本还能用"，压缩率不如 7z/xz，所以排在最后。
-        FormatOption { id: LzmaAlone.id().into(), label: "LZMA (.lzma)".into(), extension: ".lzma".into(),
+        FormatOption {
+            id: LzmaAlone.id().into(),
+            label: "LZMA (.lzma)".into(),
+            extension: ".lzma".into(),
             description: "单文件 LZMA1 裸流（旧格式，兼容 7-Zip 的 .lzma）".into(),
-            max_level: 9, default_level: 6, supports_password: false, supports_solid: false,
-            supports_volumes: false, supports_comment: false, methods: no_methods() },
+            max_level: 9,
+            default_level: 6,
+            supports_password: false,
+            supports_solid: false,
+            supports_volumes: false,
+            supports_comment: false,
+            methods: no_methods(),
+        },
     ]
 }
 
 /// 文件对话框过滤器用的扩展名全集（含只读格式）
 pub fn all_extensions() -> Vec<&'static str> {
     vec![
-        "zip", "zipx", "7z", "rar", "cbr", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz",
-        "zst", "tzst", "lz4", "br", "lzma", "cab", "iso", "wim", "jar", "war", "apk", "epub",
-        "docx", "xlsx", "pptx", "odt", "ods", "odp", "xpi", "crx", "vsix", "nupkg", "whl",
-        "cbz", "001",
+        "zip", "zipx", "7z", "rar", "cbr", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "zst",
+        "tzst", "lz4", "br", "lzma", "cab", "iso", "wim", "jar", "war", "apk", "epub", "docx",
+        "xlsx", "pptx", "odt", "ods", "odp", "xpi", "crx", "vsix", "nupkg", "whl", "cbz", "001",
     ]
 }
 
@@ -729,8 +921,8 @@ pub fn all_extensions() -> Vec<&'static str> {
 /// `stem_for_extract` 的事，两边职责不同）。
 pub fn open_extensions() -> Vec<&'static str> {
     vec![
-        "zip", "zipx", "7z", "rar", "cbr", "cbz", "tar", "gz", "tgz", "bz2", "tbz2", "xz",
-        "txz", "zst", "tzst", "lz4", "br", "lzma", "cab", "001",
+        "zip", "zipx", "7z", "rar", "cbr", "cbz", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz",
+        "zst", "tzst", "lz4", "br", "lzma", "cab", "001",
     ]
 }
 
@@ -738,7 +930,10 @@ pub fn open_extensions() -> Vec<&'static str> {
 /// 原来这段逻辑在前端 App.tsx 里手写了一串 if，加格式就要两边改；
 /// 现在由后端算，前端直接用。
 pub fn stem_for_extract(path: &Path) -> String {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("archive");
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("archive");
     let mut lower = name.to_ascii_lowercase();
     let mut out = name.to_string();
     // 反复剥：`x.tar.gz` → `x.tar` → `x`；`x.zip.001` → `x.zip` → `x`
@@ -755,10 +950,10 @@ pub fn stem_for_extract(path: &Path) -> String {
             }
         };
         for suf in [
-            ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tbz", ".tar.xz", ".txz", ".tar.zst",
-            ".tzst", ".tar.lz4", ".tar.br", ".tar", ".zip", ".zipx", ".7z", ".rar", ".cbr",
-            ".gz", ".bz2", ".xz", ".zst", ".lz4", ".br", ".lzma", ".cab", ".iso", ".lzh",
-            ".lha", ".wim", ".rpm", ".deb", ".z",
+            ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tbz", ".tar.xz", ".txz", ".tar.zst", ".tzst",
+            ".tar.lz4", ".tar.br", ".tar", ".zip", ".zipx", ".7z", ".rar", ".cbr", ".gz", ".bz2",
+            ".xz", ".zst", ".lz4", ".br", ".lzma", ".cab", ".iso", ".lzh", ".lha", ".wim", ".rpm",
+            ".deb", ".z",
         ] {
             if let Some(v) = strip(&lower, suf) {
                 lower = v;
@@ -769,8 +964,11 @@ pub fn stem_for_extract(path: &Path) -> String {
         // 分卷后缀
         if let Some(idx) = lower.rfind('.') {
             let tail = &lower[idx + 1..];
-            let is_num = !tail.is_empty() && tail.len() <= 3 && tail.chars().all(|c| c.is_ascii_digit());
-            let is_z = tail.len() >= 2 && tail.starts_with('z') && tail[1..].chars().all(|c| c.is_ascii_digit());
+            let is_num =
+                !tail.is_empty() && tail.len() <= 3 && tail.chars().all(|c| c.is_ascii_digit());
+            let is_z = tail.len() >= 2
+                && tail.starts_with('z')
+                && tail[1..].chars().all(|c| c.is_ascii_digit());
             if is_num || is_z {
                 lower = lower[..idx].to_string();
                 out = out[..lower.len()].to_string();
@@ -792,7 +990,11 @@ pub fn stem_for_extract(path: &Path) -> String {
             break;
         }
     }
-    if out.is_empty() { "archive".to_string() } else { out }
+    if out.is_empty() {
+        "archive".to_string()
+    } else {
+        out
+    }
 }
 
 #[cfg(test)]
@@ -878,10 +1080,13 @@ mod tests {
     fn open_extensions_leaves_containers_to_their_own_viewers() {
         let open = open_extensions();
         for e in [
-            "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "jar", "war", "apk", "xpi",
-            "crx", "vsix", "nupkg", "whl", "iso", "wim",
+            "docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "jar", "war", "apk", "xpi", "crx",
+            "vsix", "nupkg", "whl", "iso", "wim",
         ] {
-            assert!(!open.contains(&e), "{e} 双击应该走它自己的去处，不是归档浏览器");
+            assert!(
+                !open.contains(&e),
+                "{e} 双击应该走它自己的去处，不是归档浏览器"
+            );
         }
     }
 
@@ -889,7 +1094,14 @@ mod tests {
     #[test]
     fn compound_suffixes_are_covered_by_their_last_segment() {
         let open = open_extensions();
-        for name in ["x.tar.gz", "x.tar.bz2", "x.tar.xz", "x.tar.zst", "x.zip.001", "x.7z.001"] {
+        for name in [
+            "x.tar.gz",
+            "x.tar.bz2",
+            "x.tar.xz",
+            "x.tar.zst",
+            "x.zip.001",
+            "x.7z.001",
+        ] {
             let ext = name.rsplit('.').next().unwrap_or("");
             assert!(open.contains(&ext), "{name} 的最后一段 {ext} 不在双击表里");
         }

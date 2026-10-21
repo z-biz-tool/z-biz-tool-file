@@ -8,36 +8,36 @@
 #[link(name = "resource")]
 extern "C" {}
 
-mod commands;
+mod ai;
 mod archive;
+mod aria2;
+mod atomic_write;
+mod commands;
 mod conflict;
-mod search;
+mod convert;
 mod ebook;
-mod pdf_utils;
+mod image_exif;
+mod image_utils;
+mod indexer;
+mod library;
+mod llm_config;
+mod ocr;
+mod office;
+mod operation;
+mod path_guard;
+mod pdf_compress;
 mod pdf_font;
 mod pdf_image;
-mod pdf_watermark;
-mod pdf_compress;
 mod pdf_ops;
-mod image_utils;
-mod convert;
-mod watcher;
-mod llm_config;
-mod trash;
-mod ai;
-mod office;
+mod pdf_utils;
+mod pdf_watermark;
+mod search;
 mod sftp;
 mod tags;
-mod image_exif;
-mod video_thumb;
-mod indexer;
-mod atomic_write;
-mod path_guard;
-mod ocr;
-mod aria2;
-mod library;
+mod trash;
 mod updater;
-mod operation;
+mod video_thumb;
+mod watcher;
 
 use watcher::WatcherState;
 
@@ -208,9 +208,9 @@ pub mod test_bridge {
 
     // 集成测试要给这些类型**起名**（写函数签名、按 path 建索引），而 `archive` 模块是私有的：
     // pub struct 藏在私有模块里，外面拿得到值却写不出路径，只能靠类型推导绕着走。
-    pub use crate::archive::{ArchiveInfo, CreateOptions, Entry, ProbeResult, Stats};
     pub use crate::archive::format::{Format, FormatOption};
     pub use crate::archive::Route;
+    pub use crate::archive::{ArchiveInfo, CreateOptions, Entry, ProbeResult, Stats};
 
     /// 当前能写的所有格式。测试**遍历这个**而不是自己列一张表：
     /// 自己列的话，后端加一种格式而测试忘了跟，那种格式就永远没被往返验过 ——
@@ -256,10 +256,8 @@ pub mod test_bridge {
                     .unwrap()
                     .as_nanos();
                 let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "z-biz-tool-file-{}-{}-{}-{}",
-                    tag, pid, nonce, seq
-                ));
+                let path = std::env::temp_dir()
+                    .join(format!("z-biz-tool-file-{}-{}-{}-{}", tag, pid, nonce, seq));
                 // create_dir（不是 create_dir_all）在目录已存在时报错，等于原子占位
                 match std::fs::create_dir(&path) {
                     Ok(()) => return Self { path },
@@ -409,8 +407,8 @@ pub mod test_bridge {
             &src.display().to_string(),
             &dest.display().to_string(),
         );
-        let det = crate::archive::preflight(&src, opts.password.as_deref())
-            .map_err(|e| e.to_string())?;
+        let det =
+            crate::archive::preflight(&src, opts.password.as_deref()).map_err(|e| e.to_string())?;
         crate::archive::extract(&src, &det, &dest, opts, &mut rep, &cancel)
     }
 
@@ -471,7 +469,7 @@ pub mod test_bridge {
         paths: Vec<String>,
         rename: Option<RenameOptions>,
     ) -> Result<String, String> {
-        let k = crate::operation::Kind::from_str(kind)
+        let k = crate::operation::Kind::parse(kind)
             .ok_or_else(|| format!("不支持的批量操作类型: {}", kind))?;
         if paths.is_empty() {
             return Err("没有要处理的文件".to_string());
@@ -589,7 +587,8 @@ mod handler_registration_tests {
             .expect("找不到 invoke_handler(tauri::generate_handler![ 这一段");
         let end = src[start..]
             .find(']')
-            .expect("generate_handler! 的块没有闭合") + start;
+            .expect("generate_handler! 的块没有闭合")
+            + start;
         let block = &src[start..end];
 
         for cmd in [

@@ -49,7 +49,6 @@ fn delete_file_rejects_symlink_to_etc() {
 
     let res = call_delete_file(link.to_str().unwrap());
     assert!(res.is_err(), "symlink → /etc/passwd 应被拦截");
-
 }
 
 #[test]
@@ -68,7 +67,6 @@ fn copy_file_rejects_blacklist_src() {
         res
     );
     assert!(!dest.join("passwd").exists(), "绝不能在 dest 下产生副本");
-
 }
 
 #[test]
@@ -85,8 +83,10 @@ fn move_file_rejects_blacklist_src() {
         "move_file 源为 /etc/hosts 应被拦截，但 got {:?}",
         res
     );
-    assert!(std::path::Path::new("/etc/hosts").exists(), "/etc/hosts 必须原封不动");
-
+    assert!(
+        std::path::Path::new("/etc/hosts").exists(),
+        "/etc/hosts 必须原封不动"
+    );
 }
 
 #[test]
@@ -153,7 +153,6 @@ fn normal_paths_still_work() {
         "rename_file 返回路径应存在: {}",
         ret
     );
-
 }
 
 /// 解压目标过不过 `path_guard`。
@@ -179,10 +178,7 @@ fn archive_extract_rejects_blacklist_dest() {
         zip_writer.finish().unwrap();
     }
 
-    let res = z_biz_tool_file_lib::test_bridge::call_archive_extract(
-        zip.to_str().unwrap(),
-        "/etc",
-    );
+    let res = z_biz_tool_file_lib::test_bridge::call_archive_extract(zip.to_str().unwrap(), "/etc");
     let err = res.expect_err("解压到 /etc 应被拦截");
     assert!(
         err.contains("系统保护") || err.contains("拒绝") || err.contains("Blocked"),
@@ -250,34 +246,19 @@ fn search_files_rejects_blacklist() {
 #[test]
 fn path_guard_blocks_url_encoded_paths() {
     // URL 编码 %2F = /，%70 = p，%77 = w — 验证 canonicalize 后仍被拦
-    let cases = vec![
-        "/etc/%70asswd",
-        "/etc/pass%77d",
-        "%2Fetc%2Fpasswd",
-    ];
+    let cases = vec!["/etc/%70asswd", "/etc/pass%77d", "%2Fetc%2Fpasswd"];
     for c in cases {
         let res = z_biz_tool_file_lib::test_bridge::validate_path_concurrent(c);
-        assert!(
-            res.is_err(),
-            "URL 编码路径 '{}' 应被拦截，但 got Ok",
-            c
-        );
+        assert!(res.is_err(), "URL 编码路径 '{}' 应被拦截，但 got Ok", c);
     }
 }
 
 #[test]
 fn path_guard_blocks_null_byte_attack() {
-    let cases = vec![
-        "/etc/passwd\0",
-        "/etc/passwd\0/etc",
-    ];
+    let cases = vec!["/etc/passwd\0", "/etc/passwd\0/etc"];
     for c in cases {
         let res = z_biz_tool_file_lib::test_bridge::validate_path_concurrent(c);
-        assert!(
-            res.is_err(),
-            "含空字节路径应被拦截，但 got Ok: {:?}",
-            c
-        );
+        assert!(res.is_err(), "含空字节路径应被拦截，但 got Ok: {:?}", c);
     }
 }
 
@@ -291,11 +272,7 @@ fn path_guard_blocks_dot_traversal() {
     ];
     for c in cases {
         let res = z_biz_tool_file_lib::test_bridge::validate_path_concurrent(c);
-        assert!(
-            res.is_err(),
-            "路径穿越变种应被拦截，但 got Ok: {:?}",
-            c
-        );
+        assert!(res.is_err(), "路径穿越变种应被拦截，但 got Ok: {:?}", c);
     }
 }
 
@@ -304,11 +281,7 @@ fn path_guard_blocks_home_env_expand() {
     let cases = vec!["$HOME/../../etc/passwd", "~/.ssh/id_rsa"];
     for c in cases {
         let res = z_biz_tool_file_lib::test_bridge::validate_path_concurrent(c);
-        assert!(
-            res.is_err(),
-            "环境变量展开路径应被拦截，但 got Ok: {:?}",
-            c
-        );
+        assert!(res.is_err(), "环境变量展开路径应被拦截，但 got Ok: {:?}", c);
     }
 }
 
@@ -325,10 +298,7 @@ fn path_guard_blocks_extremely_long_path() {
 #[test]
 fn path_guard_blocks_file_protocol() {
     let res = z_biz_tool_file_lib::test_bridge::validate_path_concurrent("file:///etc/passwd");
-    assert!(
-        res.is_err(),
-        "file:// URI 应被拦截，但 got Ok"
-    );
+    assert!(res.is_err(), "file:// URI 应被拦截，但 got Ok");
 }
 
 /// copy_file 复制一个含自引用符号链接的目录：修复前 is_dir() 会跟随链接一路递归，

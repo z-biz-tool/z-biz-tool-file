@@ -85,7 +85,10 @@ fn skip_ws(input: &[u8], mut at: usize) -> usize {
 pub(crate) fn inheritable(doc: &Document, page: ObjectId, key: &[u8]) -> Option<Object> {
     let mut current = page;
     for _ in 0..32 {
-        let dict = doc.get_object(current).ok().and_then(|o| o.as_dict().ok())?;
+        let dict = doc
+            .get_object(current)
+            .ok()
+            .and_then(|o| o.as_dict().ok())?;
         if let Ok(value) = dict.get(key) {
             return Some(value.clone());
         }
@@ -158,12 +161,8 @@ fn graft_value(
     skip: &[&[u8]],
 ) -> Result<Object, String> {
     Ok(match obj {
-        Object::Reference(target) => {
-            Object::Reference(graft_object(src, *target, out, map, &[])?)
-        }
-        Object::Dictionary(dict) => {
-            Object::Dictionary(graft_dict(src, dict, out, map, skip)?)
-        }
+        Object::Reference(target) => Object::Reference(graft_object(src, *target, out, map, &[])?),
+        Object::Dictionary(dict) => Object::Dictionary(graft_dict(src, dict, out, map, skip)?),
         Object::Array(items) => {
             let mut copied = Vec::with_capacity(items.len());
             for item in items {
@@ -416,8 +415,8 @@ mod tests {
         for (i, marker) in markers.iter().enumerate() {
             let content_id = 5 + i * 2;
             objects.push(format!(
-                "<< /Type /Page /Parent {} /Resources << /Font << /F1 {} 0 R >> >> /Contents {} 0 R >>",
-                format!("{} 0 R", pages_id.0),
+                "<< /Type /Page /Parent {} 0 R /Resources << /Font << /F1 {} 0 R >> >> /Contents {} 0 R >>",
+                pages_id.0,
                 font_id.0,
                 content_id
             ));
@@ -582,7 +581,10 @@ mod tests {
         // 第二页也必须挂在同一个新 Pages 节点下
         let second = doc.get_object(ids[1]).unwrap().as_dict().unwrap();
         assert_eq!(
-            second.get(b"Parent").and_then(Object::as_reference).unwrap(),
+            second
+                .get(b"Parent")
+                .and_then(Object::as_reference)
+                .unwrap(),
             first.get(b"Parent").and_then(Object::as_reference).unwrap()
         );
     }
@@ -633,10 +635,18 @@ mod tests {
         assert_eq!(get_pdf_pages(&files[0]).unwrap().len(), 2);
         assert_eq!(get_pdf_pages(&files[1]).unwrap().len(), 1);
         let body0 = text_of(Path::new(&files[0]));
-        assert!(body0.contains("(P1)") && body0.contains("(P2)"), "{}", body0);
+        assert!(
+            body0.contains("(P1)") && body0.contains("(P2)"),
+            "{}",
+            body0
+        );
         assert!(!body0.contains("(P3)"), "区间外的页不该出现: {}", body0);
         let body1 = text_of(Path::new(&files[1]));
-        assert!(body1.contains("(P3)") && !body1.contains("(P1)"), "{}", body1);
+        assert!(
+            body1.contains("(P3)") && !body1.contains("(P1)"),
+            "{}",
+            body1
+        );
     }
 
     #[test]
@@ -663,8 +673,12 @@ mod tests {
         // `.ssh` 走的是 BLOCKED_ANCESTORS（按路径段名匹配），两个平台一致。
         let ssh = dir.join(".ssh");
         std::fs::create_dir_all(&ssh).unwrap();
-        let err = split_pdf(src.clone(), ssh.join("evil-out").to_string_lossy().to_string(), vec![[1, 1]])
-            .expect_err("输出目录要过黑名单");
+        let err = split_pdf(
+            src.clone(),
+            ssh.join("evil-out").to_string_lossy().to_string(),
+            vec![[1, 1]],
+        )
+        .expect_err("输出目录要过黑名单");
         assert!(err.contains("系统保护"), "{}", err);
 
         // 穿越腿。`..` 段与平台无关，两个平台都必须被拒。
@@ -813,9 +827,15 @@ mod tests {
     #[test]
     fn repair_refuses_buffers_that_are_not_a_whitespace_deviation() {
         assert!(repair_startxref(b"%PDF-1.4\nno trailer here\n").is_none());
-        assert!(repair_startxref(b"startxref 42").is_none(), "缺 %%EOF 不算排版偏差");
+        assert!(
+            repair_startxref(b"startxref 42").is_none(),
+            "缺 %%EOF 不算排版偏差"
+        );
         assert!(repair_startxref(b"startxref 12\n34%%EOF\n").is_none());
-        assert!(repair_startxref(b"startxref\n%%EOF\n").is_none(), "偏移量都丢了就别猜");
+        assert!(
+            repair_startxref(b"startxref\n%%EOF\n").is_none(),
+            "偏移量都丢了就别猜"
+        );
     }
 
     #[test]

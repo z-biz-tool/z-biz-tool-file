@@ -82,6 +82,10 @@ type Sink = CountingWriter<BufWriter<File>>;
 /// （zstd 要写 frame 尾、lz4 要写 end mark、brotli 要发 FINISH op），
 /// 藏在具体类型上。box 掉之后只能 flush，产出的包是截断的——这种坏包
 /// 本机 7-Zip 打开会直接报 CRC 错，比压不出来更糟。
+// 变体大小差得多（每种压缩器的编码器结构都不一样），clippy 会报 large_enum_variant。
+// **不**为了这条提示去 box 它们：写侧是热路径，每个文件一次堆分配
+// 换来的只是省几个字节，不划算；而且 box 之后只能 flush，产出的包是截断的（见上）。
+#[allow(clippy::large_enum_variant)]
 pub enum Encoder {
     None(Sink),
     Gz(flate2::write::GzEncoder<Sink>),
@@ -104,14 +108,20 @@ impl Encoder {
                 sink,
                 bzip2::Compression::new(clamp(level, 1, 9) as u32),
             )),
-            Codec::Xz => {
-                Encoder::Xz(xz2::write::XzEncoder::new(sink, clamp(level, 0, 9) as u32))
-            }
-            Codec::Zst => Encoder::Zst(zstd::stream::write::Encoder::new(sink, clamp(level, -7, 22))?),
+            Codec::Xz => Encoder::Xz(xz2::write::XzEncoder::new(sink, clamp(level, 0, 9) as u32)),
+            Codec::Zst => Encoder::Zst(zstd::stream::write::Encoder::new(
+                sink,
+                clamp(level, -7, 22),
+            )?),
             Codec::Lz4 => Encoder::Lz4(lz4_flex::frame::FrameEncoder::new(sink)),
             Codec::Br => {
                 // brotli quality 0..=11，lgwin 22（4MB 窗口）是它的最大值
-                Encoder::Br(brotli::CompressorWriter::new(sink, 64 * 1024, clamp(level, 0, 11) as u32, 22))
+                Encoder::Br(brotli::CompressorWriter::new(
+                    sink,
+                    64 * 1024,
+                    clamp(level, 0, 11) as u32,
+                    22,
+                ))
             }
         })
     }
@@ -225,7 +235,10 @@ pub fn list(path: &Path, fmt: Format) -> Result<Vec<Entry>, String> {
     let mut ar = tar::Archive::new(plain);
     let mut out = Vec::new();
     let mut idx = 0u32;
-    for item in ar.entries().map_err(|e| format!("读取 tar 目录失败: {}", e))? {
+    for item in ar
+        .entries()
+        .map_err(|e| format!("读取 tar 目录失败: {}", e))?
+    {
         let e = item.map_err(|e| format!("解析 tar 条目失败: {}", e))?;
         let raw = e
             .path()
@@ -265,7 +278,8 @@ pub fn extract(
             .entries()
             .map_err(|e| format!("读取失败: {}", e))?
             .filter_map(|e| {
-                e.ok().and_then(|e| e.path().ok().map(|p| p.to_string_lossy().to_string()))
+                e.ok()
+                    .and_then(|e| e.path().ok().map(|p| p.to_string_lossy().to_string()))
             })
             .take(super::MAX_ENTRIES)
             .collect();
@@ -283,7 +297,10 @@ pub fn extract(
     let mut stats = Stats::default();
     let mut idx = 0u32;
 
-    for item in ar.entries().map_err(|e| format!("读取 tar 目录失败: {}", e))? {
+    for item in ar
+        .entries()
+        .map_err(|e| format!("读取 tar 目录失败: {}", e))?
+    {
         if cancel.load(Ordering::Relaxed) {
             return Err(super::job::Cancelled.to_string());
         }
@@ -343,7 +360,9 @@ pub fn extract(
             continue;
         }
 
-        let target = match guard::resolve_target(dest, &mapped, opts.overwrite).map_err(|e| e.to_string())? {
+        let target = match guard::resolve_target(dest, &mapped, opts.overwrite)
+            .map_err(|e| e.to_string())?
+        {
             Some(t) => t,
             None => {
                 stats.skipped += 1;
@@ -355,7 +374,8 @@ pub fn extract(
             fs::create_dir_all(p).map_err(|e| format!("创建父目录失败: {}", e))?;
         }
         reporter.set_entry(&mapped);
-        let mut out = File::create(&target).map_err(|e| format!("创建文件失败 {}: {}", mapped, e))?;
+        let mut out =
+            File::create(&target).map_err(|e| format!("创建文件失败 {}: {}", mapped, e))?;
         let written = match super::io::copy_with_cancel(&mut e, &mut out, cancel, |_| {}) {
             Ok(n) => n,
             Err(err) => {
@@ -412,7 +432,10 @@ pub fn test(
 
     let mut ar = tar::Archive::new(plain);
     let mut stats = Stats::default();
-    for item in ar.entries().map_err(|e| format!("读取 tar 目录失败: {}", e))? {
+    for item in ar
+        .entries()
+        .map_err(|e| format!("读取 tar 目录失败: {}", e))?
+    {
         if cancel.load(Ordering::Relaxed) {
             return Err(super::job::Cancelled.to_string());
         }
@@ -466,7 +489,8 @@ pub fn create(
     }
     let file = File::create(dest).map_err(|e| format!("创建目标文件失败: {}", e))?;
     let (sink, written) = CountingWriter::new(BufWriter::with_capacity(256 * 1024, file));
-    let encoder = Encoder::new(sink, codec, level).map_err(|e| format!("初始化压缩器失败: {}", e))?;
+    let encoder =
+        Encoder::new(sink, codec, level).map_err(|e| format!("初始化压缩器失败: {}", e))?;
     let mut builder = tar::Builder::new(encoder);
     // Deterministic：不写 uid/gid/uname，跨机器解出来的权限才可预测
     builder.mode(tar::HeaderMode::Deterministic);
@@ -494,7 +518,9 @@ pub fn create(
     let encoder = builder
         .into_inner()
         .map_err(|e| format!("写入 tar 失败: {}", e))?;
-    let sink = encoder.finish().map_err(|e| format!("收尾压缩流失败: {}", e))?;
+    let sink = encoder
+        .finish()
+        .map_err(|e| format!("收尾压缩流失败: {}", e))?;
     let mut buf = sink.into_inner();
     buf.flush().map_err(|e| format!("刷盘失败: {}", e))?;
     stats.bytes_done = written.load(Ordering::Relaxed);
@@ -583,7 +609,10 @@ pub fn add(
 fn data_end(file: File) -> Result<(File, u64), String> {
     let mut ar = tar::Archive::new(file);
     let mut end = 0u64;
-    for item in ar.entries().map_err(|e| format!("读取 tar 目录失败: {}", e))? {
+    for item in ar
+        .entries()
+        .map_err(|e| format!("读取 tar 目录失败: {}", e))?
+    {
         let e = item.map_err(|e| format!("解析 tar 条目失败: {}", e))?;
         if e.header().entry_type().is_gnu_sparse() {
             // 稀疏条目的数据段里夹着 sparse map，`raw_file_position + size` 不是真实末尾，
@@ -604,8 +633,7 @@ pub fn scan_sources(sources: &[PathBuf]) -> Result<(u64, u64), String> {
     let mut files = 0u64;
     let mut bytes = 0u64;
     for s in sources {
-        let meta = fs::metadata(s)
-            .map_err(|e| format!("读取 {} 失败: {}", s.display(), e))?;
+        let meta = fs::metadata(s).map_err(|e| format!("读取 {} 失败: {}", s.display(), e))?;
         if meta.is_dir() {
             for w in walkdir::WalkDir::new(s).follow_links(false) {
                 let w = w.map_err(|e| format!("遍历目录失败: {}", e))?;
@@ -697,8 +725,8 @@ fn add_path<W: Write>(
     if cancel.load(Ordering::Relaxed) {
         return Err(super::job::Cancelled.to_string());
     }
-    let meta = fs::symlink_metadata(src)
-        .map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
+    let meta =
+        fs::symlink_metadata(src).map_err(|e| format!("读取 {} 失败: {}", src.display(), e))?;
     let name = archive_name_for(src, base, opts.store_full_path)?;
     if name.is_empty() {
         return Ok(());
@@ -707,7 +735,8 @@ fn add_path<W: Write>(
     if meta.is_dir() {
         let mut h = tar::Header::new_gnu();
         h.set_entry_type(tar::EntryType::Directory);
-        h.set_path(format!("{}/", name)).map_err(|e| e.to_string())?;
+        h.set_path(format!("{}/", name))
+            .map_err(|e| e.to_string())?;
         h.set_size(0);
         h.set_mode(0o755);
         h.set_mtime(super::io::mtime_of(&meta));
@@ -716,8 +745,8 @@ fn add_path<W: Write>(
             .append(&h, io::empty())
             .map_err(|e| format!("写入目录 {} 失败: {}", name, e))?;
         stats.entries_done += 1;
-        for child in fs::read_dir(src)
-            .map_err(|e| format!("读取目录 {} 失败: {}", src.display(), e))?
+        for child in
+            fs::read_dir(src).map_err(|e| format!("读取目录 {} 失败: {}", src.display(), e))?
         {
             let child = child.map_err(|e| e.to_string())?;
             add_path(builder, &child.path(), base, opts, reporter, cancel, stats)?;
@@ -754,11 +783,10 @@ fn add_path<W: Write>(
     h.set_cksum();
 
     reporter.set_entry(&name);
-    let tracked = super::io::TrackingReader::new(
-        BufReader::with_capacity(256 * 1024, f),
-        cancel,
-        |n| reporter.advance_bytes(n),
-    );
+    let tracked =
+        super::io::TrackingReader::new(BufReader::with_capacity(256 * 1024, f), cancel, |n| {
+            reporter.advance_bytes(n)
+        });
     builder
         .append_data(&mut h, &name, tracked)
         .map_err(|e| format!("写入 {} 失败: {}", name, e))?;
@@ -776,7 +804,12 @@ mod tests {
     use crate::archive::job::{new_job_id, Kind};
 
     fn rep(tag: &str) -> Reporter {
-        Reporter::detached(new_job_id(Kind::Create), Kind::Create, tag.into(), tag.into())
+        Reporter::detached(
+            new_job_id(Kind::Create),
+            Kind::Create,
+            tag.into(),
+            tag.into(),
+        )
     }
 
     fn write_tree(dir: &Path) {
@@ -805,14 +838,28 @@ mod tests {
                 format: fmt.id().into(),
                 ..Default::default()
             };
-            create(&[src.clone()], &dest, fmt, &opts, &mut rep("create"), &cancel)
-                .unwrap_or_else(|e| panic!("{} 压缩失败: {}", fmt.id(), e));
+            create(
+                std::slice::from_ref(&src),
+                &dest,
+                fmt,
+                &opts,
+                &mut rep("create"),
+                &cancel,
+            )
+            .unwrap_or_else(|e| panic!("{} 压缩失败: {}", fmt.id(), e));
             assert!(dest.exists(), "{} 没产出文件", fmt.id());
 
-            let entries = list(&dest, fmt).unwrap_or_else(|e| panic!("{} 列举失败: {}", fmt.id(), e));
+            let entries =
+                list(&dest, fmt).unwrap_or_else(|e| panic!("{} 列举失败: {}", fmt.id(), e));
             let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
             for want in ["src", "src/a.txt", "src/sub", "src/sub/b.bin"] {
-                assert!(paths.contains(&want), "{} 缺条目 {}: {:?}", fmt.id(), want, paths);
+                assert!(
+                    paths.contains(&want),
+                    "{} 缺条目 {}: {:?}",
+                    fmt.id(),
+                    want,
+                    paths
+                );
             }
 
             let out = tmp.join("out");
@@ -826,7 +873,12 @@ mod tests {
                 &cancel,
             )
             .unwrap_or_else(|e| panic!("{} 解压失败: {}", fmt.id(), e));
-            assert!(stats.errors.is_empty(), "{} 有错误: {:?}", fmt.id(), stats.errors);
+            assert!(
+                stats.errors.is_empty(),
+                "{} 有错误: {:?}",
+                fmt.id(),
+                stats.errors
+            );
             assert_eq!(fs::read(out.join("src/a.txt")).unwrap(), b"hello");
             assert_eq!(fs::metadata(out.join("src/sub/b.bin")).unwrap().len(), 5000);
         }
@@ -881,8 +933,15 @@ mod tests {
         write_tree(&src);
         let dest = tmp.join("s.tar");
         let cancel = AtomicBool::new(false);
-        create(&[src], &dest, Format::Tar, &CreateOptions::default(), &mut rep("create"), &cancel)
-            .unwrap();
+        create(
+            &[src],
+            &dest,
+            Format::Tar,
+            &CreateOptions::default(),
+            &mut rep("create"),
+            &cancel,
+        )
+        .unwrap();
         let out = tmp.join("out");
         fs::create_dir_all(&out).unwrap();
         extract(
@@ -908,8 +967,15 @@ mod tests {
         write_tree(&src);
         let dest = tmp.join("s.tar");
         let cancel = AtomicBool::new(false);
-        create(&[src], &dest, Format::Tar, &CreateOptions::default(), &mut rep("create"), &cancel)
-            .unwrap();
+        create(
+            &[src],
+            &dest,
+            Format::Tar,
+            &CreateOptions::default(),
+            &mut rep("create"),
+            &cancel,
+        )
+        .unwrap();
         let out = tmp.join("out");
         fs::create_dir_all(&out).unwrap();
         extract(
@@ -967,7 +1033,11 @@ mod tests {
         assert!(!tmp.join("escaped.txt").exists(), "越界文件被写出来了");
         assert!(!out.join("escaped.txt").exists());
         if let Err(e) = r {
-            assert!(e.contains("越界") || e.contains("../escaped.txt"), "错误信息应指明越界: {}", e);
+            assert!(
+                e.contains("越界") || e.contains("../escaped.txt"),
+                "错误信息应指明越界: {}",
+                e
+            );
         }
     }
 }

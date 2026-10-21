@@ -42,10 +42,7 @@ fn fixture(dir: &Path) -> std::path::PathBuf {
     image_dict.set("Height", Object::Integer(160));
     image_dict.set("BitsPerComponent", Object::Integer(8));
     image_dict.set("ColorSpace", name("DeviceRGB"));
-    let picture = doc.add_object(Object::Stream(Stream::new(
-        image_dict,
-        gradient(240, 160),
-    )));
+    let picture = doc.add_object(Object::Stream(Stream::new(image_dict, gradient(240, 160))));
 
     let mut xobjects = Dictionary::new();
     xobjects.set(b"Im0".to_vec(), Object::Reference(picture));
@@ -158,12 +155,7 @@ fn inherited_image(doc: &Document, page: ObjectId) -> Stream {
         let dict = doc.get_object(id).unwrap().as_dict().unwrap().clone();
         if let Ok(resources) = dict.get(b"Resources") {
             let resources = match resources {
-                Object::Reference(id) => doc
-                    .get_object(*id)
-                    .unwrap()
-                    .as_dict()
-                    .unwrap()
-                    .clone(),
+                Object::Reference(id) => doc.get_object(*id).unwrap().as_dict().unwrap().clone(),
                 Object::Dictionary(inline) => inline.clone(),
                 other => panic!("Resources 类型 {:?}", other),
             };
@@ -198,16 +190,14 @@ fn compress_rewrites_body_and_picture_without_touching_the_input() {
             .is_err(),
         "夹具的正文本应未压缩，否则这条测试什么都没覆盖"
     );
-    assert_eq!(inherited_image(&before, before_pages[0]).content.len(), 115_200);
+    assert_eq!(
+        inherited_image(&before, before_pages[0]).content.len(),
+        115_200
+    );
 
     let output = dir.join("tiny.pdf");
-    let report = call_compress_pdf(
-        input.to_str().unwrap(),
-        output.to_str().unwrap(),
-        70,
-        1_200,
-    )
-    .expect("压缩应成功");
+    let report = call_compress_pdf(input.to_str().unwrap(), output.to_str().unwrap(), 70, 1_200)
+        .expect("压缩应成功");
 
     assert_eq!(report.rewritten, 1, "{:?}", report.skipped);
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
@@ -242,8 +232,19 @@ fn compress_rewrites_body_and_picture_without_touching_the_input() {
             picture.dict.get(b"Filter").unwrap().as_name().unwrap(),
             b"DCTDecode"
         );
-        assert_eq!(picture.dict.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
-        assert!(picture.dict.get(b"Decode").is_err(), "/Decode 该跟着一起去掉");
+        assert_eq!(
+            picture
+                .dict
+                .get(b"BitsPerComponent")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            8
+        );
+        assert!(
+            picture.dict.get(b"Decode").is_err(),
+            "/Decode 该跟着一起去掉"
+        );
         // 换上去的必须真是一张解得开的 JPEG，而且画的还是原图
         let mut cursor = std::io::Cursor::new(&picture.content);
         let decoded = ImageReader::new(&mut cursor)
@@ -328,17 +329,16 @@ fn compress_reports_why_nothing_could_be_shrunk() {
     doc.save(&input).unwrap();
 
     let output = dir.join("out.pdf");
-    let report = call_compress_pdf(
-        input.to_str().unwrap(),
-        output.to_str().unwrap(),
-        70,
-        1_200,
-    )
-    .expect("即使无图可压，命令也应成功");
+    let report = call_compress_pdf(input.to_str().unwrap(), output.to_str().unwrap(), 70, 1_200)
+        .expect("即使无图可压，命令也应成功");
     assert_eq!(report.rewritten, 0);
     assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
     assert!(report.skipped[0].contains("SMask"), "{:?}", report.skipped);
-    assert!(report.skipped[0].contains("第 1 页"), "原因要能定位到页: {:?}", report.skipped);
+    assert!(
+        report.skipped[0].contains("第 1 页"),
+        "原因要能定位到页: {:?}",
+        report.skipped
+    );
 
     // 图不能转 JPEG，但它的采样仍可无损挤：底图 + 掩码两条流
     assert_eq!(report.flated, 2, "{:?}", report);

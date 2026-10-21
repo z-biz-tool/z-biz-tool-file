@@ -61,7 +61,7 @@ fn listing() -> Option<PathBuf> {
 fn out_root() -> Option<PathBuf> {
     std::env::var_os("ZBT_REAL_ARCHIVE_OUT")
         .map(PathBuf::from)
-        .filter(|p| p.as_os_str().len() > 0)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// 跳过时留一句话。
@@ -82,8 +82,8 @@ fn note_skip(what: &str) {
 /// 这里**不能**退化成 lossy 解码：中文名被换成 U+FFFD 之后就和引擎给出的真名对不上了，
 /// 测试会报一堆根本不存在的差异 —— 那比直接报错更难查。
 fn read_baseline(p: &Path) -> String {
-    let bytes = std::fs::read(p)
-        .unwrap_or_else(|e| panic!("读不了基准文件 {}: {}", p.display(), e));
+    let bytes =
+        std::fs::read(p).unwrap_or_else(|e| panic!("读不了基准文件 {}: {}", p.display(), e));
     let body: &[u8] = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         &bytes[3..]
     } else {
@@ -109,9 +109,7 @@ fn parse_slt(text: &str) -> Vec<Sz> {
             cur.clear();
             return;
         };
-        let num = |k: &str| -> u64 {
-            cur.get(k).and_then(|v| v.trim().parse().ok()).unwrap_or(0)
-        };
+        let num = |k: &str| -> u64 { cur.get(k).and_then(|v| v.trim().parse().ok()).unwrap_or(0) };
         // CRC 一律按**十六进制**读：7-Zip 打的就是十六进制（`8A8483B1`），
         // 而先试十进制会让 `12345678` 这种"看起来像十进制"的 CRC 静默解析成另一个数，
         // 于是差分报告出一条根本不存在的 CRC 不一致
@@ -159,7 +157,10 @@ fn parse_slt(text: &str) -> Vec<Sz> {
 fn folder_flag(cur: &BTreeMap<String, String>) -> bool {
     match cur.get("Folder") {
         Some(v) => v == "+",
-        None => cur.get("Block").map(|v| v.trim().is_empty()).unwrap_or(false),
+        None => cur
+            .get("Block")
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(false),
     }
 }
 
@@ -201,7 +202,10 @@ fn diff_entries(
     for (k, t) in theirs {
         let Some(o) = ours.get(k) else { continue };
         if o.is_dir != t.is_dir {
-            out.push(format!("{}: 目录标志 引擎={} 7-Zip={}", k, o.is_dir, t.is_dir));
+            out.push(format!(
+                "{}: 目录标志 引擎={} 7-Zip={}",
+                k, o.is_dir, t.is_dir
+            ));
         }
         if t.is_dir {
             continue;
@@ -268,7 +272,12 @@ fn info_is_self_consistent() {
         "entry_count 和 entries 长度必须一致，前端两个地方都在用"
     );
     // total_size 只累加文件：目录的 size 是子树合计（rollup_dir_sizes），加进来就是重复计算
-    let file_sum: u64 = info.entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
+    let file_sum: u64 = info
+        .entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .map(|e| e.size)
+        .sum();
     assert_eq!(info.total_size, file_sum, "total_size 不该含目录的汇总值");
     assert!(
         info.entries.iter().any(|e| e.is_dir) || info.entry_count == 1,
@@ -347,15 +356,21 @@ fn extracts_a_sample_and_matches_crc() {
     // 用 map 去重而不是 dedup：dedup 只消掉**相邻**的重复，而这几条恰好分散在
     // 首/中/尾/最大四个位置，小包里它们很可能是同一个条目
     let mut picked: BTreeMap<String, &Sz> = BTreeMap::new();
-    for s in [files[0], files[files.len() / 2], files[files.len() - 1], *biggest] {
+    for s in [
+        files[0],
+        files[files.len() / 2],
+        files[files.len() - 1],
+        *biggest,
+    ] {
         picked.insert(s.path.clone(), s);
     }
     let names: Vec<String> = picked.keys().cloned().collect();
 
     let dest = root.join(format!("zbt-real-extract-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dest);
-    let stats = tb::call_archive_extract_entries(src.to_str().unwrap(), dest.to_str().unwrap(), &names)
-        .unwrap_or_else(|e| panic!("抽样解压失败: {}", e));
+    let stats =
+        tb::call_archive_extract_entries(src.to_str().unwrap(), dest.to_str().unwrap(), &names)
+            .unwrap_or_else(|e| panic!("抽样解压失败: {}", e));
     assert!(
         stats.errors.is_empty(),
         "keep_broken 收下了 {} 条单条目错误: {:?}",
@@ -370,7 +385,11 @@ fn extracts_a_sample_and_matches_crc() {
         let landed = if direct.is_file() {
             direct
         } else {
-            let stripped = s.path.splitn(2, '/').nth(1).unwrap_or_else(|| s.path.as_str());
+            let stripped = s
+                .path
+                .split_once('/')
+                .map(|x| x.1)
+                .unwrap_or(s.path.as_str());
             let alt = dest.join(stripped.replace('/', std::path::MAIN_SEPARATOR_STR));
             assert!(alt.is_file(), "解出来的文件不在预期位置: {}", s.path);
             alt
@@ -383,7 +402,9 @@ fn extracts_a_sample_and_matches_crc() {
             s.path
         );
         let got = crc32(&bytes);
-        let want = s.crc.unwrap_or_else(|| panic!("基准里没有 {} 的 CRC", s.path));
+        let want = s
+            .crc
+            .unwrap_or_else(|| panic!("基准里没有 {} 的 CRC", s.path));
         assert_eq!(
             got, want,
             "内容对不上（CRC {:08X} vs 7-Zip 的 {:08X}）: {}",
@@ -417,7 +438,8 @@ fn extracts_past_windows_max_path() {
     for i in 0..8 {
         deep = deep.join(format!("segment_{:02}_padding_", i));
     }
-    std::fs::create_dir_all(&deep).unwrap_or_else(|e| panic!("建不出深目录 {}: {}", deep.display(), e));
+    std::fs::create_dir_all(&deep)
+        .unwrap_or_else(|e| panic!("建不出深目录 {}: {}", deep.display(), e));
 
     let entry_name = "deep_file_with_a_fairly_long_name_used_for_testing.txt";
     let payload = b"long path payload".repeat(64);
@@ -460,7 +482,11 @@ fn crc32(bytes: &[u8]) -> u32 {
             let mut c = i as u32;
             let mut k = 0;
             while k < 8 {
-                c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xEDB88320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
                 k += 1;
             }
             t[i] = c;
@@ -548,15 +574,24 @@ fn build_corpus(root: &Path) {
 
     // 中文名 + 空格。Windows 上文件名以 UTF-16 存盘，而 ZIP 的老规范只认 CP437，
     // 写读两端编码不一致就变成一堆问号 —— 这是归档工具最经典的翻车点。
-    put(&root.join("中文名 文件.txt"), "内容 body\r\n第二行".as_bytes());
+    put(
+        &root.join("中文名 文件.txt"),
+        "内容 body\r\n第二行".as_bytes(),
+    );
     // & 和括号：命令行转义和 shell 引号问题的常客，也是某些实现拼名字时会截断的字符
     put(&root.join("with spaces & (parens).bin"), &binary_blob());
-    put(&root.join("深层").join("再深一层").join("leaf.md"), b"# leaf");
+    put(
+        &root.join("深层").join("再深一层").join("leaf.md"),
+        b"# leaf",
+    );
     // 0 字节：有的写入端干脆不生成条目，解回来就成了"文件丢了"
     put(&root.join("empty.dat"), b"");
     // 名字里带两层扩展名，且长得像一个归档。探测要是按扩展名而不是按魔数，
     // 解压这一支就会把它当成 tar.gz 去解
-    put(&root.join("looks.like.an.archive.tar.gz"), b"not really an archive");
+    put(
+        &root.join("looks.like.an.archive.tar.gz"),
+        b"not really an archive",
+    );
 }
 
 /// 确定性的"二进制"内容。
@@ -579,8 +614,8 @@ fn walk_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut out = BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let rd = std::fs::read_dir(&d)
-            .unwrap_or_else(|e| panic!("读不了目录 {}: {}", d.display(), e));
+        let rd =
+            std::fs::read_dir(&d).unwrap_or_else(|e| panic!("读不了目录 {}: {}", d.display(), e));
         for ent in rd {
             let p = ent.unwrap_or_else(|e| panic!("读目录项失败: {}", e)).path();
             if p.is_dir() {
@@ -591,8 +626,8 @@ fn walk_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
                     .unwrap_or(&p)
                     .to_string_lossy()
                     .replace('\\', "/");
-                let bytes = std::fs::read(&p)
-                    .unwrap_or_else(|e| panic!("读不了 {}: {}", p.display(), e));
+                let bytes =
+                    std::fs::read(&p).unwrap_or_else(|e| panic!("读不了 {}: {}", p.display(), e));
                 out.insert(rel, bytes);
             }
         }
@@ -606,7 +641,11 @@ fn walk_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
 /// 几千字节二进制原样打出来，真正的那条线索反倒被埋在里面。
 fn tree_diff(want: &BTreeMap<String, Vec<u8>>, got: &BTreeMap<String, Vec<u8>>) -> String {
     let names = |v: Vec<&String>| -> String {
-        v.iter().take(10).map(|x| x.as_str()).collect::<Vec<_>>().join(", ")
+        v.iter()
+            .take(10)
+            .map(|x| x.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     let missing: Vec<&String> = want.keys().filter(|k| !got.contains_key(*k)).collect();
     let extra: Vec<&String> = got.keys().filter(|k| !want.contains_key(*k)).collect();
@@ -618,13 +657,21 @@ fn tree_diff(want: &BTreeMap<String, Vec<u8>>, got: &BTreeMap<String, Vec<u8>>) 
 
     let mut s = String::from("解回来的树和语料对不上");
     if !missing.is_empty() {
-        s.push_str(&format!("\n  少了 {} 个: {}", missing.len(), names(missing)));
+        s.push_str(&format!(
+            "\n  少了 {} 个: {}",
+            missing.len(),
+            names(missing)
+        ));
     }
     if !extra.is_empty() {
         s.push_str(&format!("\n  多了 {} 个: {}", extra.len(), names(extra)));
     }
     if !differ.is_empty() {
-        s.push_str(&format!("\n  内容不一致 {} 个: {}", differ.len(), names(differ.clone())));
+        s.push_str(&format!(
+            "\n  内容不一致 {} 个: {}",
+            differ.len(),
+            names(differ.clone())
+        ));
         for k in differ.iter().take(3) {
             let (w, g) = (&want[*k], &got[*k]);
             s.push_str(&format!(
@@ -696,7 +743,10 @@ fn round_trip_one(opt: &tb::FormatOption) -> Result<(), String> {
     };
 
     let dest = ws.join(format!("round_trip{}", opt.extension));
-    let opts = tb::CreateOptions { format: opt.id.clone(), ..Default::default() };
+    let opts = tb::CreateOptions {
+        format: opt.id.clone(),
+        ..Default::default()
+    };
     let stats = tb::call_archive_create_with(&sources, dest.to_str().unwrap(), &opts)
         .map_err(|e| format!("写不出来: {}", e))?;
 
@@ -734,7 +784,11 @@ fn round_trip_one(opt: &tb::FormatOption) -> Result<(), String> {
         // 比的是"界面列表里会显示几行"，和"磁盘上落了几个文件"是两件事
         let files = info.entries.iter().filter(|e| !e.is_dir).count();
         if files != want.len() {
-            return Err(format!("info 报了 {} 个文件条目，语料里有 {} 个", files, want.len()));
+            return Err(format!(
+                "info 报了 {} 个文件条目，语料里有 {} 个",
+                files,
+                want.len()
+            ));
         }
     }
     Ok(())
@@ -752,7 +806,11 @@ fn writable_formats_split_into_containers_and_single_streams() {
     assert!(!single.is_empty(), "没有单流格式？gz/xz/zst 至少该在");
     assert!(!container.is_empty(), "没有容器格式？zip/7z/tar 至少该在");
     for id in ["zip", "7z", "tar"] {
-        assert!(container.iter().any(|o| o.id == id), "{} 被当成单流格式了", id);
+        assert!(
+            container.iter().any(|o| o.id == id),
+            "{} 被当成单流格式了",
+            id
+        );
     }
     for id in ["gz", "xz", "zst"] {
         assert!(single.iter().any(|o| o.id == id), "{} 被当成容器格式了", id);
@@ -821,7 +879,10 @@ fn writes_samples_for_external_verification() {
             vec![corpus.to_string_lossy().to_string()]
         };
         let dest = dir.join(format!("round_trip{}", opt.extension));
-        let opts = tb::CreateOptions { format: opt.id.clone(), ..Default::default() };
+        let opts = tb::CreateOptions {
+            format: opt.id.clone(),
+            ..Default::default()
+        };
         match tb::call_archive_create_with(&sources, dest.to_str().unwrap(), &opts) {
             Ok(_) => wrote.push(dest.to_string_lossy().to_string()),
             Err(e) => failures.push(format!("[{}]: {}", opt.id, e)),
@@ -888,7 +949,9 @@ fn tail(s: &str, n: usize) -> String {
     }
     // 从字符边界起截：中文名被从中间劈开，`&s[i..]` 会直接 panic
     let start = s.len() - n;
-    let start = (start..s.len()).find(|i| s.is_char_boundary(*i)).unwrap_or(0);
+    let start = (start..s.len())
+        .find(|i| s.is_char_boundary(*i))
+        .unwrap_or(0);
     format!("…{}", &s[start..])
 }
 
@@ -927,7 +990,10 @@ fn cross_check_one(sz: &Path, opt: &tb::FormatOption) -> Result<(), String> {
     tb::call_archive_create_with(
         &sources,
         d,
-        &tb::CreateOptions { format: opt.id.clone(), ..Default::default() },
+        &tb::CreateOptions {
+            format: opt.id.clone(),
+            ..Default::default()
+        },
     )
     .map_err(|e| format!("写不出来: {}", e))?;
 
@@ -950,7 +1016,15 @@ fn cross_check_one(sz: &Path, opt: &tb::FormatOption) -> Result<(), String> {
     let (landed, meta_target) = if opt.id.starts_with("tar.") {
         let inner = only_file(&out).map_err(|e| format!("剥外层之后: {}", e))?;
         let out2 = ws.join("out7z2");
-        let o = run_7z(sz, &["x", "-y", &format!("-o{}", out2.display()), inner.to_str().unwrap()])?;
+        let o = run_7z(
+            sz,
+            &[
+                "x",
+                "-y",
+                &format!("-o{}", out2.display()),
+                inner.to_str().unwrap(),
+            ],
+        )?;
         if !o.status.success() {
             return Err(format!("7z x 内层 tar 失败: {}", tail(&sz_diag(&o), 900)));
         }
@@ -968,7 +1042,16 @@ fn cross_check_one(sz: &Path, opt: &tb::FormatOption) -> Result<(), String> {
     // 元数据差分只做容器格式。单流不做：`7z l` 报的是 gzip 头里存的**内层文件名**，
     // 和"剥掉压缩扩展名"是两套命名规则，比名字只会比出噪声，而字节已经比过了。
     if !single {
-        let o = run_7z(sz, &["l", "-slt", "-ba", "-sccUTF-8", meta_target.to_str().unwrap()])?;
+        let o = run_7z(
+            sz,
+            &[
+                "l",
+                "-slt",
+                "-ba",
+                "-sccUTF-8",
+                meta_target.to_str().unwrap(),
+            ],
+        )?;
         if !o.status.success() {
             return Err(format!("7z l 失败: {}", tail(&sz_diag(&o), 900)));
         }
@@ -996,7 +1079,11 @@ fn cross_check_one(sz: &Path, opt: &tb::FormatOption) -> Result<(), String> {
             return Err(format!(
                 "和 7-Zip 的列表有 {} 处不一致:\n  {}",
                 diff.len(),
-                diff.iter().take(12).cloned().collect::<Vec<_>>().join("\n  ")
+                diff.iter()
+                    .take(12)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n  ")
             ));
         }
     }
@@ -1043,7 +1130,10 @@ fn external_7zip_reads_what_we_write() {
         no_decoder.len(),
         no_decoder.join(", ")
     );
-    assert!(checked > 0, "一种都没验上，那 NO_SZ_DECODER 是不是把清单吃干净了");
+    assert!(
+        checked > 0,
+        "一种都没验上，那 NO_SZ_DECODER 是不是把清单吃干净了"
+    );
     assert!(
         failures.is_empty(),
         "7-Zip 读不了我们写的这些:\n{}",

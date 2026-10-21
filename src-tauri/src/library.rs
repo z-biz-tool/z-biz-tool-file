@@ -1,10 +1,10 @@
 // 媒体库 + 图书馆后端
 // 基于 JSON 持久化的轻量级元数据库
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use chrono::Utc;
-use std::collections::HashMap;
 
 // =============== 数据模型 ===============
 
@@ -23,13 +23,13 @@ pub enum MediaKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum LibraryKind {
-    Book,      // 书籍（PDF/EPUB）
-    Comic,     // 漫画（CBR/CBZ）
-    Music,     // 音乐专辑
-    Movie,     // 电影
-    TvShow,    // 剧集
-    Podcast,   // 播客
-    Document,  // 文档
+    Book,     // 书籍（PDF/EPUB）
+    Comic,    // 漫画（CBR/CBZ）
+    Music,    // 音乐专辑
+    Movie,    // 电影
+    TvShow,   // 剧集
+    Podcast,  // 播客
+    Document, // 文档
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ pub struct MediaItem {
 
     // 通用
     pub tags: Vec<String>,
-    pub rating: Option<u8>,          // 1-5
+    pub rating: Option<u8>, // 1-5
     pub description: Option<String>,
     pub favorite: bool,
 
@@ -91,7 +91,7 @@ pub struct LibraryEntry {
     pub cover_url: Option<String>,
     pub added_at: i64,
     pub last_read_at: Option<i64>,
-    pub read_progress: Option<f32>,    // 0.0 ~ 1.0
+    pub read_progress: Option<f32>, // 0.0 ~ 1.0
 }
 
 // =============== 数据库（JSON 文件） ===============
@@ -196,7 +196,10 @@ pub fn library_scan_media() -> Result<LibraryStats, String> {
         if !Path::new(dir).exists() {
             continue;
         }
-        for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -204,7 +207,8 @@ pub fn library_scan_media() -> Result<LibraryStats, String> {
             if let Some(kind) = detect_media_kind(&path) {
                 let meta = entry.metadata().ok();
                 let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = meta.as_ref()
+                let modified = meta
+                    .as_ref()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64)
@@ -219,9 +223,15 @@ pub fn library_scan_media() -> Result<LibraryStats, String> {
                             if let Ok(reader) = reader.with_guessed_format() {
                                 if let Ok(dims) = reader.into_dimensions() {
                                     (Some(dims.0), Some(dims.1), None)
-                                } else { (None, None, None) }
-                            } else { (None, None, None) }
-                        } else { (None, None, None) }
+                                } else {
+                                    (None, None, None)
+                                }
+                            } else {
+                                (None, None, None)
+                            }
+                        } else {
+                            (None, None, None)
+                        }
                     }
                     MediaKind::Video | MediaKind::Audio => {
                         // 简化：未解析实际 duration
@@ -241,15 +251,22 @@ pub fn library_scan_media() -> Result<LibraryStats, String> {
                     width,
                     height,
                     duration_sec,
-                    artist: None, album: None, cover_path: None,
-                    author: None, page_count: None, cover_url: None,
+                    artist: None,
+                    album: None,
+                    cover_path: None,
+                    author: None,
+                    page_count: None,
+                    cover_url: None,
                     tags: Vec::new(),
                     rating: None,
                     description: None,
                     favorite: false,
-                    series: None, series_index: None,
-                    publisher: None, publish_year: None,
-                    isbn: None, language: None,
+                    series: None,
+                    series_index: None,
+                    publisher: None,
+                    publish_year: None,
+                    isbn: None,
+                    language: None,
                 };
                 db.media.insert(id, item);
             }
@@ -270,7 +287,10 @@ pub fn library_scan_books() -> Result<LibraryStats, String> {
         if !Path::new(dir).exists() {
             continue;
         }
-        for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -285,8 +305,10 @@ pub fn library_scan_books() -> Result<LibraryStats, String> {
                     title,
                     path: path.clone(),
                     author: None,
-                    series: None, series_index: None,
-                    publisher: None, publish_year: None,
+                    series: None,
+                    series_index: None,
+                    publisher: None,
+                    publish_year: None,
                     isbn: None,
                     tags: Vec::new(),
                     rating: None,
@@ -320,17 +342,17 @@ pub fn library_query_media(
     }
     if let Some(s) = search.filter(|s| !s.is_empty()) {
         let s = s.to_lowercase();
-        items.retain(|i|
+        items.retain(|i| {
             i.title.to_lowercase().contains(&s)
-            || i.path.to_lowercase().contains(&s)
-            || i.tags.iter().any(|t| t.to_lowercase().contains(&s))
-        );
+                || i.path.to_lowercase().contains(&s)
+                || i.tags.iter().any(|t| t.to_lowercase().contains(&s))
+        });
     }
     if favorites_only.unwrap_or(false) {
         items.retain(|i| i.favorite);
     }
 
-    items.sort_by(|a, b| b.indexed_at.cmp(&a.indexed_at));
+    items.sort_by_key(|a| std::cmp::Reverse(a.indexed_at));
     Ok(items)
 }
 
@@ -348,13 +370,16 @@ pub fn library_query_books(
     }
     if let Some(s) = search.filter(|s| !s.is_empty()) {
         let s = s.to_lowercase();
-        items.retain(|i|
+        items.retain(|i| {
             i.title.to_lowercase().contains(&s)
-            || i.author.as_ref().map(|a| a.to_lowercase().contains(&s)).unwrap_or(false)
-        );
+                || i.author
+                    .as_ref()
+                    .map(|a| a.to_lowercase().contains(&s))
+                    .unwrap_or(false)
+        });
     }
 
-    items.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+    items.sort_by_key(|a| std::cmp::Reverse(a.added_at));
     Ok(items)
 }
 
@@ -437,7 +462,10 @@ fn hash_path(path: &str) -> String {
 }
 
 fn detect_media_kind(path: &str) -> Option<MediaKind> {
-    let ext = Path::new(path).extension()?.to_string_lossy().to_lowercase();
+    let ext = Path::new(path)
+        .extension()?
+        .to_string_lossy()
+        .to_lowercase();
     match ext.as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "heic" | "svg" => Some(MediaKind::Image),
         "mp4" | "mov" | "avi" | "mkv" | "webm" | "flv" | "wmv" => Some(MediaKind::Video),
@@ -450,7 +478,10 @@ fn detect_media_kind(path: &str) -> Option<MediaKind> {
 }
 
 fn detect_library_kind(path: &str) -> Option<LibraryKind> {
-    let ext = Path::new(path).extension()?.to_string_lossy().to_lowercase();
+    let ext = Path::new(path)
+        .extension()?
+        .to_string_lossy()
+        .to_lowercase();
     match ext.as_str() {
         "epub" | "mobi" | "azw" | "azw3" | "fb2" | "pdf" => Some(LibraryKind::Book),
         "cbr" | "cbz" => Some(LibraryKind::Comic),

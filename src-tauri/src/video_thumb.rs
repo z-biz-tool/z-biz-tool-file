@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
-use serde::{Deserialize, Serialize};
 
 /// 视频缩略图结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,9 +78,8 @@ pub fn get_video_thumbnail_blocking(path: String) -> Result<VideoThumbResult, St
         return Err(format!("不是视频文件: .{}", ext));
     }
 
-    let ffmpeg = ffmpeg_path().ok_or_else(|| {
-        "未找到 ffmpeg。请安装：brew install ffmpeg".to_string()
-    })?;
+    let ffmpeg =
+        ffmpeg_path().ok_or_else(|| "未找到 ffmpeg。请安装：brew install ffmpeg".to_string())?;
 
     let cache = cache_dir();
     std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;

@@ -156,19 +156,19 @@ pub fn apply_mode(path: &Path, mode: u32) -> std::io::Result<()> {
 /// 前端在开始前先探测冲突（`archive_conflicts`），拿到用户的选择再传策略进来。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Overwrite {
     /// 跳过已存在的（默认，最不意外）
+    #[default]
     Skip,
     /// 直接覆盖
-    Overwrite,
+    ///
+    /// 变体不叫 `Overwrite`：枚举本身就叫 `Overwrite`，同名时读代码分不清
+    /// 「说的是枚举还是变体」。**序列化名保持 "overwrite" 不变** —— 那是 IPC 契约。
+    #[serde(rename = "overwrite")]
+    Replace,
     /// 换成 `name (1).ext` 这种不冲突的名字
     Rename,
-}
-
-impl Default for Overwrite {
-    fn default() -> Self {
-        Overwrite::Skip
-    }
 }
 
 /// 按策略决定最终落点。返回 None 表示"跳过这个条目"。
@@ -183,7 +183,7 @@ pub fn resolve_target(
     }
     match policy {
         Overwrite::Skip => Ok(None),
-        Overwrite::Overwrite => Ok(Some(target)),
+        Overwrite::Replace => Ok(Some(target)),
         Overwrite::Rename => Ok(Some(unique_sibling(&target))),
     }
 }
@@ -243,9 +243,18 @@ mod tests {
     #[test]
     fn rejects_windows_drive_and_unc() {
         let dest = Path::new("/tmp/out");
-        assert!(matches!(safe_join(dest, "C:evil.txt"), Err(GuardError::Escape(_))));
-        assert!(matches!(safe_join(dest, "c:/evil.txt"), Err(GuardError::Escape(_))));
-        assert!(matches!(safe_join(dest, "\\\\server\\share"), Err(GuardError::Escape(_))));
+        assert!(matches!(
+            safe_join(dest, "C:evil.txt"),
+            Err(GuardError::Escape(_))
+        ));
+        assert!(matches!(
+            safe_join(dest, "c:/evil.txt"),
+            Err(GuardError::Escape(_))
+        ));
+        assert!(matches!(
+            safe_join(dest, "\\\\server\\share"),
+            Err(GuardError::Escape(_))
+        ));
     }
 
     #[test]
@@ -276,7 +285,10 @@ mod tests {
         assert!(matches!(safe_join(dest, "..."), Err(GuardError::Empty(_))));
         assert!(matches!(safe_join(dest, " "), Err(GuardError::Empty(_))));
         assert!(matches!(safe_join(dest, ""), Err(GuardError::Empty(_))));
-        assert!(safe_join(dest, "***").is_ok(), "非法字符该被换掉，不该让整条解压失败");
+        assert!(
+            safe_join(dest, "***").is_ok(),
+            "非法字符该被换掉，不该让整条解压失败"
+        );
     }
 
     #[test]
@@ -293,13 +305,21 @@ mod tests {
         let existing = dir.join("a.txt");
         std::fs::write(&existing, b"old").unwrap();
 
-        assert_eq!(resolve_target(&dir, "a.txt", Overwrite::Skip).unwrap(), None);
         assert_eq!(
-            resolve_target(&dir, "a.txt", Overwrite::Overwrite).unwrap(),
+            resolve_target(&dir, "a.txt", Overwrite::Skip).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_target(&dir, "a.txt", Overwrite::Replace).unwrap(),
             Some(existing.clone())
         );
-        let renamed = resolve_target(&dir, "a.txt", Overwrite::Rename).unwrap().unwrap();
+        let renamed = resolve_target(&dir, "a.txt", Overwrite::Rename)
+            .unwrap()
+            .unwrap();
         assert_eq!(renamed.file_name().unwrap().to_str().unwrap(), "a (1).txt");
-        assert_eq!(resolve_target(&dir, "new.txt", Overwrite::Skip).unwrap(), Some(dir.join("new.txt")));
+        assert_eq!(
+            resolve_target(&dir, "new.txt", Overwrite::Skip).unwrap(),
+            Some(dir.join("new.txt"))
+        );
     }
 }

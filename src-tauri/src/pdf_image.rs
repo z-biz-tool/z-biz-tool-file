@@ -7,7 +7,7 @@
 //! 明确报"跳过 + 原因"而不是静默丢图，否则用户看到的是一份少了图的假成功。
 
 use flate2::read::ZlibDecoder;
-use image::{DynamicImage, GrayImage, ImageFormat, RgbaImage, RgbImage};
+use image::{DynamicImage, GrayImage, ImageFormat, RgbImage, RgbaImage};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -49,12 +49,17 @@ pub async fn extract_pdf_images(
     input_path: String,
     output_dir: String,
 ) -> Result<ExtractReport, String> {
-    tauri::async_runtime::spawn_blocking(move || extract_pdf_images_blocking(input_path, output_dir))
-        .await
-        .map_err(|e| format!("提取任务中断: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_pdf_images_blocking(input_path, output_dir)
+    })
+    .await
+    .map_err(|e| format!("提取任务中断: {}", e))?
 }
 
-fn extract_pdf_images_blocking(input_path: String, output_dir: String) -> Result<ExtractReport, String> {
+fn extract_pdf_images_blocking(
+    input_path: String,
+    output_dir: String,
+) -> Result<ExtractReport, String> {
     let file = crate::path_guard::readable(&input_path)?;
     let doc = crate::pdf_ops::load_doc(&file)?;
     let dir = crate::path_guard::writable(&output_dir)?;
@@ -168,7 +173,9 @@ fn collect_images(
         return;
     };
     for (key, value) in xobjects.iter() {
-        let Ok(id) = value.as_reference() else { continue };
+        let Ok(id) = value.as_reference() else {
+            continue;
+        };
         let Ok(stream) = doc.get_object(id).and_then(Object::as_stream) else {
             continue;
         };
@@ -294,7 +301,11 @@ pub(crate) fn decode_image(doc: &Document, stream: &Stream, depth: u8) -> Result
 
     let decode = decode_array(stream, components, inverted_default);
     let mask = match stream.dict.get(b"SMask").ok().map(Object::as_reference) {
-        Some(Ok(id)) if depth < 1 => Some(doc.get_object(id).and_then(Object::as_stream).map_err(|_| "/SMask 引用无效")?),
+        Some(Ok(id)) if depth < 1 => Some(
+            doc.get_object(id)
+                .and_then(Object::as_stream)
+                .map_err(|_| "/SMask 引用无效")?,
+        ),
         Some(Ok(_)) => None,
         Some(Err(_)) => return Err("/SMask 引用无效".to_string()),
         None => None,
@@ -365,13 +376,25 @@ fn apply_predictor(
     width: usize,
     components: usize,
 ) -> Result<Vec<u8>, String> {
-    let predictor = params.get(b"Predictor").and_then(Object::as_i64).unwrap_or(1);
+    let predictor = params
+        .get(b"Predictor")
+        .and_then(Object::as_i64)
+        .unwrap_or(1);
     if predictor < 10 {
         return Ok(data.to_vec());
     }
-    let colors = params.get(b"Colors").and_then(Object::as_i64).unwrap_or(components as i64) as usize;
-    let bits = params.get(b"BitsPerComponent").and_then(Object::as_i64).unwrap_or(8) as usize;
-    let columns = params.get(b"Columns").and_then(Object::as_i64).unwrap_or(width as i64) as usize;
+    let colors = params
+        .get(b"Colors")
+        .and_then(Object::as_i64)
+        .unwrap_or(components as i64) as usize;
+    let bits = params
+        .get(b"BitsPerComponent")
+        .and_then(Object::as_i64)
+        .unwrap_or(8) as usize;
+    let columns = params
+        .get(b"Columns")
+        .and_then(Object::as_i64)
+        .unwrap_or(width as i64) as usize;
     let bytes_per_row = (columns * colors * bits).div_ceil(8);
     if bytes_per_row == 0 {
         return Ok(data.to_vec());
@@ -386,9 +409,17 @@ fn apply_predictor(
         let mut current = vec![0u8; bytes_per_row];
         for i in 0..bytes_per_row {
             let raw = row[1 + i] as i32;
-            let a = if i >= stride { current[i - stride] as i32 } else { 0 };
+            let a = if i >= stride {
+                current[i - stride] as i32
+            } else {
+                0
+            };
             let b = previous[i] as i32;
-            let c = if i >= stride { previous[i - stride] as i32 } else { 0 };
+            let c = if i >= stride {
+                previous[i - stride] as i32
+            } else {
+                0
+            };
             let value = match row[0] {
                 0 => raw,
                 1 => raw + a,
@@ -396,8 +427,11 @@ fn apply_predictor(
                 3 => raw + (a + b) / 2,
                 4 => {
                     let estimate = a + b - c;
-                    let (pa, pb, pc) =
-                        ((estimate - a).abs(), (estimate - b).abs(), (estimate - c).abs());
+                    let (pa, pb, pc) = (
+                        (estimate - a).abs(),
+                        (estimate - b).abs(),
+                        (estimate - c).abs(),
+                    );
                     let predicted = if pa <= pb && pa <= pc {
                         a
                     } else if pb <= pc {
@@ -437,10 +471,15 @@ fn color_space_of(
             b"DeviceGray" => Ok((ColorSpace::Gray, false)),
             b"DeviceRGB" => Ok((ColorSpace::Rgb, false)),
             b"DeviceCMYK" => Ok((ColorSpace::Cmyk, true)),
-            other => Err(format!("不支持颜色空间 /{}", String::from_utf8_lossy(other))),
+            other => Err(format!(
+                "不支持颜色空间 /{}",
+                String::from_utf8_lossy(other)
+            )),
         };
     }
-    let array = declared.as_array().map_err(|_| "/ColorSpace 类型无法识别".to_string())?;
+    let array = declared
+        .as_array()
+        .map_err(|_| "/ColorSpace 类型无法识别".to_string())?;
     let family = array
         .first()
         .and_then(|object| object.as_name().ok())
@@ -448,7 +487,9 @@ fn color_space_of(
         .to_vec();
     match family.as_slice() {
         b"Indexed" if array.len() >= 4 => {
-            let hival = array[2].as_i64().map_err(|_| "/Indexed 缺 hival".to_string())?;
+            let hival = array[2]
+                .as_i64()
+                .map_err(|_| "/Indexed 缺 hival".to_string())?;
             let lookup = match deref(doc, &array[3]).ok_or("/Indexed 调色板引用无效")? {
                 Object::Array(values) => values
                     .iter()
@@ -463,7 +504,13 @@ fn color_space_of(
                 }
                 _ => return Err("/Indexed 调色板形式无法识别".to_string()),
             };
-            Ok((ColorSpace::Indexed { hival: hival as u32, lookup }, false))
+            Ok((
+                ColorSpace::Indexed {
+                    hival: hival as u32,
+                    lookup,
+                },
+                false,
+            ))
         }
         b"ICCBased" => {
             // ICC 描述文件按规范就是一个流（参数是它的引用），只认字典会漏掉真实语料里的全部 ICC 图
@@ -484,7 +531,10 @@ fn color_space_of(
         // 与查看器缺 Profile 时的近似一致；继续报错的话这份语料里 24 张图就白丢了
         b"CalRGB" => Ok((ColorSpace::Rgb, false)),
         b"CalGray" => Ok((ColorSpace::Gray, false)),
-        _ => Err(format!("不支持颜色空间 {}", String::from_utf8_lossy(&family))),
+        _ => Err(format!(
+            "不支持颜色空间 {}",
+            String::from_utf8_lossy(&family)
+        )),
     }
 }
 
@@ -501,12 +551,7 @@ fn decode_array(stream: &Stream, components: usize, inverted: bool) -> Vec<f32> 
         .collect();
     match stream.dict.get(b"Decode") {
         Ok(Object::Array(values)) => (0..components * 2)
-            .map(|i| {
-                values
-                    .get(i)
-                    .and_then(number)
-                    .unwrap_or(defaults[i])
-            })
+            .map(|i| values.get(i).and_then(number).unwrap_or(defaults[i]))
             .collect(),
         _ => defaults,
     }
@@ -622,7 +667,8 @@ fn rasterize(
     // 掩码与图像同尺寸且都是行主序，并排走就不用逐点算 x/y（除法和取余在热路上很贵）
     let mut mask_pixels = mask.into_iter().flat_map(|image| image.pixels());
     for sample in raw.chunks(components) {
-        let pick = |component: usize| tables[component][*sample.get(component).unwrap_or(&0) as usize];
+        let pick =
+            |component: usize| tables[component][*sample.get(component).unwrap_or(&0) as usize];
         let rgb: [u8; 3] = if indexed {
             let (hival, lookup) = match space {
                 ColorSpace::Indexed { hival, lookup } => (*hival, lookup),
@@ -732,12 +778,15 @@ mod tests {
             let mut dict = Dictionary::new();
             dict.set("Type", name("XObject"));
             dict.set("Subtype", name("Form"));
-            dict.set("BBox", Object::Array(vec![
-                Object::Integer(0),
-                Object::Integer(0),
-                Object::Integer(100),
-                Object::Integer(100),
-            ]));
+            dict.set(
+                "BBox",
+                Object::Array(vec![
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(100),
+                    Object::Integer(100),
+                ]),
+            );
             dict.set("Resources", Object::Reference(resources));
             let id = self
                 .doc
@@ -761,12 +810,15 @@ mod tests {
             let page = self.doc.add_object(Object::Dictionary({
                 let mut dict = Dictionary::new();
                 dict.set("Type", name("Page"));
-                dict.set("MediaBox", Object::Array(vec![
-                    Object::Integer(0),
-                    Object::Integer(0),
-                    Object::Integer(200),
-                    Object::Integer(200),
-                ]));
+                dict.set(
+                    "MediaBox",
+                    Object::Array(vec![
+                        Object::Integer(0),
+                        Object::Integer(0),
+                        Object::Integer(200),
+                        Object::Integer(200),
+                    ]),
+                );
                 dict.set("Resources", Object::Reference(resources));
                 dict.set("Contents", Object::Reference(content));
                 dict
@@ -793,7 +845,10 @@ mod tests {
 
     /// 跑命令并保证输出目录确实是命令建出来的
     fn extract(dir: &Path, file: &Path) -> ExtractReport {
-        let out = dir.join(format!("{}-out", file.file_stem().unwrap().to_string_lossy()));
+        let out = dir.join(format!(
+            "{}-out",
+            file.file_stem().unwrap().to_string_lossy()
+        ));
         assert!(!out.exists(), "输出目录应该由命令自己创建");
         let report = extract_pdf_images_blocking(
             file.to_string_lossy().to_string(),
@@ -812,7 +867,6 @@ mod tests {
         encoder.finish().unwrap()
     }
 
-
     /// 8-bit RGB + /SMask：掩码必须真的改变 alpha，否则测试没测到那条分支
     #[test]
     fn rgb_image_with_smask_keeps_alpha() {
@@ -826,7 +880,11 @@ mod tests {
         let mut rgb = base_dict(2, 2);
         rgb.set("Filter", name("FlateDecode"));
         rgb.set("SMask", Object::Reference(mask));
-        fixture.image("Im0", rgb, flate(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 20, 20, 20]));
+        fixture.image(
+            "Im0",
+            rgb,
+            flate(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 20, 20, 20]),
+        );
         let file = fixture.save(&dir, "rgb.pdf");
 
         let report = extract(&dir, &file);
@@ -915,10 +973,10 @@ mod tests {
             .doc
             .add_object(Object::Stream(Stream::new(profile, Vec::new())));
         let mut rgb = base_dict(1, 1);
-        rgb.set("ColorSpace", Object::Array(vec![
-            name("ICCBased"),
-            Object::Reference(profile),
-        ]));
+        rgb.set(
+            "ColorSpace",
+            Object::Array(vec![name("ICCBased"), Object::Reference(profile)]),
+        );
         fixture.image("Im0", rgb, vec![9u8, 8, 7]);
 
         let mut cal = base_dict(1, 1);
@@ -929,10 +987,10 @@ mod tests {
         }
         let mut params = Dictionary::new();
         params.set("WhitePoint", Object::Array(white));
-        cal.set("ColorSpace", Object::Array(vec![
-            name("CalGray"),
-            Object::Dictionary(params),
-        ]));
+        cal.set(
+            "ColorSpace",
+            Object::Array(vec![name("CalGray"), Object::Dictionary(params)]),
+        );
         fixture.image("Im1", cal, vec![123u8]);
         let file = fixture.save(&dir, "icc.pdf");
 
@@ -962,11 +1020,15 @@ mod tests {
         assert!(report.skipped.is_empty(), "{:?}", report.skipped);
         let rgba = image::open(&report.images[0]).unwrap().to_rgba8();
         assert_eq!(
-            (0..6).map(|x| rgba.get_pixel(x, 0).0[0]).collect::<Vec<_>>(),
+            (0..6)
+                .map(|x| rgba.get_pixel(x, 0).0[0])
+                .collect::<Vec<_>>(),
             vec![255, 255, 0, 0, 255, 0]
         );
         assert_eq!(
-            (0..6).map(|x| rgba.get_pixel(x, 1).0[0]).collect::<Vec<_>>(),
+            (0..6)
+                .map(|x| rgba.get_pixel(x, 1).0[0])
+                .collect::<Vec<_>>(),
             vec![0, 0, 0, 255, 255, 255]
         );
     }
@@ -1030,19 +1092,22 @@ mod tests {
         let dir = crate::test_bridge::TempDir::new("pdfimg-indexed");
         let mut dict = base_dict(3, 1);
         dict.remove(b"ColorSpace");
-        dict.set("ColorSpace", Object::Array(vec![
-            name("Indexed"),
-            name("DeviceRGB"),
-            Object::Integer(1),
+        dict.set(
+            "ColorSpace",
             Object::Array(vec![
-                Object::Integer(255),
-                Object::Integer(0),
-                Object::Integer(0),
-                Object::Integer(0),
-                Object::Integer(0),
-                Object::Integer(255),
+                name("Indexed"),
+                name("DeviceRGB"),
+                Object::Integer(1),
+                Object::Array(vec![
+                    Object::Integer(255),
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(255),
+                ]),
             ]),
-        ]));
+        );
         let mut fixture = Fixture::new();
         // 索引 5 越界，必须夹到 hival=1 而不是炸掉
         fixture.image("Im0", dict, vec![0u8, 1, 5]);
@@ -1093,7 +1158,11 @@ mod tests {
         let report = extract(&dir, &file);
         assert!(report.images.is_empty());
         assert_eq!(report.skipped.len(), 1);
-        assert!(report.skipped[0].contains("CCITTFaxDecode"), "{:?}", report.skipped);
+        assert!(
+            report.skipped[0].contains("CCITTFaxDecode"),
+            "{:?}",
+            report.skipped
+        );
         assert!(report.skipped[0].contains("ImFax"), "{:?}", report.skipped);
     }
 
@@ -1129,7 +1198,11 @@ mod tests {
 
         let report = extract(&dir, &file);
         assert!(report.images.is_empty());
-        assert!(report.skipped[0].contains("尺寸异常"), "{:?}", report.skipped);
+        assert!(
+            report.skipped[0].contains("尺寸异常"),
+            "{:?}",
+            report.skipped
+        );
     }
 
     /// 没有任何图的 PDF：命令要成功返回空清单，而不是报错

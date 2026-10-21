@@ -69,10 +69,13 @@ fn compressed_fixture(dir: &std::path::Path) -> std::path::PathBuf {
                 Object::Integer(700),
             ]),
         );
-        dict.set("Kids", Object::Array(vec![
-            Object::Reference(page_one),
-            Object::Reference(page_two),
-        ]));
+        dict.set(
+            "Kids",
+            Object::Array(vec![
+                Object::Reference(page_one),
+                Object::Reference(page_two),
+            ]),
+        );
         dict.set("Count", Object::Integer(2));
         dict
     }));
@@ -230,7 +233,9 @@ fn watermark_survives_compressed_content_and_inherited_boxes() {
         // 尺寸来自中层继承：500x700 → 中心 250,350
         assert!(ops.contains("1 0 0 1 250.0 350.0 cm"), "{}", ops);
         // /Fwm 挂在祖先 Resources 上，两页都得解析得到
-        let font = inherited(&doc, *page, b"Font", b"Fwm").as_reference().unwrap();
+        let font = inherited(&doc, *page, b"Font", b"Fwm")
+            .as_reference()
+            .unwrap();
         let font = doc.get_object(font).unwrap().as_dict().unwrap().clone();
         assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
         let state = inherited(&doc, *page, b"ExtGState", b"Gwm")

@@ -27,15 +27,12 @@ fn tag_store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 /// 读取所有标签
 #[tauri::command]
-pub fn get_all_tags(
-    app: tauri::AppHandle,
-) -> Result<HashMap<String, FileTag>, String> {
+pub fn get_all_tags(app: tauri::AppHandle) -> Result<HashMap<String, FileTag>, String> {
     let path = tag_store_path(&app)?;
     if !path.exists() {
         return Ok(HashMap::new());
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取标签失败: {}", e))?;
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取标签失败: {}", e))?;
     if content.trim().is_empty() {
         return Ok(HashMap::new());
     }
@@ -44,11 +41,7 @@ pub fn get_all_tags(
 
 /// 设置/更新某文件的标签
 #[tauri::command]
-pub fn set_file_tag(
-    app: tauri::AppHandle,
-    file_path: String,
-    tag: FileTag,
-) -> Result<(), String> {
+pub fn set_file_tag(app: tauri::AppHandle, file_path: String, tag: FileTag) -> Result<(), String> {
     let path = tag_store_path(&app)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -80,10 +73,7 @@ pub fn set_file_tag(
 
 /// 删除某文件的标签
 #[tauri::command]
-pub fn delete_file_tag(
-    app: tauri::AppHandle,
-    file_path: String,
-) -> Result<(), String> {
+pub fn delete_file_tag(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
     let path = tag_store_path(&app)?;
     if !path.exists() {
         return Ok(());

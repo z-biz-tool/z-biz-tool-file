@@ -41,25 +41,31 @@ impl std::error::Error for PathError {}
 /// （按路径段名匹配，跨平台一致）。给这台机器加 Windows 系统目录黑名单之前要先想清楚：
 /// `validate` 同时被"读"路径用着，把 `C:\Program Files` 拉黑会连带禁掉浏览和打开。
 const BLOCKED_PREFIXES: &[&str] = &[
-    "/", "/etc", "/usr", "/bin", "/sbin", "/var", "/System",
-    "/Library", "/dev", "/proc", "/sys", "/boot",
-    "/root", "/run",
+    "/", "/etc", "/usr", "/bin", "/sbin", "/var", "/System", "/Library", "/dev", "/proc", "/sys",
+    "/boot", "/root", "/run",
 ];
 
 /// macOS 上 `/private` 是 `/` 的别名，会被 canonicalize 加到所有系统路径前；
 /// 但 `/private/var` `/private/tmp` 是用户可写的运行时目录，必须放行。
 /// 显式列出真正需要屏蔽的 `/private` 子树。
 const BLOCKED_PRIVATE_SUFFIXES: &[&str] = &[
-    "/private/etc", "/private/usr", "/private/bin", "/private/sbin",
-    "/private/System", "/private/Library", "/private/var/db",
-    "/private/var/root", "/private/var/log", "/private/var/audit",
-    "/private/var/at", "/private/var/audit", "/private/var/cron",
+    "/private/etc",
+    "/private/usr",
+    "/private/bin",
+    "/private/sbin",
+    "/private/System",
+    "/private/Library",
+    "/private/var/db",
+    "/private/var/root",
+    "/private/var/log",
+    "/private/var/audit",
+    "/private/var/at",
+    "/private/var/audit",
+    "/private/var/cron",
 ];
 
 /// 拒绝任何祖先段等于这些名字的路径（用于阻断对 `~/.ssh`、`~/.gnupg` 的访问）。
-const BLOCKED_ANCESTORS: &[&str] = &[
-    ".ssh", ".gnupg", ".aws", ".kube", ".docker",
-];
+const BLOCKED_ANCESTORS: &[&str] = &[".ssh", ".gnupg", ".aws", ".kube", ".docker"];
 
 /// 校验 `raw_path`，返回 canonical 化的绝对路径。
 ///
@@ -206,7 +212,10 @@ mod tests {
         // "根目录进不来"，这里钉住的是"被拒"这件事，不是具体的错误变体。
         let res = validate("/");
         assert!(
-            matches!(res, Err(PathError::Blocked(_)) | Err(PathError::RelativePath)),
+            matches!(
+                res,
+                Err(PathError::Blocked(_)) | Err(PathError::RelativePath)
+            ),
             "got {:?}",
             res
         );
@@ -228,7 +237,12 @@ mod tests {
         let _ = fs::remove_dir_all(&fake_home);
         fs::create_dir_all(&fake_home).unwrap();
         assert!(!fake_home.join(".ssh").exists());
-        for name in [".ssh/id_ed25519", ".aws/credentials", ".kube/config", ".docker/config.json"] {
+        for name in [
+            ".ssh/id_ed25519",
+            ".aws/credentials",
+            ".kube/config",
+            ".docker/config.json",
+        ] {
             let bad = fake_home.join(name);
             let res = validate_new_path(&bad.to_string_lossy());
             assert!(
@@ -263,7 +277,10 @@ mod tests {
         );
         // 相对路径与 .. 依旧一律拒绝
         assert_eq!(validate_new_path("a/b.txt"), Err(PathError::RelativePath));
-        assert_eq!(validate_new_path("/tmp/a/../../etc"), Err(PathError::RelativePath));
+        assert_eq!(
+            validate_new_path("/tmp/a/../../etc"),
+            Err(PathError::RelativePath)
+        );
         assert_eq!(validate_new_path(""), Err(PathError::Empty));
         let _ = fs::remove_dir_all(&dir);
     }

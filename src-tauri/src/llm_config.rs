@@ -67,29 +67,23 @@ pub fn load_llm_config(app: tauri::AppHandle) -> Result<LlmConfig, String> {
     if !path.exists() {
         return Ok(LlmConfig::default());
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取 LLM 配置失败: {}", e))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 LLM 配置失败: {}", e))?;
     serde_json::from_str(&content).map_err(|e| format!("解析 LLM 配置失败: {}", e))
 }
 
 #[tauri::command]
-pub fn save_llm_config(
-    app: tauri::AppHandle,
-    config: LlmConfig,
-) -> Result<(), String> {
+pub fn save_llm_config(app: tauri::AppHandle, config: LlmConfig) -> Result<(), String> {
     let path = config_path(&app);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建配置目录失败: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
     }
-    let content = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("序列化 LLM 配置失败: {}", e))?;
+    let content =
+        serde_json::to_string_pretty(&config).map_err(|e| format!("序列化 LLM 配置失败: {}", e))?;
     // 写到临时文件再 rename，避免写到一半崩溃留下半截文件
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, content)
-        .map_err(|e| format!("写入临时文件失败: {}", e))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("替换配置文件失败: {}", e))?;
+    std::fs::write(&tmp, content).map_err(|e| format!("写入临时文件失败: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("替换配置文件失败: {}", e))?;
     Ok(())
 }
 
@@ -155,7 +149,11 @@ pub async fn test_llm_config(config: LlmConfig) -> Result<String, String> {
     let status = resp.status();
     let text = resp.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("HTTP {} — {}", status.as_u16(), &text[..text.len().min(200)]));
+        return Err(format!(
+            "HTTP {} — {}",
+            status.as_u16(),
+            &text[..text.len().min(200)]
+        ));
     }
     Ok(text)
 }

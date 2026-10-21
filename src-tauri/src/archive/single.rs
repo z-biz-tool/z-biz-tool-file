@@ -102,7 +102,12 @@ fn gzip_inner_name(path: &Path) -> Option<String> {
     })
     .and_then(|s| {
         // 只取最后一段，防止 FNAME 里带路径把我们引到目标目录外面
-        let last = s.replace('\\', "/").rsplit('/').next().unwrap_or("").to_string();
+        let last = s
+            .replace('\\', "/")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
         if last.is_empty() || last == "." || last == ".." {
             None
         } else {
@@ -113,8 +118,12 @@ fn gzip_inner_name(path: &Path) -> Option<String> {
 
 /// gzip 尾部的 ISIZE 是明文长度 mod 2^32，读它很便宜，能让列表直接显示大小
 fn gzip_uncompressed_size(path: &Path) -> u64 {
-    let Ok(mut f) = File::open(path) else { return 0 };
-    let Ok(len) = f.metadata().map(|m| m.len()) else { return 0 };
+    let Ok(mut f) = File::open(path) else {
+        return 0;
+    };
+    let Ok(len) = f.metadata().map(|m| m.len()) else {
+        return 0;
+    };
     if len < 18 {
         return 0;
     }
@@ -177,23 +186,28 @@ pub fn extract(
     reporter.set_phase("working");
 
     let out_name = inner_name(path);
-    let target = match guard::resolve_target(dest, &out_name, opts.overwrite).map_err(|e| e.to_string())? {
-        Some(t) => t,
-        None => {
-            return Ok(Stats {
-                skipped: 1,
-                ..Default::default()
-            })
-        }
-    };
+    let target =
+        match guard::resolve_target(dest, &out_name, opts.overwrite).map_err(|e| e.to_string())? {
+            Some(t) => t,
+            None => {
+                return Ok(Stats {
+                    skipped: 1,
+                    ..Default::default()
+                })
+            }
+        };
     if let Some(p) = target.parent() {
         fs::create_dir_all(p).map_err(|e| format!("创建父目录失败: {}", e))?;
     }
 
     let f = File::open(path).map_err(|e| format!("打开失败: {}", e))?;
     let (counting, counter) = CountingReader::new(BufReader::with_capacity(256 * 1024, f));
-    let mut decoder = wrap_decoder(counting, codec).map_err(|e| format!("初始化解压失败: {}", e))?;
-    let mut out = BufWriter::with_capacity(256 * 1024, File::create(&target).map_err(|e| format!("创建文件失败: {}", e))?);
+    let mut decoder =
+        wrap_decoder(counting, codec).map_err(|e| format!("初始化解压失败: {}", e))?;
+    let mut out = BufWriter::with_capacity(
+        256 * 1024,
+        File::create(&target).map_err(|e| format!("创建文件失败: {}", e))?,
+    );
     reporter.set_entry(&out_name);
 
     let mut stats = Stats::default();
@@ -256,10 +270,16 @@ fn extract_lzma_alone(
     reporter.set_totals(1, total);
     reporter.set_phase("working");
     let out_name = inner_name(path);
-    let target = match guard::resolve_target(dest, &out_name, opts.overwrite).map_err(|e| e.to_string())? {
-        Some(t) => t,
-        None => return Ok(Stats { skipped: 1, ..Default::default() }),
-    };
+    let target =
+        match guard::resolve_target(dest, &out_name, opts.overwrite).map_err(|e| e.to_string())? {
+            Some(t) => t,
+            None => {
+                return Ok(Stats {
+                    skipped: 1,
+                    ..Default::default()
+                })
+            }
+        };
     if let Some(p) = target.parent() {
         fs::create_dir_all(p).map_err(|e| format!("创建父目录失败: {}", e))?;
     }
@@ -268,7 +288,10 @@ fn extract_lzma_alone(
     let stream = xz2::stream::Stream::new_lzma_decoder(u64::MAX)
         .map_err(|e| format!("初始化 LZMA 解码器失败: {}", e))?;
     let mut decoder = xz2::read::XzDecoder::new_stream(counting, stream);
-    let mut out = BufWriter::with_capacity(256 * 1024, File::create(&target).map_err(|e| format!("创建文件失败: {}", e))?);
+    let mut out = BufWriter::with_capacity(
+        256 * 1024,
+        File::create(&target).map_err(|e| format!("创建文件失败: {}", e))?,
+    );
     reporter.set_entry(&out_name);
     let mut stats = Stats::default();
     match super::io::copy_with_cancel(&mut decoder, &mut out, cancel, |_| {
@@ -398,9 +421,9 @@ pub fn create(
     if let Some(p) = dest.parent() {
         fs::create_dir_all(p).map_err(|e| format!("创建目标目录失败: {}", e))?;
     }
-    let level = opts.level.unwrap_or_else(|| {
-        codec_of(fmt).map(default_level).unwrap_or(6)
-    });
+    let level = opts
+        .level
+        .unwrap_or_else(|| codec_of(fmt).map(default_level).unwrap_or(6));
 
     let meta = fs::metadata(src).map_err(|e| format!("读取源文件失败: {}", e))?;
     reporter.set_totals(1, meta.len());
@@ -429,10 +452,14 @@ pub fn create(
     }
 
     let codec = codec_of(fmt).ok_or_else(|| format!("不是单流压缩格式: {}", fmt.id()))?;
-    let encoder = Encoder::new(sink, codec, level).map_err(|e| format!("初始化压缩器失败: {}", e))?;
+    let encoder =
+        Encoder::new(sink, codec, level).map_err(|e| format!("初始化压缩器失败: {}", e))?;
     let mut encoder = SingleEncoder(encoder);
     copy_src_with_cancel(src, &mut encoder, cancel, reporter)?;
-    let sink = encoder.0.finish().map_err(|e| format!("收尾压缩流失败: {}", e))?;
+    let sink = encoder
+        .0
+        .finish()
+        .map_err(|e| format!("收尾压缩流失败: {}", e))?;
     let mut buf = sink.into_inner();
     buf.flush().map_err(|e| format!("刷盘失败: {}", e))?;
     stats.bytes_done = written.load(Ordering::Relaxed);
@@ -465,11 +492,14 @@ fn copy_src_with_cancel<W: Write>(
         if cancel.load(Ordering::Relaxed) {
             return Err(super::job::Cancelled.to_string());
         }
-        let n = r.read(&mut buf).map_err(|e| format!("读取源文件失败: {}", e))?;
+        let n = r
+            .read(&mut buf)
+            .map_err(|e| format!("读取源文件失败: {}", e))?;
         if n == 0 {
             break;
         }
-        w.write_all(&buf[..n]).map_err(|e| format!("写入失败: {}", e))?;
+        w.write_all(&buf[..n])
+            .map_err(|e| format!("写入失败: {}", e))?;
         total += n as u64;
         reporter.advance_bytes(n as u64);
     }
@@ -486,7 +516,12 @@ mod tests {
     use crate::archive::job::{new_job_id, Kind};
 
     fn rep(tag: &str) -> Reporter {
-        Reporter::detached(new_job_id(Kind::Create), Kind::Create, tag.into(), tag.into())
+        Reporter::detached(
+            new_job_id(Kind::Create),
+            Kind::Create,
+            tag.into(),
+            tag.into(),
+        )
     }
 
     fn roundtrip(fmt: Format, ext: &str) {
@@ -500,10 +535,13 @@ mod tests {
         let dest = tmp.join(format!("payload.bin{}", ext));
         let cancel = AtomicBool::new(false);
         create(
-            &[src.clone()],
+            std::slice::from_ref(&src),
             &dest,
             fmt,
-            &CreateOptions { format: fmt.id().into(), ..Default::default() },
+            &CreateOptions {
+                format: fmt.id().into(),
+                ..Default::default()
+            },
             &mut rep("create"),
             &cancel,
         )
@@ -516,9 +554,21 @@ mod tests {
 
         let out = tmp.join("out");
         fs::create_dir_all(&out).unwrap();
-        extract(&dest, fmt, &out, &ExtractOptions::default(), &mut rep("extract"), &cancel)
-            .unwrap_or_else(|e| panic!("{} 解压失败: {}", fmt.id(), e));
-        assert_eq!(fs::read(out.join("payload.bin")).unwrap(), data, "{} 内容不一致", fmt.id());
+        extract(
+            &dest,
+            fmt,
+            &out,
+            &ExtractOptions::default(),
+            &mut rep("extract"),
+            &cancel,
+        )
+        .unwrap_or_else(|e| panic!("{} 解压失败: {}", fmt.id(), e));
+        assert_eq!(
+            fs::read(out.join("payload.bin")).unwrap(),
+            data,
+            "{} 内容不一致",
+            fmt.id()
+        );
     }
 
     #[test]
@@ -539,7 +589,15 @@ mod tests {
         fs::write(&src, b"hello world").unwrap();
         let dest = tmp.join("report.txt.gz");
         let cancel = AtomicBool::new(false);
-        create(&[src], &dest, Format::Gz, &CreateOptions::default(), &mut rep("c"), &cancel).unwrap();
+        create(
+            &[src],
+            &dest,
+            Format::Gz,
+            &CreateOptions::default(),
+            &mut rep("c"),
+            &cancel,
+        )
+        .unwrap();
         // ISIZE 是明文长度 mod 2^32；原来写 `>= 0`，对 u64 恒真，等于什么都没验
         assert_eq!(gzip_uncompressed_size(&dest), 11);
         let e = list(&dest, Format::Gz).unwrap();
@@ -555,7 +613,15 @@ mod tests {
         fs::write(&b, b"b").unwrap();
         let dest = tmp.join("multi.gz");
         let cancel = AtomicBool::new(false);
-        create(&[a, b], &dest, Format::Gz, &CreateOptions::default(), &mut rep("c"), &cancel).unwrap();
+        create(
+            &[a, b],
+            &dest,
+            Format::Gz,
+            &CreateOptions::default(),
+            &mut rep("c"),
+            &cancel,
+        )
+        .unwrap();
         // 单流装不下两个文件，应该改产出 .tar.gz 而不是只压第一个
         assert!(tmp.join("multi.tar.gz").exists(), "多源时应回退成 tar.gz");
         let entries = super::super::tar::list(&tmp.join("multi.tar.gz"), Format::TarGz).unwrap();

@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use walkdir::WalkDir;
-use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
+use walkdir::WalkDir;
 
 /// 索引目录解析：固定到用户本地数据目录，避免 CWD 漂移。
 /// 旧版本使用相对路径 `index/`，导致不同启动方式下索引被写入不同位置。
@@ -106,22 +106,20 @@ impl SimpleIndexer {
 
         // 保存文件索引
         let file_index_path = index_path.join(FILE_INDEX_FILE);
-        let file_index_data = serde_json::to_string(&self.file_index)
-            .map_err(|e| e.to_string())?;
+        let file_index_data = serde_json::to_string(&self.file_index).map_err(|e| e.to_string())?;
         crate::atomic_write::atomic_write(&file_index_path, file_index_data.as_bytes())
             .map_err(|e| e.to_string())?;
 
         // 保存内容索引（只保存最常见的词）
         let content_index_path = index_path.join(CONTENT_INDEX_FILE);
-        let content_index_data = serde_json::to_string(&self.content_index)
-            .map_err(|e| e.to_string())?;
+        let content_index_data =
+            serde_json::to_string(&self.content_index).map_err(|e| e.to_string())?;
         crate::atomic_write::atomic_write(&content_index_path, content_index_data.as_bytes())
             .map_err(|e| e.to_string())?;
 
         // 保存元数据
         let metadata_path = index_path.join("metadata.json");
-        let metadata_data = serde_json::to_string(&self.metadata)
-            .map_err(|e| e.to_string())?;
+        let metadata_data = serde_json::to_string(&self.metadata).map_err(|e| e.to_string())?;
         crate::atomic_write::atomic_write(&metadata_path, metadata_data.as_bytes())
             .map_err(|e| e.to_string())?;
 
@@ -149,16 +147,14 @@ impl SimpleIndexer {
         let content_index_path = index_path.join(CONTENT_INDEX_FILE);
 
         let file_index: HashMap<String, FileIndexItem> = if file_index_path.exists() {
-            let data = fs::read_to_string(&file_index_path)
-                .map_err(|e| e.to_string())?;
+            let data = fs::read_to_string(&file_index_path).map_err(|e| e.to_string())?;
             serde_json::from_str(&data).map_err(|e| e.to_string())?
         } else {
             HashMap::new()
         };
 
         let content_index: HashMap<String, Vec<ContentIndexItem>> = if content_index_path.exists() {
-            let data = fs::read_to_string(&content_index_path)
-                .map_err(|e| e.to_string())?;
+            let data = fs::read_to_string(&content_index_path).map_err(|e| e.to_string())?;
             serde_json::from_str(&data).map_err(|e| e.to_string())?
         } else {
             HashMap::new()
@@ -166,8 +162,7 @@ impl SimpleIndexer {
 
         let metadata_path = index_path.join("metadata.json");
         let metadata: IndexMetadata = if metadata_path.exists() {
-            let data = fs::read_to_string(&metadata_path)
-                .map_err(|e| e.to_string())?;
+            let data = fs::read_to_string(&metadata_path).map_err(|e| e.to_string())?;
             serde_json::from_str(&data).map_err(|e| e.to_string())?
         } else {
             IndexMetadata {
@@ -304,9 +299,9 @@ impl SimpleIndexer {
     fn index_file_content(&mut self, path: &str, ext: &str) -> Result<(), String> {
         // 只索引文本文件
         let text_exts = [
-            "txt", "md", "rs", "go", "py", "js", "ts", "tsx", "jsx", "json", "yaml", "yml",
-            "toml", "xml", "html", "css", "scss", "less", "sh", "bat", "java", "c", "cpp", "h",
-            "hpp", "cs", "rb", "php", "swift", "kt", "sql", "log", "csv", "conf", "ini", "env",
+            "txt", "md", "rs", "go", "py", "js", "ts", "tsx", "jsx", "json", "yaml", "yml", "toml",
+            "xml", "html", "css", "scss", "less", "sh", "bat", "java", "c", "cpp", "h", "hpp",
+            "cs", "rb", "php", "swift", "kt", "sql", "log", "csv", "conf", "ini", "env",
         ];
 
         if !text_exts.contains(&ext.to_lowercase().as_str()) {
@@ -339,7 +334,7 @@ impl SimpleIndexer {
 
                 self.content_index
                     .entry(word.to_lowercase())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(item);
             }
         }
@@ -350,9 +345,9 @@ impl SimpleIndexer {
     /// 简单的分词（按空格和标点分割）
     fn tokenize(&self, text: &str) -> HashMap<String, Vec<usize>> {
         let mut words: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut current_line = 1;
 
-        for line in text.lines() {
+        for (line_no, line) in text.lines().enumerate() {
+            let current_line = line_no + 1;
             let words_in_line: Vec<&str> = line
                 .split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
                 .filter(|w| w.len() > 2)
@@ -361,11 +356,9 @@ impl SimpleIndexer {
             for word in words_in_line {
                 words
                     .entry(word.to_lowercase())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(current_line);
             }
-
-            current_line += 1;
         }
 
         words
@@ -468,11 +461,9 @@ impl SimpleIndexer {
     pub fn remove_file(&mut self, path: &str) {
         self.file_index.remove(path);
         // 清理内容索引中该文件的条目
-        self.content_index
-            .iter_mut()
-            .for_each(|(_, items)| {
-                items.retain(|item| item.path != path);
-            });
+        self.content_index.iter_mut().for_each(|(_, items)| {
+            items.retain(|item| item.path != path);
+        });
     }
 }
 
@@ -500,7 +491,11 @@ pub fn plan_dir_sync(
     present: &[(String, u64, u64)],
     listing_includes_hidden: bool,
 ) -> DirSyncPlan {
-    let prefix = if dir.ends_with('/') { dir.to_string() } else { format!("{}/", dir) };
+    let prefix = if dir.ends_with('/') {
+        dir.to_string()
+    } else {
+        format!("{}/", dir)
+    };
     let mut plan = DirSyncPlan::default();
 
     let present_map: HashMap<String, (u64, u64)> = present
@@ -556,14 +551,14 @@ pub fn indexer_init() -> Result<Value, String> {
 #[tauri::command]
 pub fn indexer_build(root_path: &str) -> Result<Value, String> {
     let mut indexer = SimpleIndexer::new();
-    
+
     // 使用简单的进度回调
     let progress_callback = |progress: IndexProgress| {
         println!("Progress: {progress:?}");
     };
 
     indexer.index_directory(root_path, &progress_callback)?;
-    
+
     Ok(json!({
         "status": "built",
         "stats": indexer.get_stats()
@@ -574,7 +569,7 @@ pub fn indexer_build(root_path: &str) -> Result<Value, String> {
 pub fn indexer_search_files(query: &str, max_results: Option<usize>) -> Result<Value, String> {
     let indexer = SimpleIndexer::load()?;
     let results = indexer.search_files(query, max_results.unwrap_or(50));
-    
+
     Ok(json!({
         "results": results.iter().map(|item| json!({
             "path": item.path,
@@ -591,7 +586,7 @@ pub fn indexer_search_files(query: &str, max_results: Option<usize>) -> Result<V
 pub fn indexer_search_content(query: &str, max_results: Option<usize>) -> Result<Value, String> {
     let indexer = SimpleIndexer::load()?;
     let results = indexer.search_content(query, max_results.unwrap_or(50));
-    
+
     Ok(json!({
         "results": results.iter().map(|item| json!({
             "path": item.path,
@@ -620,7 +615,11 @@ pub fn indexer_sync_dir(
     listing_includes_hidden: Option<bool>,
 ) -> Result<Value, String> {
     let mut indexer = SimpleIndexer::load()?;
-    let prefix = if dir.ends_with('/') { dir.clone() } else { format!("{}/", dir) };
+    let prefix = if dir.ends_with('/') {
+        dir.clone()
+    } else {
+        format!("{}/", dir)
+    };
     let indexed: Vec<(String, u64, u64)> = indexer
         .file_index
         .values()
@@ -637,7 +636,12 @@ pub fn indexer_sync_dir(
         })
         .collect();
 
-    let plan = plan_dir_sync(&dir, &indexed, &present, listing_includes_hidden.unwrap_or(false));
+    let plan = plan_dir_sync(
+        &dir,
+        &indexed,
+        &present,
+        listing_includes_hidden.unwrap_or(false),
+    );
     if plan.drop.is_empty() && plan.refresh.is_empty() {
         // 稳态浏览一个字节都不该动：既不读盘也不重写 index json
         return Ok(json!({ "dropped": 0, "refreshed": 0, "unchanged": plan.unchanged }));
@@ -678,7 +682,9 @@ mod tests {
     fn 大小或时间变了才重新索引() {
         let indexed = vec![("/d/a.txt".to_string(), 10u64, 1u64)];
         let same = vec![("a.txt".to_string(), 10u64, 1u64)];
-        assert!(plan_dir_sync("/d", &indexed, &same, false).refresh.is_empty());
+        assert!(plan_dir_sync("/d", &indexed, &same, false)
+            .refresh
+            .is_empty());
 
         let changed_size = vec![("a.txt".to_string(), 11u64, 1u64)];
         assert_eq!(
@@ -698,7 +704,11 @@ mod tests {
         // 不加这道判断，每进一次目录就会把该目录的隐藏文件从索引清出去
         let indexed = vec![("/d/.env".to_string(), 5u64, 1u64)];
         let plan_hidden_out = plan_dir_sync("/d", &indexed, &[], false);
-        assert!(plan_hidden_out.drop.is_empty(), "实得 {:?}", plan_hidden_out);
+        assert!(
+            plan_hidden_out.drop.is_empty(),
+            "实得 {:?}",
+            plan_hidden_out
+        );
         let plan_shown = plan_dir_sync("/d", &indexed, &[], true);
         assert_eq!(plan_shown.drop, vec!["/d/.env".to_string()]);
     }
@@ -707,7 +717,11 @@ mod tests {
     fn 只对齐本层不动子目录() {
         let indexed = vec![("/d/sub/x.txt".to_string(), 1u64, 1u64)];
         let plan = plan_dir_sync("/d", &indexed, &[], false);
-        assert!(plan.drop.is_empty(), "子目录条目不该被本层列表删掉：{:?}", plan);
+        assert!(
+            plan.drop.is_empty(),
+            "子目录条目不该被本层列表删掉：{:?}",
+            plan
+        );
     }
 
     #[test]

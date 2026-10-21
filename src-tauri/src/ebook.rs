@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::collections::HashSet;
 
 /// EPUB/MOBI 章节结构
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,7 +35,9 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
     // 1. 解析container.xml找到OPF路径
     let mut opf_path = String::new();
     for i in 0..archive.len() {
-        let mut zf = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
+        let mut zf = archive
+            .by_index(i)
+            .map_err(|e| format!("读取ZIP条目失败: {}", e))?;
         // zip 9 起 name() 返回 ZipResult<Cow<str>>：条目名可能压根不是 UTF-8。
         // EPUB 规范要求名字是 ASCII/UTF-8，所以名字解不出来的条目一律当"不是要找的那个"。
         if zf.name().is_ok_and(|n| n.ends_with("container.xml")) {
@@ -60,7 +62,8 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
     let mut title = file_stem.clone();
     let mut author = "未知作者".to_string();
     let mut spine_order: Vec<String> = Vec::new();
-    let mut manifest: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    let mut manifest: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
 
     // 2. 解析OPF文件
     if !opf_path.is_empty() {
@@ -73,7 +76,9 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
             if let Some(s) = opf_content.find("<dc:title>") {
                 if let Some(e) = opf_content[s + 10..].find("</dc:title>") {
                     let t = opf_content[s + 10..s + 10 + e].trim().to_string();
-                    if !t.is_empty() { title = t; }
+                    if !t.is_empty() {
+                        title = t;
+                    }
                 }
             }
 
@@ -82,7 +87,9 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
                 if let Some(gt) = opf_content[s..].find('>') {
                     if let Some(e) = opf_content[s + gt + 1..].find("</dc:creator>") {
                         let a = opf_content[s + gt + 1..s + gt + 1 + e].trim().to_string();
-                        if !a.is_empty() { author = a; }
+                        if !a.is_empty() {
+                            author = a;
+                        }
                     }
                 }
             }
@@ -137,8 +144,8 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
     //    这样章节 XHTML 里的 <img src="相对路径"> 可以被改写成绝对路径，
     //    配合 tauri 的 asset:// 协议让 webview 能直接加载。
     //    临时目录基于源 epub 路径的 hash 命名，重复打开同一本书不重复解压。
-    let temp_root = extract_epub_assets(&mut archive, &file_path)
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let temp_root =
+        extract_epub_assets(&mut archive, file_path).unwrap_or_else(|_| std::env::temp_dir());
 
     // 4. 按spine顺序读取章节
     let mut chapters = Vec::new();
@@ -151,11 +158,7 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
                     let mut content = String::new();
                     if zf.read_to_string(&mut content).is_ok() && !content.trim().is_empty() {
                         // 把 XHTML 里所有 <img src> / <image href> 改写为绝对路径
-                        let rewritten = rewrite_image_paths(
-                            &content,
-                            href,
-                            &temp_root,
-                        );
+                        let rewritten = rewrite_image_paths(&content, href, &temp_root);
                         let ch_title = extract_html_title(&content)
                             .unwrap_or_else(|| format!("章节 {}", index + 1));
                         chapters.push(Chapter {
@@ -175,7 +178,9 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
     if chapters.is_empty() {
         let mut html_entries: Vec<(String, String)> = Vec::new();
         for i in 0..archive.len() {
-            let mut zf = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
+            let mut zf = archive
+                .by_index(i)
+                .map_err(|e| format!("读取ZIP条目失败: {}", e))?;
             let Some(name) = zf.name().ok().map(|n| n.to_string()) else {
                 continue;
             };
@@ -187,8 +192,8 @@ pub fn parse_epub(path: &str) -> Result<EpubBook, String> {
             }
         }
         for (_, content) in html_entries {
-            let ch_title = extract_html_title(&content)
-                .unwrap_or_else(|| format!("章节 {}", index + 1));
+            let ch_title =
+                extract_html_title(&content).unwrap_or_else(|| format!("章节 {}", index + 1));
             chapters.push(Chapter {
                 title: ch_title,
                 content,
@@ -253,6 +258,7 @@ fn extract_html_title(html: &str) -> Option<String> {
 /// 临时目录按源 epub 路径的 hash 命名：
 /// - 同本书多次打开：复用已解压的文件，不重复 IO
 /// - 不同书：互不污染
+///
 /// 临时目录路径会回传，用于把 XHTML 里的 <img src="相对"> 改写为绝对路径。
 fn extract_epub_assets<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
@@ -316,13 +322,10 @@ fn extract_epub_assets<R: std::io::Read + std::io::Seek>(
 /// 把 XHTML 里的 <img src="..."> / <image href="..."> 改写为本地绝对路径。
 /// - 入参 `chapter_href` 是这个章节文件在 zip 里的相对路径（用于推算图片相对基准）
 /// - `temp_root` 是 `extract_epub_assets` 返回的临时根目录
+///
 /// 处理：找到 src/href，resolve 到 temp_root 下的绝对路径，替换为 file:// URL
 fn rewrite_image_paths(xhtml: &str, chapter_href: &str, temp_root: &Path) -> String {
-
-    let chapter_dir = chapter_href
-        .rsplit_once('/')
-        .map(|(d, _)| d)
-        .unwrap_or("");
+    let chapter_dir = chapter_href.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
 
     // 用极简状态机：扫描每个标签，找到 src="..." 或 href="..." 替换
     let lower = xhtml.to_ascii_lowercase();
@@ -498,9 +501,13 @@ fn strip_html_tags(html: &str) -> String {
     let mut result = String::new();
     let mut in_tag = false;
     for ch in html.chars() {
-        if ch == '<' { in_tag = true; }
-        else if ch == '>' { in_tag = false; }
-        else if !in_tag { result.push(ch); }
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            result.push(ch);
+        }
     }
     result.trim().to_string()
 }
@@ -530,10 +537,14 @@ pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
 
     // 提取书名
     let title = if bytes.len() > 92 {
-        let name_offset = u32::from_be_bytes(bytes[84..88].try_into().unwrap_or([0,0,0,0])) as usize;
-        let name_len = u32::from_be_bytes(bytes[88..92].try_into().unwrap_or([0,0,0,0])) as usize;
+        let name_offset =
+            u32::from_be_bytes(bytes[84..88].try_into().unwrap_or([0, 0, 0, 0])) as usize;
+        let name_len =
+            u32::from_be_bytes(bytes[88..92].try_into().unwrap_or([0, 0, 0, 0])) as usize;
         if name_offset > 0 && name_len > 0 && name_offset + name_len <= bytes.len() {
-            String::from_utf8_lossy(&bytes[name_offset..name_offset + name_len]).trim_end_matches('\0').to_string()
+            String::from_utf8_lossy(&bytes[name_offset..name_offset + name_len])
+                .trim_end_matches('\0')
+                .to_string()
         } else {
             file_stem
         }
@@ -552,12 +563,12 @@ pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
         // 按HTML heading分割
         let mut chs = Vec::new();
         let mut idx = 0;
-        let parts: Vec<&str> = content.split(|c: char| c == '\x00').collect();
+        let parts: Vec<&str> = content.split('\x00').collect();
         for part in parts {
             let trimmed = part.trim();
             if !trimmed.is_empty() {
-                let ch_title = extract_html_title(trimmed)
-                    .unwrap_or_else(|| format!("章节 {}", idx + 1));
+                let ch_title =
+                    extract_html_title(trimmed).unwrap_or_else(|| format!("章节 {}", idx + 1));
                 chs.push(Chapter {
                     title: ch_title,
                     content: trimmed.to_string(),
@@ -567,7 +578,11 @@ pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
             }
         }
         if chs.is_empty() {
-            vec![Chapter { title: "全文".to_string(), content, index: 0 }]
+            vec![Chapter {
+                title: "全文".to_string(),
+                content,
+                index: 0,
+            }]
         } else {
             chs
         }
@@ -583,11 +598,12 @@ pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
 
 /// 从MOBI提取文本内容（简单实现）
 fn extract_mobi_text_content(bytes: &[u8]) -> String {
-    if bytes.len() < 78 { return String::new(); }
+    if bytes.len() < 78 {
+        return String::new();
+    }
 
-    let num_records = u16::from_be_bytes(
-        <[u8; 2]>::try_from(&bytes[76..78]).unwrap_or([0, 0]),
-    ) as usize;
+    let num_records =
+        u16::from_be_bytes(<[u8; 2]>::try_from(&bytes[76..78]).unwrap_or([0, 0])) as usize;
 
     if num_records < 2 || bytes.len() < 78 + num_records * 8 {
         return String::new();
@@ -596,17 +612,29 @@ fn extract_mobi_text_content(bytes: &[u8]) -> String {
     let mut parts = Vec::new();
     for i in 1..num_records {
         let off_start = 78 + i * 8;
-        if off_start + 8 > bytes.len() { break; }
+        if off_start + 8 > bytes.len() {
+            break;
+        }
 
-        let start = u32::from_be_bytes(bytes[off_start..off_start + 4].try_into().unwrap_or([0,0,0,0])) as usize;
+        let start = u32::from_be_bytes(
+            bytes[off_start..off_start + 4]
+                .try_into()
+                .unwrap_or([0, 0, 0, 0]),
+        ) as usize;
         let next_off = 78 + (i + 1) * 8;
         let end = if i + 1 < num_records && next_off + 4 <= bytes.len() {
-            u32::from_be_bytes(bytes[next_off..next_off + 4].try_into().unwrap_or([0,0,0,0])) as usize
+            u32::from_be_bytes(
+                bytes[next_off..next_off + 4]
+                    .try_into()
+                    .unwrap_or([0, 0, 0, 0]),
+            ) as usize
         } else {
             bytes.len()
         };
 
-        if start >= bytes.len() || end <= start { continue; }
+        if start >= bytes.len() || end <= start {
+            continue;
+        }
         let end = end.min(bytes.len());
 
         let text = String::from_utf8_lossy(&bytes[start..end]);
@@ -630,15 +658,21 @@ pub fn get_epub_cover(path: &str) -> Result<String, String> {
 
     // 查找封面图片
     for i in 0..archive.len() {
-        let mut zf = archive.by_index(i).map_err(|e| format!("读取ZIP条目失败: {}", e))?;
+        let mut zf = archive
+            .by_index(i)
+            .map_err(|e| format!("读取ZIP条目失败: {}", e))?;
         let Some(name) = zf.name().ok().map(|n| n.to_string().to_lowercase()) else {
             continue;
         };
-        if name.contains("cover") && (name.ends_with(".jpg") || name.ends_with(".jpeg") || name.ends_with(".png")) {
+        if name.contains("cover")
+            && (name.ends_with(".jpg") || name.ends_with(".jpeg") || name.ends_with(".png"))
+        {
             let mut buf = Vec::new();
-            zf.read_to_end(&mut buf).map_err(|e| format!("读取封面失败: {}", e))?;
+            zf.read_to_end(&mut buf)
+                .map_err(|e| format!("读取封面失败: {}", e))?;
             // 使用标准base64编码
-            const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            const CHARS: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
             let mut result = String::with_capacity(buf.len() * 4 / 3 + 4);
             let chunks = buf.chunks(3);
             for chunk in chunks {
@@ -648,8 +682,16 @@ pub fn get_epub_cover(path: &str) -> Result<String, String> {
                 let triple = (b0 << 16) | (b1 << 8) | b2;
                 result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
                 result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-                result.push(if chunk.len() > 1 { CHARS[((triple >> 6) & 0x3F) as usize] as char } else { '=' });
-                result.push(if chunk.len() > 2 { CHARS[(triple & 0x3F) as usize] as char } else { '=' });
+                result.push(if chunk.len() > 1 {
+                    CHARS[((triple >> 6) & 0x3F) as usize] as char
+                } else {
+                    '='
+                });
+                result.push(if chunk.len() > 2 {
+                    CHARS[(triple & 0x3F) as usize] as char
+                } else {
+                    '='
+                });
             }
             return Ok(result);
         }

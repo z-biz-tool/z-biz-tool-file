@@ -111,8 +111,13 @@ pub fn start_watching_with_config(
                     continue;
                 }
                 // 2. 深度限制（相对监听根目录的 .. 数）
-                let rel = canonical.strip_prefix(&path_for_filter).unwrap_or(&canonical);
-                let depth = rel.components().filter(|c| matches!(c, std::path::Component::Normal(_))).count();
+                let rel = canonical
+                    .strip_prefix(&path_for_filter)
+                    .unwrap_or(&canonical);
+                let depth = rel
+                    .components()
+                    .filter(|c| matches!(c, std::path::Component::Normal(_)))
+                    .count();
                 if depth > max_depth {
                     continue;
                 }

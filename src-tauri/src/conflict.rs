@@ -284,7 +284,10 @@ mod tests {
         // 顺序保持：keep1 在前，gone 跳过，keep2 紧随其后
         assert_eq!(
             res,
-            vec![keep1.to_string_lossy().to_string(), keep2.to_string_lossy().to_string()]
+            vec![
+                keep1.to_string_lossy().to_string(),
+                keep2.to_string_lossy().to_string()
+            ]
         );
     }
 

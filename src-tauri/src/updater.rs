@@ -40,26 +40,44 @@ pub struct UpdateStatus {
 /// 检测平台对应的 asset 名称关键字
 fn get_platform_keyword() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { "aarch64-apple-darwin" }
+    {
+        "aarch64-apple-darwin"
+    }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { "x86_64-apple-darwin" }
+    {
+        "x86_64-apple-darwin"
+    }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    { "x86_64-pc-windows" }
+    {
+        "x86_64-pc-windows"
+    }
     #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    { "aarch64-pc-windows" }
+    {
+        "aarch64-pc-windows"
+    }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    { "x86_64-unknown-linux" }
+    {
+        "x86_64-unknown-linux"
+    }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    { "aarch64-unknown-linux" }
+    {
+        "aarch64-unknown-linux"
+    }
 }
 
 fn get_file_extension() -> &'static str {
     #[cfg(target_os = "macos")]
-    { "dmg" }
+    {
+        "dmg"
+    }
     #[cfg(target_os = "windows")]
-    { "msi.zip" }  // 通常 zip 打包
+    {
+        "msi.zip"
+    } // 通常 zip 打包
     #[cfg(target_os = "linux")]
-    { "AppImage" }  // 或 deb
+    {
+        "AppImage"
+    } // 或 deb
 }
 
 /// 获取当前版本
@@ -71,7 +89,10 @@ pub fn updater_current_version() -> String {
 /// 检查 GitHub 最新 release
 #[tauri::command]
 pub async fn updater_check() -> Result<UpdateStatus, String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        GITHUB_REPO
+    );
     let resp = ureq::get(&url)
         .set("User-Agent", "z-biz-tool-file-updater")
         .set("Accept", "application/vnd.github+json")
@@ -80,8 +101,8 @@ pub async fn updater_check() -> Result<UpdateStatus, String> {
         .into_string()
         .map_err(|e| format!("读取响应失败: {}", e))?;
 
-    let release: ReleaseInfo = serde_json::from_str(&resp)
-        .map_err(|e| format!("解析响应失败: {}", e))?;
+    let release: ReleaseInfo =
+        serde_json::from_str(&resp).map_err(|e| format!("解析响应失败: {}", e))?;
 
     let latest = release.tag_name.trim_start_matches('v').to_string();
     let current = CURRENT_VERSION.to_string();
@@ -90,10 +111,14 @@ pub async fn updater_check() -> Result<UpdateStatus, String> {
     // 找到匹配当前平台的 asset
     let kw = get_platform_keyword();
     let ext = get_file_extension();
-    let matched = release.assets.iter().find(|a| {
-        let n = a.name.to_lowercase();
-        n.contains(kw) || n.ends_with(ext)
-    }).cloned();
+    let matched = release
+        .assets
+        .iter()
+        .find(|a| {
+            let n = a.name.to_lowercase();
+            n.contains(kw) || n.ends_with(ext)
+        })
+        .cloned();
 
     Ok(UpdateStatus {
         current_version: current,
@@ -106,16 +131,19 @@ pub async fn updater_check() -> Result<UpdateStatus, String> {
 
 /// 比较版本号（a.b.c 格式）
 fn is_newer_version(new: &str, old: &str) -> bool {
-    let parse = |v: &str| -> Vec<u32> {
-        v.split('.').filter_map(|s| s.parse::<u32>().ok()).collect()
-    };
+    let parse =
+        |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse::<u32>().ok()).collect() };
     let n = parse(new);
     let o = parse(old);
     for i in 0..n.len().max(o.len()) {
         let a = *n.get(i).unwrap_or(&0);
         let b = *o.get(i).unwrap_or(&0);
-        if a > b { return true; }
-        if a < b { return false; }
+        if a > b {
+            return true;
+        }
+        if a < b {
+            return false;
+        }
     }
     false
 }
@@ -144,16 +172,20 @@ pub async fn updater_download(url: String, dest: String) -> Result<String, Strin
 #[tauri::command]
 pub async fn updater_download_latest() -> Result<DownloadResult, String> {
     let status = updater_check().await?;
-    let asset = status.matched_asset.ok_or_else(|| {
-        format!("未找到匹配平台 {} 的安装包", get_platform_keyword())
-    })?;
+    let asset = status
+        .matched_asset
+        .ok_or_else(|| format!("未找到匹配平台 {} 的安装包", get_platform_keyword()))?;
 
     let home = dirs::home_dir().ok_or("找不到主目录")?;
     let downloads = home.join("Downloads");
     fs::create_dir_all(&downloads).map_err(|e| format!("创建 Downloads 失败: {}", e))?;
 
     let dest = downloads.join(&asset.name);
-    let final_path = updater_download(asset.browser_download_url.clone(), dest.to_string_lossy().to_string()).await?;
+    let final_path = updater_download(
+        asset.browser_download_url.clone(),
+        dest.to_string_lossy().to_string(),
+    )
+    .await?;
 
     Ok(DownloadResult {
         file_path: final_path,

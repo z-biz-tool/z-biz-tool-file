@@ -83,11 +83,7 @@ fn parse_response(provider: &str, body: &serde_json::Value) -> Result<String, St
 }
 
 /// 调 LLM（单轮 chat completion）
-pub async fn call_llm(
-    cfg: &LlmConfig,
-    system: &str,
-    user: &str,
-) -> Result<String, String> {
+pub async fn call_llm(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, String> {
     if cfg.api_key.is_empty() && cfg.provider != "ollama" {
         return Err("API Key 未配置，请先到 设置 → AI/LLM 配置".to_string());
     }
@@ -120,10 +116,14 @@ pub async fn call_llm(
     let status = resp.status();
     let text = resp.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("HTTP {} — {}", status.as_u16(), &text[..text.len().min(300)]));
+        return Err(format!(
+            "HTTP {} — {}",
+            status.as_u16(),
+            &text[..text.len().min(300)]
+        ));
     }
-    let json: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| format!("响应解析失败: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("响应解析失败: {}", e))?;
     parse_response(&cfg.provider, &json)
 }
 
@@ -163,9 +163,8 @@ pub async fn ai_summarize_file(
     let preview = read_text_preview(p)?;
 
     let system = "你是一个简洁的文件摘要助手。用 1-3 句中文总结用户提供的文件内容的关键信息。";
-    let user = custom_prompt.unwrap_or_else(|| {
-        format!("请总结这个文件：\n\n```\n{}\n```", preview)
-    });
+    let user =
+        custom_prompt.unwrap_or_else(|| format!("请总结这个文件：\n\n```\n{}\n```", preview));
 
     let summary = call_llm(&cfg, system, &user).await?;
     Ok(AiSummaryResult {
@@ -177,11 +176,7 @@ pub async fn ai_summarize_file(
 
 /// 通用 chat：用户给 system + user 消息，返回助手回复
 #[tauri::command]
-pub async fn ai_chat(
-    app: AppHandle,
-    system: String,
-    user: String,
-) -> Result<String, String> {
+pub async fn ai_chat(app: AppHandle, system: String, user: String) -> Result<String, String> {
     let cfg = load_llm_config(app)?;
     call_llm(&cfg, &system, &user).await
 }
@@ -220,7 +215,10 @@ mod minimax_live_tests {
             .await
             .expect("真实调用应成功");
         assert!(!out.trim().is_empty(), "返回内容为空");
-        eprintln!("[LIVE] file call_llm 真实调用成功：{}", out.chars().take(40).collect::<String>());
+        eprintln!(
+            "[LIVE] file call_llm 真实调用成功：{}",
+            out.chars().take(40).collect::<String>()
+        );
     }
 
     /// 反向钉：假 key 必须被服务端拒。
@@ -241,6 +239,9 @@ mod minimax_live_tests {
         let err = call_llm(&cfg, "你是助手", "hi")
             .await
             .expect_err("假 key 必须被拒");
-        assert!(err.contains("401") || err.contains("403"), "期望 401/403，实际：{err}");
+        assert!(
+            err.contains("401") || err.contains("403"),
+            "期望 401/403，实际：{err}"
+        );
     }
 }

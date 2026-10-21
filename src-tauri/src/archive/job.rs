@@ -130,14 +130,7 @@ impl Jobs {
     }
 
     pub fn snapshot(&self, id: &str) -> Option<Progress> {
-        self.0
-            .lock()
-            .ok()?
-            .get(id)?
-            .snapshot
-            .lock()
-            .ok()?
-            .clone()
+        self.0.lock().ok()?.get(id)?.snapshot.lock().ok()?.clone()
     }
 }
 
@@ -169,7 +162,10 @@ impl Reporter {
     ) -> (Self, Arc<AtomicBool>) {
         let ctl = app.state::<Jobs>().acquire(&job_id);
         let cancel = Arc::clone(&ctl.cancel);
-        (Self::with_ctl(Some(app), ctl, job_id, kind, archive, dest), cancel)
+        (
+            Self::with_ctl(Some(app), ctl, job_id, kind, archive, dest),
+            cancel,
+        )
     }
 
     fn with_ctl(

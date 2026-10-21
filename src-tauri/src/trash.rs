@@ -67,10 +67,7 @@ fn validate_restore_target(target: &Path) -> Result<(), String> {
         .map_err(|e| format!("拒绝恢复到该路径: {}", e))
 }
 
-fn path_to_trash(
-    src: &Path,
-    trash_root: &Path,
-) -> Result<(PathBuf, PathBuf), String> {
+fn path_to_trash(src: &Path, trash_root: &Path) -> Result<(PathBuf, PathBuf), String> {
     // 布局：<trash_root>/<YYYY-MM-DD>/<uuid>/original_path.txt + <原文件名>
     let date = Local::now().format("%Y-%m-%d").to_string();
     let day_dir = trash_root.join(&date);
@@ -93,10 +90,7 @@ fn path_to_trash(
 /// - 返回移入后的路径（前端展示用）
 /// - 跨设备/跨卷 mv 自动 fallback 到 copy + delete
 #[tauri::command]
-pub fn move_to_trash(
-    app: tauri::AppHandle,
-    src_path: String,
-) -> Result<String, String> {
+pub fn move_to_trash(app: tauri::AppHandle, src_path: String) -> Result<String, String> {
     // 复用 path_guard 的更严格校验（黑名单前缀 + .ssh/.gnupg 祖先拦截）
     if let Err(e) = crate::path_guard::validate(&src_path) {
         return Err(format!("拒绝移入回收站: {}", e));
@@ -242,7 +236,11 @@ fn walk_trash(dir: &Path, out: &mut Vec<TrashEntry>) -> Result<(), String> {
                     deleted_at,
                     // 时间不可知用 -1，而不是"距今 50 多年"——
                     // 否则 UI 和按天数的清理都会把它当成最老的条目
-                    age_secs: if deleted_secs == 0 { -1 } else { now_secs - deleted_secs },
+                    age_secs: if deleted_secs == 0 {
+                        -1
+                    } else {
+                        now_secs - deleted_secs
+                    },
                 });
             }
         }
@@ -268,7 +266,11 @@ pub fn restore_from_trash(
         None => {
             let meta_file = uuid_dir.join("original_path.txt");
             if meta_file.exists() {
-                PathBuf::from(fs::read_to_string(&meta_file).map_err(|e| e.to_string())?.trim())
+                PathBuf::from(
+                    fs::read_to_string(&meta_file)
+                        .map_err(|e| e.to_string())?
+                        .trim(),
+                )
             } else {
                 return Err("未提供目标路径且没有 original_path.txt 元信息".to_string());
             }
@@ -299,10 +301,7 @@ pub fn restore_from_trash(
 
 /// 永久删除回收站里某项
 #[tauri::command]
-pub fn permanent_delete(
-    app: tauri::AppHandle,
-    trash_path: String,
-) -> Result<(), String> {
+pub fn permanent_delete(app: tauri::AppHandle, trash_path: String) -> Result<(), String> {
     let root = trash_root(&app)?;
     let target = ensure_inside_trash(&root, Path::new(&trash_path))?;
     let uuid_dir = target.parent().map(Path::to_path_buf);
@@ -491,7 +490,12 @@ mod tests {
     #[test]
     fn inside_trash_rejects_dotdot_escape() {
         let (root, outside) = fixture("dotdot");
-        let sneaky = root.join("2026-09-22").join("..").join("..").join("..").join("outside");
+        let sneaky = root
+            .join("2026-09-22")
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("outside");
         // 纯词法判断会被 .. 骗过去，只有 canonicalize 之后才能识破
         assert!(
             sneaky.starts_with(&root),
@@ -683,7 +687,11 @@ mod tests {
         symlink("..", dir.join("up")).unwrap();
         symlink(&dir, dir.join("self")).unwrap();
 
-        assert_eq!(dir_size(&dir), 1000, "只应统计真实普通文件，链接指向的内容不算");
+        assert_eq!(
+            dir_size(&dir),
+            1000,
+            "只应统计真实普通文件，链接指向的内容不算"
+        );
         fs::remove_dir_all(root.parent().unwrap()).ok();
     }
 }

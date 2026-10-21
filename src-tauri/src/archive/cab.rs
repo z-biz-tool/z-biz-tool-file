@@ -87,9 +87,9 @@ fn method_label(ct: CompressionType) -> String {
 fn to_unix(y: i32, mo: u8, d: u8, h: u8, mi: u8, s: u8) -> i64 {
     use chrono::TimeZone;
     // CAB 的日期时间字段是一个个 u8/u16 位域，chrono 要的是 u32，只能逐个抬上去
-    let Some(naive) = chrono::NaiveDate::from_ymd_opt(y, mo as u32, d as u32).and_then(|date| {
-        date.and_hms_opt(h as u32, mi as u32, s as u32)
-    }) else {
+    let Some(naive) = chrono::NaiveDate::from_ymd_opt(y, mo as u32, d as u32)
+        .and_then(|date| date.and_hms_opt(h as u32, mi as u32, s as u32))
+    else {
         return 0;
     };
     chrono::Local
@@ -340,7 +340,8 @@ pub fn extract(
 }
 
 fn write_out(
-    r: &mut dyn Read,    target: &Path,
+    r: &mut dyn Read,
+    target: &Path,
     buf: &mut [u8],
     cancel: &AtomicBool,
     reporter: &mut Reporter,
@@ -630,7 +631,10 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("越界"), "{}", err);
-        assert!(!dir.join("escaped.txt").exists(), "越界写成功了，guard 失效");
+        assert!(
+            !dir.join("escaped.txt").exists(),
+            "越界写成功了，guard 失效"
+        );
     }
 
     #[test]
@@ -667,7 +671,10 @@ mod tests {
         let back = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
             .unwrap()
             .with_timezone(&chrono::Local);
-        assert_eq!(back.format("%Y-%m-%d %H:%M:%S").to_string(), "1997-03-12 11:13:52");
+        assert_eq!(
+            back.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "1997-03-12 11:13:52"
+        );
         assert_eq!(to_unix(1997, 2, 30, 1, 1, 1), 0, "非法日期要退化成 0");
     }
 

@@ -94,7 +94,6 @@ impl LruCache {
             }
         }
     }
-
 }
 
 fn thumb_cache() -> &'static Mutex<LruCache> {
@@ -125,7 +124,11 @@ mod lru_tests {
             cache.put(&format!("k{}", i), payload(unit));
         }
         assert_eq!(cache.entries.len(), expect_kept, "留存条数不对");
-        assert!(cache.bytes <= MAX_THUMB_BYTES, "字节账目越界: {}", cache.bytes);
+        assert!(
+            cache.bytes <= MAX_THUMB_BYTES,
+            "字节账目越界: {}",
+            cache.bytes
+        );
         assert!(cache.get("k0").is_none(), "最早的条目该被淘汰");
         assert!(cache.get(&format!("k{}", keys - 1)).is_some());
     }
@@ -134,7 +137,7 @@ mod lru_tests {
     fn byte_budget_evicts() {
         // 单条约 64 KB：预算先于 512 条的上限触顶
         let unit = 1 << 16;
-        let width = format!("{}", "x".repeat(unit)).len();
+        let width = "x".repeat(unit).to_string().len();
         let size = format!("{{\"data\":\"{}\"}}", "x".repeat(unit)).len();
         assert_eq!(width, unit);
         evicts_to(unit, 900, MAX_THUMB_BYTES / size);
@@ -235,15 +238,9 @@ pub fn get_image_thumbnail_blocking(
     Ok(value)
 }
 
-
 /// 导出图片为指定格式
 #[tauri::command]
-pub fn export_image(
-    path: &str,
-    dest_path: &str,
-    format: &str,
-    quality: u8,
-) -> Result<(), String> {
+pub fn export_image(path: &str, dest_path: &str, format: &str, quality: u8) -> Result<(), String> {
     let file_path = crate::path_guard::readable(path)?;
     // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
     let dest = crate::path_guard::writable(dest_path)?;

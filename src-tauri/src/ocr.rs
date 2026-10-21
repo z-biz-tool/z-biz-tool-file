@@ -22,15 +22,42 @@ pub struct OcrLanguage {
 #[tauri::command]
 pub fn list_ocr_languages() -> Vec<OcrLanguage> {
     vec![
-        OcrLanguage { code: "chi_sim+eng".into(), name: "中文+英文（推荐）".into() },
-        OcrLanguage { code: "eng".into(), name: "英语".into() },
-        OcrLanguage { code: "chi_sim".into(), name: "简体中文".into() },
-        OcrLanguage { code: "chi_tra".into(), name: "繁体中文".into() },
-        OcrLanguage { code: "jpn".into(), name: "日语".into() },
-        OcrLanguage { code: "kor".into(), name: "韩语".into() },
-        OcrLanguage { code: "fra".into(), name: "法语".into() },
-        OcrLanguage { code: "deu".into(), name: "德语".into() },
-        OcrLanguage { code: "rus".into(), name: "俄语".into() },
+        OcrLanguage {
+            code: "chi_sim+eng".into(),
+            name: "中文+英文（推荐）".into(),
+        },
+        OcrLanguage {
+            code: "eng".into(),
+            name: "英语".into(),
+        },
+        OcrLanguage {
+            code: "chi_sim".into(),
+            name: "简体中文".into(),
+        },
+        OcrLanguage {
+            code: "chi_tra".into(),
+            name: "繁体中文".into(),
+        },
+        OcrLanguage {
+            code: "jpn".into(),
+            name: "日语".into(),
+        },
+        OcrLanguage {
+            code: "kor".into(),
+            name: "韩语".into(),
+        },
+        OcrLanguage {
+            code: "fra".into(),
+            name: "法语".into(),
+        },
+        OcrLanguage {
+            code: "deu".into(),
+            name: "德语".into(),
+        },
+        OcrLanguage {
+            code: "rus".into(),
+            name: "俄语".into(),
+        },
     ]
 }
 

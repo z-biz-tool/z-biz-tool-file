@@ -100,9 +100,12 @@ impl Kind {
 
     /// 解析前端传来的类型。认不出来返回 `None`，让命令层直接报错。
     ///
+    /// 叫 `parse` 不叫 `from_str`：后者会被误当成 `std::str::FromStr::from_str`
+    /// （那个签名是 `fn(&str) -> Result<Self, _>`，和这里的 `Option` 不是一回事）。
+    ///
     /// **不兜底成某个默认类型**：默默拿另一种语义去动用户的文件（把「永久删除」
     /// 当成「移到回收站」，或者反过来）是这个仓里最贵的一类错误。
-    pub fn from_str(s: &str) -> Option<Kind> {
+    pub fn parse(s: &str) -> Option<Kind> {
         match s {
             "rename" => Some(Kind::Rename),
             "delete" => Some(Kind::Delete),
@@ -153,11 +156,6 @@ impl Progress {
     }
 }
 
-/// 终态判定。终态是最终的：到了这里就别再被在途快照盖回去。
-pub fn is_terminal(phase: &str) -> bool {
-    matches!(phase, "done" | "cancelled" | "error")
-}
-
 // ============================================================================
 // 进度事件的出口
 // ============================================================================
@@ -181,11 +179,17 @@ impl ProgressSink for AppSink {
 }
 
 /// 测试用的收集器：把每次发出的进度按顺序收进内存。
+///
+/// **只在测试构建里存在**（`#[cfg(test)]`）：它的唯一用途是让单元测试能断言
+/// 「进度事件真的发出去了、内容对不对」，生产构建里没有它 ⇒ clippy 的 dead_code
+/// 不会盯着一段永远不会被调用的脚手架。
+#[cfg(test)]
 #[derive(Default)]
 pub struct CollectingSink {
     events: Mutex<Vec<Progress>>,
 }
 
+#[cfg(test)]
 impl CollectingSink {
     pub fn new() -> Self {
         Self::default()
@@ -205,6 +209,7 @@ impl CollectingSink {
     }
 }
 
+#[cfg(test)]
 impl ProgressSink for CollectingSink {
     fn emit(&self, progress: &Progress) {
         if let Ok(mut g) = self.events.lock() {
@@ -279,14 +284,7 @@ impl Operations {
 
     /// 拿某个任务的最新快照。事件漏收时的兜底。
     pub fn snapshot(&self, id: &str) -> Option<Progress> {
-        self.0
-            .lock()
-            .ok()?
-            .get(id)?
-            .snapshot
-            .lock()
-            .ok()?
-            .clone()
+        self.0.lock().ok()?.get(id)?.snapshot.lock().ok()?.clone()
     }
 }
 
@@ -353,6 +351,11 @@ impl Reporter {
     }
 
     /// 指定事件出口的上报器（测试用：把事件收进内存列表）。
+    ///
+    /// **只在测试构建里存在**（`#[cfg(test)]`）：生产路径走 `Reporter::new`（挂 WebView
+    /// 出口）与 `Reporter::detached`（不挂出口）。这个构造器只为让单元测试能断言
+    /// 「事件真的发出去了」，留着它进生产构建只会被 dead_code 盯着。
+    #[cfg(test)]
     pub fn with_sink(
         sink: Arc<dyn ProgressSink>,
         ops: &Operations,
@@ -393,6 +396,10 @@ impl Reporter {
     }
 
     /// 改节流间隔。`Duration::ZERO` = 每项都发（测试用）。
+    ///
+    /// **只在测试构建里存在**（`#[cfg(test)]`）：生产的节流间隔由 `EMIT_INTERVAL_MS`
+    /// 固定，没有运行时调它的入口；留着它进生产构建只会被 dead_code 盯着。
+    #[cfg(test)]
     pub fn set_throttle(&mut self, throttle: Duration) {
         self.throttle = throttle;
     }
@@ -563,7 +570,7 @@ pub async fn batch_operation(
     paths: Vec<String>,
     rename: Option<RenameOptions>,
 ) -> Result<String, String> {
-    let kind = Kind::from_str(&kind).ok_or_else(|| format!("不支持的批量操作类型: {}", kind))?;
+    let kind = Kind::parse(&kind).ok_or_else(|| format!("不支持的批量操作类型: {}", kind))?;
     if paths.is_empty() {
         return Err("没有要处理的文件".to_string());
     }
@@ -668,7 +675,10 @@ pub fn cancel_operation(ops: tauri::State<'_, Operations>, operation_id: String)
 /// 轮询任务状态。正常情况下前端听 `operation-progress` 事件就够了，这个是兜底：
 /// 窗口重建、事件漏收、或者想拿最终结果时用它。
 #[tauri::command]
-pub fn operation_state(ops: tauri::State<'_, Operations>, operation_id: String) -> Option<Progress> {
+pub fn operation_state(
+    ops: tauri::State<'_, Operations>,
+    operation_id: String,
+) -> Option<Progress> {
     ops.snapshot(&operation_id)
 }
 
@@ -715,7 +725,11 @@ mod tests {
     fn run_batch_processes_every_item_when_not_cancelled() {
         let o = ops();
         let (mut reporter, token) = Reporter::detached(&o, "op-all".into(), Kind::Rename, 3);
-        let paths = vec!["/a/1.txt".to_string(), "/a/2.txt".to_string(), "/a/3.txt".to_string()];
+        let paths = vec![
+            "/a/1.txt".to_string(),
+            "/a/2.txt".to_string(),
+            "/a/3.txt".to_string(),
+        ];
         let mut seen: Vec<String> = Vec::new();
         let outcome = run_batch(&paths, &token, &mut reporter, |_i, p| {
             seen.push(p.to_string());
@@ -776,7 +790,11 @@ mod tests {
         // 不是直接调 token.cancel()。
         let o = ops();
         let (mut reporter, token) = Reporter::detached(&o, "op-reg".into(), Kind::Delete, 3);
-        let paths = vec!["/a/1.txt".to_string(), "/a/2.txt".to_string(), "/a/3.txt".to_string()];
+        let paths = vec![
+            "/a/1.txt".to_string(),
+            "/a/2.txt".to_string(),
+            "/a/3.txt".to_string(),
+        ];
         let mut handled = 0usize;
         let outcome = run_batch(&paths, &token, &mut reporter, |_i, _p| {
             handled += 1;
@@ -804,7 +822,8 @@ mod tests {
 
         let o2 = o.clone();
         let worker = std::thread::spawn(move || {
-            let (mut reporter, token) = Reporter::detached(&o2, "op-thread".into(), Kind::Delete, 50);
+            let (mut reporter, token) =
+                Reporter::detached(&o2, "op-thread".into(), Kind::Delete, 50);
             let paths: Vec<String> = (0..50).map(|i| format!("/a/{}.txt", i)).collect();
             let mut handled = 0usize;
             let outcome = run_batch(&paths, &token, &mut reporter, |_i, _p| {
@@ -835,7 +854,11 @@ mod tests {
     fn failures_are_collected_and_do_not_stop_the_batch() {
         let o = ops();
         let (mut reporter, token) = Reporter::detached(&o, "op-fail".into(), Kind::Delete, 3);
-        let paths = vec!["/a/1.txt".to_string(), "/a/2.txt".to_string(), "/a/3.txt".to_string()];
+        let paths = vec![
+            "/a/1.txt".to_string(),
+            "/a/2.txt".to_string(),
+            "/a/3.txt".to_string(),
+        ];
         let outcome = run_batch(&paths, &token, &mut reporter, |i, _p| {
             if i == 1 {
                 Err("权限不足".to_string())
@@ -855,13 +878,8 @@ mod tests {
         // T2-05 的核心断言：批量过程中真的向外发进度。
         let o = ops();
         let sink = Arc::new(CollectingSink::new());
-        let (mut reporter, token) = Reporter::with_sink(
-            sink.clone(),
-            &o,
-            "op-progress".into(),
-            Kind::Rename,
-            1000,
-        );
+        let (mut reporter, token) =
+            Reporter::with_sink(sink.clone(), &o, "op-progress".into(), Kind::Rename, 1000);
         // 关掉节流：一项一条事件，才能数清楚
         reporter.set_throttle(Duration::ZERO);
         let paths: Vec<String> = (0..1000).map(|i| format!("/a/{}.txt", i)).collect();
@@ -904,25 +922,30 @@ mod tests {
         let (reporter, _t) = Reporter::detached(&o, "op-c".into(), Kind::Delete, 1);
         reporter.cancel();
         assert_eq!(o.snapshot("op-c").unwrap().phase, "cancelled");
-        assert!(is_terminal("cancelled"));
 
         let (reporter, _t) = Reporter::detached(&o, "op-e".into(), Kind::Delete, 1);
         reporter.fail("炸了");
         let snap = o.snapshot("op-e").unwrap();
         assert_eq!(snap.phase, "error");
         assert_eq!(snap.message, "炸了");
-        assert!(is_terminal(&snap.phase));
-        assert!(!is_terminal("running"));
+        // 终态是最终的：到了这里就别再被在途快照盖回去。
+        // 这条保证**不是**靠一个 phase 判定函数，而是靠**所有权**：
+        // finish / cancel / fail 都是 `fn finish(mut self)` —— 它们把上报器**消费掉**，
+        // 之后再没有 emit 的机会，那份快照自然停在终态上。
+        // （原来这里挂着一个 `is_terminal()` 助手，唯一的用处是断言它自己认得
+        // "cancelled"/"error"/"running" 三个字符串 —— 自证式的断言，
+        // 而它自己只被测试调用 ⇒ 在生产构建里是死代码，clippy 会盯着。
+        // 规则留着，冗余的助手删掉。）
     }
 
     #[test]
     fn kind_parsing_refuses_unknown_kinds() {
-        assert_eq!(Kind::from_str("rename"), Some(Kind::Rename));
-        assert_eq!(Kind::from_str("delete"), Some(Kind::Delete));
-        assert_eq!(Kind::from_str("trash"), Some(Kind::Trash));
+        assert_eq!(Kind::parse("rename"), Some(Kind::Rename));
+        assert_eq!(Kind::parse("delete"), Some(Kind::Delete));
+        assert_eq!(Kind::parse("trash"), Some(Kind::Trash));
         // 认不出来就报错，不兜底成某个默认语义
-        assert_eq!(Kind::from_str("rm -rf"), None);
-        assert_eq!(Kind::from_str(""), None);
+        assert_eq!(Kind::parse("rm -rf"), None);
+        assert_eq!(Kind::parse(""), None);
     }
 
     #[test]

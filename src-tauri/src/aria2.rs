@@ -2,14 +2,14 @@
 
 // 通过 XML-RPC 调用 aria2c daemon（需要用户先启动 aria2c --enable-rpc）
 use serde::{Deserialize, Serialize};
-use std::process::{Command, Child};
-use std::sync::Mutex;
 use std::collections::HashMap;
+use std::process::{Child, Command};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Aria2Task {
     pub gid: String,
-    pub status: String,           // "active" | "waiting" | "paused" | "error" | "complete"
+    pub status: String, // "active" | "waiting" | "paused" | "error" | "complete"
     pub total_length: u64,
     pub completed_length: u64,
     pub download_speed: u64,
@@ -57,7 +57,7 @@ pub fn aria2_ping(state: tauri::State<Aria2State>) -> bool {
         "jsonrpc": "2.0",
         "id": "1",
         "method": "aria2.getVersion",
-        "params": state.rpc_secret.is_empty().then(|| vec!["token:".to_string() + &state.rpc_secret]).unwrap_or_default(),
+        "params": if state.rpc_secret.is_empty() { vec!["token:".to_string() + &state.rpc_secret] } else { Default::default() },
     });
     ureq::post(&state.rpc_url)
         .set("Content-Type", "application/json")
@@ -74,7 +74,10 @@ pub fn aria2_add_uri(
 ) -> Result<String, String> {
     let mut params: Vec<serde_json::Value> = vec![serde_json::json!([uri])];
     if !state.rpc_secret.is_empty() {
-        params.insert(0, serde_json::json!("token:".to_string() + &state.rpc_secret));
+        params.insert(
+            0,
+            serde_json::json!("token:".to_string() + &state.rpc_secret),
+        );
     }
     if let Some(opts) = options {
         params.push(serde_json::to_value(opts).unwrap_or_default());
@@ -92,8 +95,8 @@ pub fn aria2_add_uri(
         .into_string()
         .map_err(|e| format!("解析响应失败: {}", e))?;
     // 解析返回的 gid
-    let v: serde_json::Value = serde_json::from_str(&resp)
-        .map_err(|e| format!("JSON 解析失败: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&resp).map_err(|e| format!("JSON 解析失败: {}", e))?;
     v.get("result")
         .and_then(|r| r.as_str())
         .map(|s| s.to_string())
@@ -132,10 +135,26 @@ pub fn aria2_get_tasks(state: tauri::State<Aria2State>) -> Result<Vec<Aria2Task>
                     Some(Aria2Task {
                         gid: t.get("gid")?.as_str()?.to_string(),
                         status: t.get("status")?.as_str()?.to_string(),
-                        total_length: t.get("totalLength")?.as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
-                        completed_length: t.get("completedLength")?.as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
-                        download_speed: t.get("downloadSpeed")?.as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
-                        upload_speed: t.get("uploadSpeed")?.as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
+                        total_length: t
+                            .get("totalLength")?
+                            .as_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                        completed_length: t
+                            .get("completedLength")?
+                            .as_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                        download_speed: t
+                            .get("downloadSpeed")?
+                            .as_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                        upload_speed: t
+                            .get("uploadSpeed")?
+                            .as_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
                         files: vec![],
                         dir: t.get("dir")?.as_str().unwrap_or("").to_string(),
                     })
@@ -152,7 +171,10 @@ pub fn aria2_get_tasks(state: tauri::State<Aria2State>) -> Result<Vec<Aria2Task>
 pub fn aria2_pause(gid: String, state: tauri::State<Aria2State>) -> Result<(), String> {
     let mut params = vec![serde_json::json!(gid)];
     if !state.rpc_secret.is_empty() {
-        params.insert(0, serde_json::json!("token:".to_string() + &state.rpc_secret));
+        params.insert(
+            0,
+            serde_json::json!("token:".to_string() + &state.rpc_secret),
+        );
     }
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -172,7 +194,10 @@ pub fn aria2_pause(gid: String, state: tauri::State<Aria2State>) -> Result<(), S
 pub fn aria2_remove(gid: String, state: tauri::State<Aria2State>) -> Result<(), String> {
     let mut params = vec![serde_json::json!(gid)];
     if !state.rpc_secret.is_empty() {
-        params.insert(0, serde_json::json!("token:".to_string() + &state.rpc_secret));
+        params.insert(
+            0,
+            serde_json::json!("token:".to_string() + &state.rpc_secret),
+        );
     }
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -209,11 +234,31 @@ pub fn aria2_global_stat(state: tauri::State<Aria2State>) -> Result<Aria2GlobalS
     let v: serde_json::Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
     let r = v.get("result").ok_or("无 result")?;
     Ok(Aria2GlobalStat {
-        download_speed: r.get("downloadSpeed").and_then(|s| s.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0),
-        upload_speed: r.get("uploadSpeed").and_then(|s| s.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0),
-        num_active: r.get("numActive").and_then(|s| s.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0),
-        num_waiting: r.get("numWaiting").and_then(|s| s.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0),
-        num_stopped: r.get("numStoppedTotal").and_then(|s| s.as_str()).and_then(|s| s.parse().ok()).unwrap_or(0),
+        download_speed: r
+            .get("downloadSpeed")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        upload_speed: r
+            .get("uploadSpeed")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        num_active: r
+            .get("numActive")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        num_waiting: r
+            .get("numWaiting")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
+        num_stopped: r
+            .get("numStoppedTotal")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
     })
 }
 
@@ -232,7 +277,8 @@ pub fn start_aria2_daemon(
             "--enable-rpc",
             "--rpc-listen-all=false",
             "--rpc-allow-origin-all=true",
-            "--dir", &download_dir,
+            "--dir",
+            &download_dir,
         ])
         .spawn()
         .map_err(|e| format!("启动 aria2c 失败: {}（请确认已安装 aria2）", e))?;

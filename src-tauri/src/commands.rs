@@ -1,19 +1,21 @@
+use md5::Digest as Md5Digest;
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read as IoRead, Write};
 use std::path::{Component, Path, PathBuf};
-use walkdir::WalkDir;
 use std::process::Command as StdCommand;
-use md5::Digest as Md5Digest;
-use sha1::Sha1;
-use sha2::Sha256;
+use walkdir::WalkDir;
 
 // POSIX mode 只在 unix 上有意义；Windows 走只读属性近似。
 #[cfg(unix)]
 fn current_mode(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
-    fs::metadata(path).map(|m| m.permissions().mode()).unwrap_or(0)
+    fs::metadata(path)
+        .map(|m| m.permissions().mode())
+        .unwrap_or(0)
 }
 
 #[cfg(not(unix))]
@@ -99,39 +101,40 @@ pub fn list_directory_blocking(path: &str) -> Result<Vec<FileEntry>, String> {
 
     let mut result: Vec<FileEntry> = Vec::new();
 
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            // 跳过隐藏文件（以 . 开头）
-            if file_name.starts_with('.') {
-                continue;
-            }
-
-            let metadata = entry.metadata().map_err(|e| format!("读取元数据失败: {}", e))?;
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-
-            result.push(FileEntry {
-                name: file_name,
-                path: entry.path().to_string_lossy().to_string(),
-                is_dir: metadata.is_dir(),
-                size: metadata.len(),
-                modified,
-            });
+    // `entries.flatten()`：读目录时个别条目会失败（权限、被并发删除），
+    // 原来的 `if let Ok(entry) = entry` 是把失败项**静默跳过** —— 行为一样，
+    // 但 clippy 判它是「unnecessary if let」（只用 Ok 变体就该用 flatten）。
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        // 跳过隐藏文件（以 . 开头）
+        if file_name.starts_with('.') {
+            continue;
         }
+
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("读取元数据失败: {}", e))?;
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        result.push(FileEntry {
+            name: file_name,
+            path: entry.path().to_string_lossy().to_string(),
+            is_dir: metadata.is_dir(),
+            size: metadata.len(),
+            modified,
+        });
     }
 
     // 目录优先，然后按名称排序
-    result.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     Ok(result)
@@ -470,18 +473,16 @@ pub fn delete_file_blocking(path: &str) -> Result<(), String> {
 
 /// 目标重名时的处理策略。默认 Rename —— 宁可多出一个「xxx 副本」，
 /// 也不能悄悄盖掉用户已有的文件（复制粘贴覆盖旧版本是文件管理器里最贵的意外）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+///
+/// 默认值用 `#[derive(Default)]` + 枚举上的 `#[default]` 标注表达，
+/// 免得「哪个是默认值」写在两个地方（clippy: this impl can be derived）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ConflictPolicy {
     Overwrite,
     Skip,
+    #[default]
     Rename,
-}
-
-impl Default for ConflictPolicy {
-    fn default() -> Self {
-        ConflictPolicy::Rename
-    }
 }
 
 /// 目标位置是否已被占用。这里用 symlink_metadata 而不是 exists()：
@@ -532,7 +533,11 @@ fn resolve_dest(dest: &Path, policy: ConflictPolicy) -> Result<Option<PathBuf>, 
 
 /// 移动文件/目录
 #[tauri::command]
-pub async fn move_file(src_path: String, dest_dir: String, conflict: Option<ConflictPolicy>) -> Result<String, String> {
+pub async fn move_file(
+    src_path: String,
+    dest_dir: String,
+    conflict: Option<ConflictPolicy>,
+) -> Result<String, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
     tauri::async_runtime::spawn_blocking(move || move_file_blocking(&src_path, &dest_dir, conflict))
         .await
@@ -555,9 +560,7 @@ pub fn move_file_blocking(
     }
     crate::conflict::displacement_guard(&src_canonical, &dest_canonical, "移动")?;
 
-    let file_name = src_canonical
-        .file_name()
-        .ok_or("无法获取文件名")?;
+    let file_name = src_canonical.file_name().ok_or("无法获取文件名")?;
 
     let wanted = dest_canonical.join(file_name);
     let dest_path = match resolve_dest(&wanted, conflict.unwrap_or_default())? {
@@ -572,7 +575,8 @@ pub fn move_file_blocking(
         Err(_) => {
             // 跨卷移动：复制后删除
             if src_canonical.is_dir() {
-                copy_dir_recursive(&src_canonical, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
+                copy_dir_recursive(&src_canonical, &dest_path)
+                    .map_err(|e| format!("复制目录失败: {}", e))?;
                 fs::remove_dir_all(&src_canonical).map_err(|e| format!("删除源目录失败: {}", e))?;
             } else {
                 fs::copy(&src_canonical, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
@@ -627,7 +631,11 @@ fn recreate_symlink(src: &Path, dest: &Path) -> std::io::Result<()> {
 
 /// 复制文件/目录
 #[tauri::command]
-pub async fn copy_file(src_path: String, dest_dir: String, conflict: Option<ConflictPolicy>) -> Result<String, String> {
+pub async fn copy_file(
+    src_path: String,
+    dest_dir: String,
+    conflict: Option<ConflictPolicy>,
+) -> Result<String, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
     tauri::async_runtime::spawn_blocking(move || copy_file_blocking(&src_path, &dest_dir, conflict))
         .await
@@ -651,9 +659,7 @@ pub fn copy_file_blocking(
     // 复制也拦：往自己里面复制不会像移动那样丢原件，但副本里会长出一层套一层的自己
     crate::conflict::displacement_guard(&src_canonical, &dest_canonical, "复制")?;
 
-    let file_name = src_canonical
-        .file_name()
-        .ok_or("无法获取文件名")?;
+    let file_name = src_canonical.file_name().ok_or("无法获取文件名")?;
 
     let wanted = dest_canonical.join(file_name);
     let dest_path = match resolve_dest(&wanted, conflict.unwrap_or_default())? {
@@ -663,7 +669,8 @@ pub fn copy_file_blocking(
     };
 
     if src_canonical.is_dir() {
-        copy_dir_recursive(&src_canonical, &dest_path).map_err(|e| format!("复制目录失败: {}", e))?;
+        copy_dir_recursive(&src_canonical, &dest_path)
+            .map_err(|e| format!("复制目录失败: {}", e))?;
     } else {
         fs::copy(&src_canonical, &dest_path).map_err(|e| format!("复制文件失败: {}", e))?;
     }
@@ -690,13 +697,9 @@ pub async fn create_file(path: String, content: Option<String>) -> Result<(), St
 pub fn create_file_blocking(path: &str, content: Option<String>) -> Result<(), String> {
     // 写入场景：目标文件不存在，需对父目录做校验
     let parent = Path::new(path).parent().ok_or("无法获取父目录")?;
-    let canonical_parent = crate::path_guard::validate(parent.to_str().unwrap_or(""))
-        .map_err(|e| e.to_string())?;
-    let file_path = canonical_parent.join(
-        Path::new(path)
-            .file_name()
-            .ok_or("无法获取文件名")?,
-    );
+    let canonical_parent =
+        crate::path_guard::validate(parent.to_str().unwrap_or("")).map_err(|e| e.to_string())?;
+    let file_path = canonical_parent.join(Path::new(path).file_name().ok_or("无法获取文件名")?);
     if file_path.exists() {
         return Err(format!("文件已存在: {}", path));
     }
@@ -728,13 +731,9 @@ pub async fn create_directory(path: String) -> Result<(), String> {
 pub fn create_directory_blocking(path: &str) -> Result<(), String> {
     // 写入场景：父目录必须已存在
     let parent = Path::new(path).parent().ok_or("无法获取父目录")?;
-    let canonical_parent = crate::path_guard::validate(parent.to_str().unwrap_or(""))
-        .map_err(|e| e.to_string())?;
-    let dir_path = canonical_parent.join(
-        Path::new(path)
-            .file_name()
-            .ok_or("无法获取目录名")?,
-    );
+    let canonical_parent =
+        crate::path_guard::validate(parent.to_str().unwrap_or("")).map_err(|e| e.to_string())?;
+    let dir_path = canonical_parent.join(Path::new(path).file_name().ok_or("无法获取目录名")?);
     if dir_path.exists() {
         return Err(format!("目录已存在: {}", path));
     }
@@ -753,16 +752,14 @@ pub async fn delete_to_trash(app: tauri::AppHandle, path: String) -> Result<Stri
         .map_err(|e| e.to_string())?
 }
 
-pub fn delete_to_trash_blocking(
-    app: tauri::AppHandle,
-    path: String,
-) -> Result<String, String> {
+pub fn delete_to_trash_blocking(app: tauri::AppHandle, path: String) -> Result<String, String> {
     crate::trash::move_to_trash(app, path)
 }
 
 /// 执行 shell 命令（用于"快速操作 / 脚本"功能）
 /// - `program`: 可执行文件（"rm", "chmod", "open" 等）
 /// - `args`: 参数列表（用 {path} 占位符会被替换为传入的 file path）
+///
 /// 返回 stdout / stderr
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShellRunResult {
@@ -828,7 +825,10 @@ pub fn list_allowed_programs() -> Vec<AllowedProgram> {
     // 程序路径 → 用途。中文描述给到用户看（AutoComplete 的 placeholder / 副标题），
     // 不要写"可以执行任意命令"之类自打脸的话 —— 选了之后跑不通的尴尬是双份的。
     const META: &[(&str, &str)] = &[
-        ("/usr/bin/open", "在 macOS Finder 里打开/选中文件（-R 选中）"),
+        (
+            "/usr/bin/open",
+            "在 macOS Finder 里打开/选中文件（-R 选中）",
+        ),
         ("/bin/open", "open 的另一份位置（同上）"),
         ("/usr/bin/pbcopy", "把内容写入剪贴板（搭配 echo / pbpaste）"),
         ("/usr/bin/pbpaste", "把剪贴板内容读到 stdout"),
@@ -865,7 +865,11 @@ pub struct StorageAnalysis {
 
 /// 递归统计目录大小 + 收集 top N
 #[tauri::command]
-pub async fn analyze_storage(path: String, depth: Option<usize>, top_n: Option<usize>) -> Result<StorageAnalysis, String> {
+pub async fn analyze_storage(
+    path: String,
+    depth: Option<usize>,
+    top_n: Option<usize>,
+) -> Result<StorageAnalysis, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
     tauri::async_runtime::spawn_blocking(move || analyze_storage_blocking(path, depth, top_n))
         .await
@@ -908,7 +912,7 @@ pub fn analyze_storage_blocking(
     }
 
     // 排序取前 N（按 size 降序）
-    all.sort_by(|a, b| b.0.cmp(&a.0));
+    all.sort_by_key(|a| std::cmp::Reverse(a.0));
     let top_raw: Vec<(u64, walkdir::DirEntry)> = all.into_iter().take(top_n).collect();
 
     fn build_item(entry: &walkdir::DirEntry, size: u64) -> StorageTopItem {
@@ -921,10 +925,7 @@ pub fn analyze_storage_blocking(
         }
     }
 
-    let top_items: Vec<StorageTopItem> = top_raw
-        .iter()
-        .map(|(s, e)| build_item(e, *s))
-        .collect();
+    let top_items: Vec<StorageTopItem> = top_raw.iter().map(|(s, e)| build_item(e, *s)).collect();
 
     Ok(StorageAnalysis {
         total,
@@ -1181,6 +1182,9 @@ pub fn compute_renamed_name(
 }
 
 /// 批量重命名文件
+// 参数多不是设计缺陷：Tauri 命令的**参数表就是 IPC 契约**，前端按位置传，
+// 改签名等于改契约。下面的 blocking 版与它一一对应，所以同样放行。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn batch_rename(
     paths: Vec<String>,
@@ -1213,6 +1217,7 @@ pub async fn batch_rename(
     .map_err(|e| e.to_string())?
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn batch_rename_blocking(
     paths: Vec<String>,
     mode: &str,
@@ -1295,12 +1300,7 @@ pub fn rename_one(
     let extension = canonical
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()));
-    let new_name = compute_renamed_name(
-        &stem,
-        extension.as_deref(),
-        index,
-        opts,
-    )?;
+    let new_name = compute_renamed_name(&stem, extension.as_deref(), index, opts)?;
 
     if new_name == old_name {
         return Ok(None);
@@ -1328,14 +1328,22 @@ pub fn rename_one(
 
 /// 列出目录内容（支持显示隐藏文件）
 #[tauri::command]
-pub async fn list_directory_with_hidden(path: String, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+pub async fn list_directory_with_hidden(
+    path: String,
+    show_hidden: bool,
+) -> Result<Vec<FileEntry>, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || list_directory_with_hidden_blocking(&path, show_hidden))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        list_directory_with_hidden_blocking(&path, show_hidden)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-pub fn list_directory_with_hidden_blocking(path: &str, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+pub fn list_directory_with_hidden_blocking(
+    path: &str,
+    show_hidden: bool,
+) -> Result<Vec<FileEntry>, String> {
     let dir_path = Path::new(path);
     if !dir_path.exists() {
         return Err(format!("路径不存在: {}", path));
@@ -1348,39 +1356,39 @@ pub fn list_directory_with_hidden_blocking(path: &str, show_hidden: bool) -> Res
 
     let mut result: Vec<FileEntry> = Vec::new();
 
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            // 根据参数决定是否跳过隐藏文件
-            if !show_hidden && file_name.starts_with('.') {
-                continue;
-            }
-
-            let metadata = entry.metadata().map_err(|e| format!("读取元数据失败: {}", e))?;
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-
-            result.push(FileEntry {
-                name: file_name,
-                path: entry.path().to_string_lossy().to_string(),
-                is_dir: metadata.is_dir(),
-                size: metadata.len(),
-                modified,
-            });
+    // `entries.flatten()`：个别条目读失败（权限、被并发删除）时静默跳过，行为与原来的
+    // `if let Ok(entry) = entry` 一样，但 clippy 判后者是「unnecessary if let」。
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        // 根据参数决定是否跳过隐藏文件
+        if !show_hidden && file_name.starts_with('.') {
+            continue;
         }
+
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("读取元数据失败: {}", e))?;
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        result.push(FileEntry {
+            name: file_name,
+            path: entry.path().to_string_lossy().to_string(),
+            is_dir: metadata.is_dir(),
+            size: metadata.len(),
+            modified,
+        });
     }
 
     // 目录优先，然后按名称排序
-    result.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    result.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     Ok(result)
@@ -1527,17 +1535,23 @@ pub fn calculate_file_hash_blocking(path: &str, algorithm: &str) -> Result<Strin
             // 流式 CRC32：每次读 64KB 进哈希表，恒定内存
             use std::io::Read;
             let mut table = [0u32; 256];
-            for i in 0..256 {
+            for (i, slot) in table.iter_mut().enumerate() {
                 let mut c = i as u32;
                 for _ in 0..8 {
-                    c = if c & 1 != 0 { (c >> 1) ^ 0xEDB88320 } else { c >> 1 };
+                    c = if c & 1 != 0 {
+                        (c >> 1) ^ 0xEDB88320
+                    } else {
+                        c >> 1
+                    };
                 }
-                table[i] = c;
+                *slot = c;
             }
             let mut crc = 0xFFFFFFFFu32;
             let mut buf = [0u8; 64 * 1024];
             loop {
-                let n = file.read(&mut buf).map_err(|e| format!("读取文件失败: {}", e))?;
+                let n = file
+                    .read(&mut buf)
+                    .map_err(|e| format!("读取文件失败: {}", e))?;
                 if n == 0 {
                     break;
                 }
@@ -1547,7 +1561,10 @@ pub fn calculate_file_hash_blocking(path: &str, algorithm: &str) -> Result<Strin
             }
             Ok(format!("{:08x}", crc ^ 0xFFFFFFFF))
         }
-        _ => Err(format!("不支持的哈希算法: {}，支持: md5, sha1, sha256, crc32", algorithm)),
+        _ => Err(format!(
+            "不支持的哈希算法: {}，支持: md5, sha1, sha256, crc32",
+            algorithm
+        )),
     }
 }
 
@@ -1574,7 +1591,9 @@ pub fn secure_delete_file_blocking(path: &str, passes: Option<u32>) -> Result<()
     }
 
     let num_passes = passes.unwrap_or(3).min(7);
-    let file_size = fs::metadata(&canonical).map_err(|e| format!("读取文件元数据失败: {}", e))?.len();
+    let file_size = fs::metadata(&canonical)
+        .map_err(|e| format!("读取文件元数据失败: {}", e))?
+        .len();
     if file_size == 0 {
         fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
         return Ok(());
@@ -1685,7 +1704,7 @@ pub fn find_duplicate_files_blocking(directory: &str) -> Result<Vec<DuplicateGro
     }
 
     // 按大小降序排序
-    result.sort_by(|a, b| b.size.cmp(&a.size));
+    result.sort_by_key(|a| std::cmp::Reverse(a.size));
 
     Ok(result)
 }
@@ -1744,10 +1763,7 @@ pub fn execute_command(command: &str, working_dir: &str) -> Result<CommandResult
     let (prog, allowed_subargs) = match matched {
         Some(v) => *v,
         None => {
-            return Err(format!(
-                "命令未在白名单内，拒绝执行: {}",
-                first_token
-            ));
+            return Err(format!("命令未在白名单内，拒绝执行: {}", first_token));
         }
     };
     // 对 xattr 之类允许带子命令的程序，进一步校验后续 token
@@ -1886,11 +1902,16 @@ fn same_content(a: &Path, b: &Path) -> bool {
 ///   会让"内容完全一致"的文件在 Linux 上永远显示"已修改"，用户点多少次同步都看不到尽头。
 /// 代价是尺寸相同的文件要真读一遍内容才能定论，这是 `diff -r` 同款的口径。
 #[tauri::command]
-pub async fn compare_directories(left_dir: String, right_dir: String) -> Result<Vec<SyncDiffEntry>, String> {
+pub async fn compare_directories(
+    left_dir: String,
+    right_dir: String,
+) -> Result<Vec<SyncDiffEntry>, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || compare_directories_blocking(&left_dir, &right_dir))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        compare_directories_blocking(&left_dir, &right_dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub fn compare_directories_blocking(
@@ -1963,11 +1984,17 @@ pub struct SyncResult {
 /// 单向、以源为准：同名目标文件直接覆盖，绝不能用 copy_file 的默认"保留两者"
 /// 策略 —— 那会把同步变成每次多产出若干 `xxx 副本` 的重复文件。
 #[tauri::command]
-pub async fn sync_directories(source_dir: String, target_dir: String, names: Vec<String>) -> Result<SyncResult, String> {
+pub async fn sync_directories(
+    source_dir: String,
+    target_dir: String,
+    names: Vec<String>,
+) -> Result<SyncResult, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
-    tauri::async_runtime::spawn_blocking(move || sync_directories_blocking(&source_dir, &target_dir, names))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        sync_directories_blocking(&source_dir, &target_dir, names)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub fn sync_directories_blocking(
@@ -2014,8 +2041,8 @@ fn sync_one(src_root: &Path, dst_root: &Path, rel: &str) -> Result<(), String> {
     // 落点可能还不存在（首次同步出子目录），走 validate_new_path：
     // 它先把已存在的祖先 canonicalize，再拼回未存在的尾巴并整体查一次黑名单，
     // 所以 create_dir_all 不会替调用方把 .ssh 这类敏感目录凭空建出来。
-    let dst = crate::path_guard::validate_new_path(&dst.to_string_lossy())
-        .map_err(|e| e.to_string())?;
+    let dst =
+        crate::path_guard::validate_new_path(&dst.to_string_lossy()).map_err(|e| e.to_string())?;
     if let Some(parent) = dst.parent() {
         if meta.is_dir() {
             fs::create_dir_all(&dst).map_err(|e| format!("创建目标目录失败: {}", e))?;
@@ -2133,7 +2160,7 @@ pub fn open_terminal_at(path: &str) -> Result<(), String> {
 /// macOS Finder 标签
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileTags {
-    pub color_tags: Vec<String>,  // "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"
+    pub color_tags: Vec<String>, // "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"
     pub custom_tags: Vec<String>, // User-defined tag names
 }
 
@@ -2156,11 +2183,13 @@ pub fn get_file_tags(path: &str) -> Result<FileTags, String> {
         // Format: "Tag1\n5,Tag2\n1" or just "Tag1,Tag2"
         for tag in raw.split(',') {
             let tag = tag.trim();
-            if tag.is_empty() { continue; }
+            if tag.is_empty() {
+                continue;
+            }
             // Check if it has a color index (format: "TagName\n<color_index>")
             if let Some(pos) = tag.rfind('\n') {
                 let name = tag[..pos].trim();
-                let color_str = &tag[pos+1..];
+                let color_str = &tag[pos + 1..];
                 if let Ok(color_idx) = color_str.parse::<u8>() {
                     // Map color index to name
                     let color_name = match color_idx {
@@ -2192,28 +2221,38 @@ pub fn get_file_tags(path: &str) -> Result<FileTags, String> {
         }
     }
 
-    Ok(FileTags { color_tags, custom_tags })
+    Ok(FileTags {
+        color_tags,
+        custom_tags,
+    })
 }
 
 /// 设置 macOS Finder 标签
 #[tauri::command]
-pub fn set_file_tags(path: &str, color_tags: Vec<String>, custom_tags: Vec<String>) -> Result<(), String> {
+pub fn set_file_tags(
+    path: &str,
+    color_tags: Vec<String>,
+    custom_tags: Vec<String>,
+) -> Result<(), String> {
     // path_guard 拦截：标签 xattr 不能写到系统文件
     let _canonical = crate::path_guard::validate(path).map_err(|e| e.to_string())?;
     // Combine all tags
-    let mut all_tags: Vec<String> = color_tags.iter().map(|t| {
-        let color_idx = match t.as_str() {
-            "Gray" => 0,
-            "Green" => 1,
-            "Purple" => 2,
-            "Blue" => 3,
-            "Yellow" => 4,
-            "Red" => 5,
-            "Orange" => 6,
-            _ => 0,
-        };
-        format!("{}\n{}", t, color_idx)
-    }).collect();
+    let mut all_tags: Vec<String> = color_tags
+        .iter()
+        .map(|t| {
+            let color_idx = match t.as_str() {
+                "Gray" => 0,
+                "Green" => 1,
+                "Purple" => 2,
+                "Blue" => 3,
+                "Yellow" => 4,
+                "Red" => 5,
+                "Orange" => 6,
+                _ => 0,
+            };
+            format!("{}\n{}", t, color_idx)
+        })
+        .collect();
     all_tags.extend(custom_tags);
 
     if all_tags.is_empty() {
@@ -2226,8 +2265,8 @@ pub fn set_file_tags(path: &str, color_tags: Vec<String>, custom_tags: Vec<Strin
 
     // Write tags using plist format via python3 (most reliable on macOS)
     let tags_plist: Vec<String> = all_tags;
-    let tags_json = serde_json::to_string(&tags_plist)
-        .map_err(|e| format!("序列化标签失败: {}", e))?;
+    let tags_json =
+        serde_json::to_string(&tags_plist).map_err(|e| format!("序列化标签失败: {}", e))?;
 
     // Use python3 to create a binary plist and set it via xattr
     let script = format!(
@@ -2255,7 +2294,7 @@ subprocess.run(['xattr', '-wx', 'com.apple.metadata:_kMDItemUserTags', pl.hex(),
 /// Diff 行
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiffLine {
-    pub kind: String,           // "context" | "add" | "remove"
+    pub kind: String, // "context" | "add" | "remove"
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
     pub content: String,
@@ -2449,7 +2488,10 @@ pub struct DirDiffSummary {
 
 /// 比较目录内容（仅比较文件名 + 大小 + 修改时间）
 #[tauri::command]
-pub async fn quick_diff_dirs(left_dir: String, right_dir: String) -> Result<DirDiffSummary, String> {
+pub async fn quick_diff_dirs(
+    left_dir: String,
+    right_dir: String,
+) -> Result<DirDiffSummary, String> {
     // 同步体挪到 blocking 线程：命令跑在 IPC 线程上会把整条 invoke 往返堵住
     tauri::async_runtime::spawn_blocking(move || quick_diff_dirs_blocking(&left_dir, &right_dir))
         .await
@@ -2463,7 +2505,8 @@ pub fn quick_diff_dirs_blocking(left_dir: &str, right_dir: &str) -> Result<DirDi
             if entry.file_type().is_file() {
                 let meta = entry.metadata().ok();
                 let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let mtime = meta.as_ref()
+                let mtime = meta
+                    .as_ref()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
@@ -2531,8 +2574,11 @@ mod zip_tests {
         let dest = ws.join("zip_out.zip");
         fs::write(&src, "hello\nworld\n".repeat(1000)).unwrap();
 
-        compress_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
-            .expect("compress ok");
+        compress_zip(
+            vec![src.to_string_lossy().to_string()],
+            dest.to_string_lossy().to_string(),
+        )
+        .expect("compress ok");
 
         // 解压验证内容
         let f = fs::File::open(&dest).unwrap();
@@ -2542,7 +2588,6 @@ mod zip_tests {
         let mut s = String::new();
         entry.read_to_string(&mut s).unwrap();
         assert_eq!(s, "hello\nworld\n".repeat(1000));
-
     }
 
     #[test]
@@ -2555,8 +2600,11 @@ mod zip_tests {
         fs::write(&src, &data).unwrap();
 
         let start = Instant::now();
-        compress_zip(vec![src.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
-            .expect("compress ok");
+        compress_zip(
+            vec![src.to_string_lossy().to_string()],
+            dest.to_string_lossy().to_string(),
+        )
+        .expect("compress ok");
         let elapsed = start.elapsed();
 
         let zip_size = fs::metadata(&dest).unwrap().len();
@@ -2590,17 +2638,26 @@ mod zip_tests {
         fs::write(dir.join("sub/b.txt"), "BBB").unwrap();
 
         let dest = ws.join("dir.zip");
-        compress_zip(vec![dir.to_string_lossy().to_string()], dest.to_string_lossy().to_string())
-            .unwrap();
+        compress_zip(
+            vec![dir.to_string_lossy().to_string()],
+            dest.to_string_lossy().to_string(),
+        )
+        .unwrap();
 
         let f = fs::File::open(&dest).unwrap();
         let mut archive = ZipArchive::new(f).unwrap();
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().map(|n| n.to_string()).unwrap_or_default())
+            .map(|i| {
+                archive
+                    .by_index(i)
+                    .unwrap()
+                    .name()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+            })
             .collect();
         assert!(names.iter().any(|n| n.ends_with("a.txt")));
         assert!(names.iter().any(|n| n.ends_with("b.txt")));
-
     }
 }
 
@@ -2686,7 +2743,11 @@ mod diff_tests {
     use super::diff_files_blocking;
     use std::time::Instant;
 
-    fn write_temp(dir: &crate::test_bridge::TempDir, name: &str, content: &str) -> std::path::PathBuf {
+    fn write_temp(
+        dir: &crate::test_bridge::TempDir,
+        name: &str,
+        content: &str,
+    ) -> std::path::PathBuf {
         let p = dir.join(name);
         std::fs::write(&p, content).unwrap();
         p
@@ -2786,11 +2847,15 @@ mod conflict_tests {
         let dest = dir.join("a.md");
         fs::write(&dest, b"original").unwrap();
 
-        let first = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        let first = resolve_dest(&dest, ConflictPolicy::Rename)
+            .unwrap()
+            .unwrap();
         assert_eq!(name_of(&first), "a 副本.md");
 
         fs::write(&first, b"first copy").unwrap();
-        let second = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        let second = resolve_dest(&dest, ConflictPolicy::Rename)
+            .unwrap()
+            .unwrap();
         assert_eq!(name_of(&second), "a 副本 2.md");
     }
 
@@ -2799,7 +2864,9 @@ mod conflict_tests {
         let dir = case("dotfile");
         let dest = dir.join(".gitignore");
         fs::write(&dest, b"target/").unwrap();
-        let got = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        let got = resolve_dest(&dest, ConflictPolicy::Rename)
+            .unwrap()
+            .unwrap();
         assert_eq!(name_of(&got), ".gitignore 副本");
     }
 
@@ -2824,7 +2891,9 @@ mod conflict_tests {
         symlink(dir.join("还不存在的目标"), &dest).unwrap();
         // exists() 会把它当成空位，随后 fs::copy 顺着链接把文件写到别处
         assert!(!dest.exists());
-        let got = resolve_dest(&dest, ConflictPolicy::Rename).unwrap().unwrap();
+        let got = resolve_dest(&dest, ConflictPolicy::Rename)
+            .unwrap()
+            .unwrap();
         assert_eq!(name_of(&got), "note 副本.txt");
         assert_eq!(fs::read_link(&dest).unwrap(), dir.join("还不存在的目标"));
     }
@@ -2839,9 +2908,17 @@ mod conflict_tests {
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("a.txt"), b"precious old content").unwrap();
 
-        let out = copy_file_blocking(src.join("a.txt").to_str().unwrap(), dst.to_str().unwrap(), None).unwrap();
+        let out = copy_file_blocking(
+            src.join("a.txt").to_str().unwrap(),
+            dst.to_str().unwrap(),
+            None,
+        )
+        .unwrap();
         assert_eq!(name_of(Path::new(&out)), "a 副本.txt");
-        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"precious old content");
+        assert_eq!(
+            fs::read(dst.join("a.txt")).unwrap(),
+            b"precious old content"
+        );
         assert_eq!(fs::read(dst.join("a 副本.txt")).unwrap(), b"new content");
     }
 
@@ -3146,12 +3223,9 @@ mod sync_tests {
             .filter(|e| e.status != SyncDiffStatus::OnlyRight)
             .map(|e| e.name)
             .collect();
-        let res = sync_directories_blocking(
-            &l.to_string_lossy(),
-            &r.to_string_lossy(),
-            names.clone(),
-        )
-        .unwrap();
+        let res =
+            sync_directories_blocking(&l.to_string_lossy(), &r.to_string_lossy(), names.clone())
+                .unwrap();
         assert_eq!(res.copied, names.len(), "errors: {:?}", res.errors);
 
         let left = pairs(&compare(&l, &r));
@@ -3168,7 +3242,10 @@ mod sync_tests {
         let res = sync(&l, &r, vec!["../outside.txt", "/etc/passwd", ""]);
         assert_eq!(res.copied, 0);
         assert_eq!(res.errors.len(), 3, "{:?}", res.errors);
-        assert_eq!(fs::read_to_string(dir.join("outside.txt")).unwrap(), "victim");
+        assert_eq!(
+            fs::read_to_string(dir.join("outside.txt")).unwrap(),
+            "victim"
+        );
         assert_eq!(fs::read_dir(&r).unwrap().count(), 0);
     }
 
@@ -3494,7 +3571,8 @@ mod paged_listing_tests {
     fn missing_path_and_file_path_are_rejected() {
         let dir = case("paged-err", &["a.txt"], &[]);
         let missing = dir.join("nope");
-        let e = list_directory_paged_blocking(&missing.to_string_lossy(), 0, 10, false).unwrap_err();
+        let e =
+            list_directory_paged_blocking(&missing.to_string_lossy(), 0, 10, false).unwrap_err();
         assert!(e.contains("路径不存在"), "实际: {}", e);
 
         let file = dir.join("a.txt");
@@ -3532,11 +3610,7 @@ mod paged_listing_tests {
         assert_eq!(p.total, 10_000);
         assert_eq!(p.total_pages, 100);
         assert!(p.has_more);
-        assert!(
-            p.elapsed_ms < 1000,
-            "首页取了 {}ms，超过预算",
-            p.elapsed_ms
-        );
+        assert!(p.elapsed_ms < 1000, "首页取了 {}ms，超过预算", p.elapsed_ms);
     }
 }
 
@@ -3605,7 +3679,11 @@ mod rename_contract_tests {
             let (stem, ext) = split_like_frontend(&c.old_name);
             let got = compute_renamed_name(&stem, ext.as_deref(), c.index, &c.opts)
                 .unwrap_or_else(|e| panic!("用例「{}」算不出新名: {}", c.name, e));
-            assert_eq!(got, c.expected, "用例「{}」后端算出的名字与夹具不符", c.name);
+            assert_eq!(
+                got, c.expected,
+                "用例「{}」后端算出的名字与夹具不符",
+                c.name
+            );
         }
     }
 
@@ -3633,7 +3711,10 @@ mod rename_contract_tests {
         assert_eq!(replace_ignore_case("ABC", "b", "-"), "A-C");
         // 与 JS 的 `/i` 规范化规则对齐：'İ'(U+0130) 规范化后不等于 'i'，因此**不匹配**。
         // 这条看着反直觉，但正是"两侧必须逐字一致"的要求 —— JS 那边也是不匹配。
-        assert_eq!(replace_ignore_case("İstanbul", "i̇stanbul", "City"), "İstanbul");
+        assert_eq!(
+            replace_ignore_case("İstanbul", "i̇stanbul", "City"),
+            "İstanbul"
+        );
     }
 
     /// 缺省语义：区分大小写 = false（与界面默认一致）。
