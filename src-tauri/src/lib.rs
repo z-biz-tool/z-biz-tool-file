@@ -546,6 +546,30 @@ pub mod test_bridge {
             Some(max_dimension),
         )
     }
+
+    /// 图片裁剪命令的命令层桥。
+    ///
+    /// 走**真实命令函数**（含 path_guard），不是直接调 cap-img ——
+    /// 要钉的是「前端传的坐标到 cap-img 之间那条路」，
+    /// 而这条路上恰好有一处外部输入直达的崩溃（坐标 u32 溢出）。
+    pub fn call_crop_image(
+        path: &str,
+        dest_path: &str,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    ) -> Result<(), String> {
+        crate::image_utils::crop_image(path, dest_path, x, y, w, h)
+    }
+
+    /// 图片信息命令的命令层桥（只回成功与否，不暴露结构体）。
+    ///
+    /// `get_image_info` 走 `cap_img::info` ⇒ 里面有 EXIF 解析，
+    /// 而 EXIF 的偏移量是**图片文件里的字节** ⇒ 畸形图片能让它崩。
+    pub fn call_get_image_info(path: &str) -> Result<(), String> {
+        crate::image_utils::get_image_info_blocking(path).map(|_| ())
+    }
 }
 
 #[cfg(test)]

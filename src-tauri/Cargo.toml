@@ -41,7 +41,19 @@ regex = "1"
 #   - image 仍保留（pdf_image.rs 等模块还要用）
 #   - base64 已删除（只有 image_utils.rs 用，已搬走）
 # 2026-09-25 起走 crates.io 正式版（0.1.0 已发布），不再 pin git tag
-cap-img = "0.1.0"
+#
+# 2026-10-21 升到 0.3.0：本仓是**家族里唯一用到变换族**的（thumbnail / resize /
+# rotate / flip / crop / apply_filter / export / info），而 0.3.0 修掉了三条
+# 只在这条路上可达的缺陷：
+#   1. crop 的 `x + w` u32 溢出 —— debug 直接 panic，release 回绕成小值
+#      ⇒ **越界检查被绕过**。而本仓 `crop_image` 命令把前端传的 x/y/w/h
+#      原样透传 ⇒ 外部输入直达。
+#   2. EXIF 的 IFD0 只比了起点、没比要读的区间 ⇒ `data[off..off+2]` 切片 panic，
+#      **任何人都能手搓一个 JPEG 触发**；`get_image_info` 直接调 `cap_img::info`。
+#   3. 「名字说谎」的文件 —— 变换族按源图扩展名决定输出格式、export 按参数决定，
+#      两者都不看目标扩展名 ⇒ 写出的 .jpg 里其实是 PNG 字节。
+# 0.x 语义下 minor 即 breaking，且 crates.io 不可覆盖 ⇒ 只能走 0.3.0。
+cap-img = "0.3.0"
 sha2 = "0.10"
 chrono = "0.4"
 
