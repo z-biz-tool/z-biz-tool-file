@@ -60,6 +60,7 @@ chrono = "0.4"
 
 ureq = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
 dirs = "5"
 
 # ---- 归档引擎（src/archive/）：目标是完全替掉本机的 7-Zip，所以这里全是纯 Rust/自包含实现，
