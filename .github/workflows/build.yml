@@ -76,7 +76,7 @@ jobs:
       # 没有 TAURI_SIGNING_PRIVATE_KEY 的情况下会**直接报错**（"A public key has been
       # found, but no private key"）。这里做 fail-soft：缺 secret 就加 --no-sign 跳过
       # 签名并打 warning，保证手工触发/密钥未就绪时的发布构建不挂。
-      # 密钥就绪后（GitHub Secrets 配好 TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_KEY_PASSWORD）
+      # 密钥就绪后（GitHub Secrets 配好 TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD）
       # 自动恢复签名 + 生成 .sig + 推 latest.json。
       - name: Check updater signing secret (fail-soft)
         id: signing
@@ -98,7 +98,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ steps.signing.outputs.mode == 'signed' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_KEY_PASSWORD: ${{ steps.signing.outputs.mode == 'signed' && secrets.TAURI_SIGNING_KEY_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.signing.outputs.mode == 'signed' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '${{ github.ref_name }}'
