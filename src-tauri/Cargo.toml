@@ -14,12 +14,20 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
+# 文档解析原语（GAP-06 文档一片）：PDF / EPUB / MOBI。
+# 版本与实现统一收口到 z-biz-tool-capability/crates/cap-doc，
+# 本仓只保留命令层（守卫 + 线程调度），见 src/doc_cmd.rs。
+cap-doc = { path = "../../z-biz-tool-capability/crates/cap-doc" }
+# 统一 AI 接入层（2026-10-26）：原本本仓自带一套 llm_endpoint/chat_request_body/
+# parse_response/call_llm，与 aigen/pet/db/note/kb 里的同类代码是同一件事的第六次重写。
+# 现在协议与传输全在 cap-llm，本仓只留提示词与结果结构。见 src/ai.rs 头部。
+cap-llm = { path = "../../z-biz-tool-capability/crates/cap-llm" }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.2"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+# reqwest 已随 AI 接入层迁入 cap-llm（本仓 src/ 中不再出现 reqwest）
 ssh2 = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 kamadak-exif = "0.6"
@@ -27,7 +35,6 @@ walkdir = "2"
 notify = "6"
 epub = "2"
 html2text = "0.12"
-lopdf = { version = "0.34", features = ["pom_parser"] }
 regex-lite = "0.1"
 image = "0.25"
 uuid = { version = "1", features = ["v4"] }
@@ -89,3 +96,9 @@ filetime = "0.2"
 # x86_64-apple-darwin 在 arm64 runner 上交叉编译时找不到系统 OpenSSL，
 # vendored 让 openssl-sys 自己编一份
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
+[dev-dependencies]
+# lopdf 的解析/改写能力已随文档模块迁入 cap-doc，**生产代码不再直接使用**。
+# 但 tests/integration_pdf_{compress,watermark}.rs 要用它构造与检查 PDF 对象，
+# 因此降级为仅测试可见 —— 依赖面收窄，而不是简单删掉（删了集成测试就编不过）。
+lopdf = { version = "0.34", features = ["pom_parser"] }

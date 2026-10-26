@@ -53,6 +53,31 @@ impl Default for LlmConfig {
     }
 }
 
+impl LlmConfig {
+    /// 转成统一接入层 `cap-llm` 的配置。
+    ///
+    /// `provider` 允许 `"openai" | "anthropic" | "ollama" | "custom"`（本仓历史取值），
+    /// `cap_llm::ProviderKind::parse` 同时接受这些写法，也接受 minimax / deepseek /
+    /// claude / gemini 等别名 —— 用户把别的产品的配置抄过来不会报「未知 provider」。
+    ///
+    /// 放在这里而不是 `ai.rs`：`test_llm_config` 也要用，而它属于本文件。
+    /// 统一层落地后，本仓**任何**发请求的地方都从这里拿配置，不再各自翻译一遍。
+    pub fn to_cap(&self) -> Result<cap_llm::LlmConfig, String> {
+        let kind = cap_llm::ProviderKind::parse(&self.provider).map_err(|e| e.to_string())?;
+        Ok(cap_llm::LlmConfig {
+            kind,
+            // 本仓允许 base_url 为空（用默认地址），cap-llm 也是这样处理的
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            timeout: std::time::Duration::from_secs(self.timeout_secs.max(1) as u64),
+            // 0.0 是合法温度，所以不能 `if t > 0.0` 判断，直接透传
+            temperature: Some(self.temperature),
+            max_tokens: None,
+        })
+    }
+}
+
 fn config_path(app: &tauri::AppHandle) -> PathBuf {
     let base = app
         .path()
@@ -92,68 +117,25 @@ pub fn get_llm_config_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(config_path(&app).to_string_lossy().to_string())
 }
 
-/// 测试 LLM 配置是否可用：发一个最小请求（chat completions 的 1 token 输出）
+/// 测试 LLM 配置是否可用。
+///
+/// ## 2026-10-26 改造
+///
+/// 原来这里自带第三套 `endpoint + 鉴权头 + 请求体` 拼装（和 `ai.rs` 里的那套
+/// 几乎逐行重复，只是错误体截断长度从 300 改成了 200）。现在统一走
+/// `cap_llm::ping`，它发一个 `max_tokens=1` 的真实对话：
+///
+/// - **不用 `/models` 探活**：很多自建代理不实现这个接口，用它测会把
+///   「服务好的，只是没这个 API」误报成「连不上」。
+/// - 能拿到回复 ⇒ key、地址、模型三项全对，这才是用户点「测试连接」想知道的。
 #[tauri::command]
 pub async fn test_llm_config(config: LlmConfig) -> Result<String, String> {
-    // 动态构建 endpoint
-    let endpoint = match config.provider.as_str() {
-        "openai" | "custom" => {
-            let base = config.base_url.trim_end_matches('/');
-            format!("{}/chat/completions", base)
-        }
-        "anthropic" => {
-            let base = config.base_url.trim_end_matches('/');
-            format!("{}/v1/messages", base)
-        }
-        "ollama" => {
-            let base = config.base_url.trim_end_matches('/');
-            format!("{}/api/chat", base)
-        }
-        other => return Err(format!("未知 provider: {}", other)),
-    };
-
-    // 构造极简请求
-    let body = serde_json::json!({
-        "model": config.model,
-        "messages": [
-            { "role": "user", "content": "hi" }
-        ],
-        "max_tokens": 1,
-        "temperature": 0.0,
-    });
-    let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-
-    // 用 reqwest 阻塞发送（小测试，无感延迟）
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.timeout_secs as u64))
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-
-    let mut req = client
-        .post(&endpoint)
-        .header("Content-Type", "application/json")
-        .body(body_str);
-    if !config.api_key.is_empty() {
-        match config.provider.as_str() {
-            "anthropic" => {
-                req = req
-                    .header("x-api-key", &config.api_key)
-                    .header("anthropic-version", "2023-06-01");
-            }
-            _ => {
-                req = req.header("Authorization", format!("Bearer {}", config.api_key));
-            }
-        }
-    }
-    let resp = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
-    let status = resp.status();
-    let text = resp.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!(
-            "HTTP {} — {}",
-            status.as_u16(),
-            &text[..text.len().min(200)]
-        ));
-    }
-    Ok(text)
+    let cap = config.to_cap()?;
+    let elapsed = cap_llm::ping(&cap).await.map_err(|e| e.to_string())?;
+    Ok(format!(
+        "连接成功（{} · {}），耗时 {}ms",
+        cap.kind.label(),
+        config.model,
+        elapsed.as_millis()
+    ))
 }

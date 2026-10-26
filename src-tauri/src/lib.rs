@@ -15,7 +15,11 @@ mod atomic_write;
 mod commands;
 mod conflict;
 mod convert;
-mod ebook;
+// 文档类命令的薄封装层（守卫 + 线程调度）。
+// 解析/操作实现已下沉到 cap-doc（z-biz-tool-capability），
+// 原先的 pdf_ops / pdf_utils / pdf_compress / pdf_font / pdf_image /
+// pdf_watermark / ebook 七个模块随之移出本仓。
+mod doc_cmd;
 mod image_exif;
 mod image_utils;
 mod indexer;
@@ -25,12 +29,6 @@ mod ocr;
 mod office;
 mod operation;
 mod path_guard;
-mod pdf_compress;
-mod pdf_font;
-mod pdf_image;
-mod pdf_ops;
-mod pdf_utils;
-mod pdf_watermark;
 mod search;
 mod sftp;
 mod tags;
@@ -110,17 +108,17 @@ pub fn run() {
             archive::cmds::archive_job_state,
             search::full_disk_search,
             search::search_file_content,
-            ebook::parse_epub,
-            ebook::parse_mobi,
-            ebook::get_epub_cover,
-            pdf_utils::extract_pdf_text,
-            pdf_utils::get_pdf_metadata,
-            pdf_ops::get_pdf_pages,
-            pdf_ops::merge_pdfs,
-            pdf_ops::split_pdf,
-            pdf_image::extract_pdf_images,
-            pdf_watermark::watermark_pdf,
-            pdf_compress::compress_pdf,
+            doc_cmd::parse_epub,
+            doc_cmd::parse_mobi,
+            doc_cmd::get_epub_cover,
+            doc_cmd::extract_pdf_text,
+            doc_cmd::get_pdf_metadata,
+            doc_cmd::get_pdf_pages,
+            doc_cmd::merge_pdfs,
+            doc_cmd::split_pdf,
+            doc_cmd::extract_pdf_images,
+            doc_cmd::watermark_pdf,
+            doc_cmd::compress_pdf,
             commands::diff_files,
             commands::quick_diff_dirs,
             ocr::list_ocr_languages,
@@ -534,7 +532,7 @@ pub mod test_bridge {
         text: &str,
         opacity: f64,
     ) -> Result<u32, String> {
-        crate::pdf_watermark::watermark_pdf_blocking(
+        crate::doc_cmd::watermark_pdf_checked(
             input.to_string(),
             output.to_string(),
             text.to_string(),
@@ -546,8 +544,8 @@ pub mod test_bridge {
         output: &str,
         quality: u8,
         max_dimension: u32,
-    ) -> Result<crate::pdf_compress::CompressReport, String> {
-        crate::pdf_compress::compress_pdf_blocking(
+    ) -> Result<cap_doc::CompressReport, String> {
+        crate::doc_cmd::compress_pdf_checked(
             input.to_string(),
             output.to_string(),
             Some(quality),
