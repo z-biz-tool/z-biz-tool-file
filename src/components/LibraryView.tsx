@@ -180,7 +180,9 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
     try {
       const s = await invoke<LibraryStats>("library_stats");
       setStats(s);
-    } catch {}
+    } catch (e) {
+      console.warn("[library] 读取媒体库统计失败:", e);
+    }
   }, []);
 
   const refreshMedia = useCallback(async () => {
@@ -290,32 +292,23 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
     try {
       await invoke("library_set_rating", { id, rating: r });
       refreshMedia();
-    } catch {}
+    } catch (e: any) {
+      message.error("评分没有保存: " + e);
+    }
+  };
+
+  const openItem = async (path: string) => {
+    try {
+      await invoke("open_with_default_app", { path });
+    } catch (e: any) {
+      message.error(`没有用系统默认程序打开: ${e}`);
+    }
   };
 
   // =============== 渲染 ===============
 
-  return (
-    <Modal
-      title={
-        embedded ? null : (
-          <Space>
-            <BookOutlined style={{ color: "#eb2f96" }} />
-            <span>图书馆 & 媒体库</span>
-          </Space>
-        )
-      }
-      open={open || !!embedded}
-      onCancel={onClose}
-      width={embedded ? "100%" : 1100}
-      footer={null}
-      destroyOnClose
-      mask={!embedded}
-      closable={!embedded}
-      style={embedded ? { top: 0, paddingBottom: 0, height: "100%", maxWidth: "100%" } : undefined}
-      styles={embedded ? { body: { height: "calc(100% - 0px)", overflow: "auto" } } : undefined}
-      wrapClassName={embedded ? "library-embedded-modal" : undefined}
-    >
+  const body = (
+    <>
 
       {/* 顶部统计 */}
       {stats && (
@@ -430,7 +423,13 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                           size="small"
                           hoverable
                           bodyStyle={{ padding: 8 }}
-                          onDoubleClick={() => invoke("open_with_default_app", { path: item.path }).catch(() => {})}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`打开「${item.title}」`}
+                          onDoubleClick={() => openItem(item.path)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") openItem(item.path);
+                          }}
                         >
                           <div
                             style={{
@@ -568,7 +567,13 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
                         <Card
                           size="small"
                           hoverable
-                          onDoubleClick={() => invoke("open_with_default_app", { path: book.path }).catch(() => {})}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`打开「${book.title}」`}
+                          onDoubleClick={() => openItem(book.path)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") openItem(book.path);
+                          }}
                         >
                           <Space>
                             <div
@@ -613,6 +618,30 @@ export default function LibraryView({ open, onClose, initialTab, embedded }: Lib
           },
         ]}
       />
+    </>
+  );
+
+  // 内嵌在标签页里时不能再套 Modal：fixed 定位的弹层会盖住顶栏和标签条，
+  // 用户连切回文件标签都点不到
+  if (embedded) {
+    return <div style={{ height: "100%", overflow: "auto", padding: 16 }}>{body}</div>;
+  }
+
+  return (
+    <Modal
+      title={
+        <Space>
+          <BookOutlined style={{ color: "#eb2f96" }} />
+          <span>图书馆 & 媒体库</span>
+        </Space>
+      }
+      open={open}
+      onCancel={onClose}
+      width={1100}
+      footer={null}
+      destroyOnClose
+    >
+      {body}
     </Modal>
   );
 }

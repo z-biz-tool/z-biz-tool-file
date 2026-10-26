@@ -17,7 +17,8 @@ export function resolveHomeDir(): Promise<string> {
         cached = normalize(p);
         return cached;
       })
-      .catch(() => {
+      .catch((e) => {
+        console.warn("[path] 解析用户主目录失败，回退到 /:", e);
         cached = "/";
         return cached;
       });

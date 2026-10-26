@@ -215,14 +215,18 @@ export default function ImageEditor({ filePath, onBack }: ImageEditorProps) {
       // 拉元信息
       invoke<ImageInfo>("get_image_info", { path: filePath })
         .then((i) => setInfo(i))
-        .catch(() => setInfo({
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-          format: filePath.split(".").pop()?.toUpperCase() || "PNG",
-          size: 0,
-          has_alpha: true,
-          exif: null,
-        }));
+        .catch((e) => {
+          // 元信息拉不到就用浏览器已知的自然尺寸顶上，编辑功能不受影响
+          console.warn("[image] 读取图片元信息失败，用自然尺寸代替:", e);
+          setInfo({
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            format: filePath.split(".").pop()?.toUpperCase() || "PNG",
+            size: 0,
+            has_alpha: true,
+            exif: null,
+          });
+        });
     };
     img.onerror = () => {
       message.error("图像加载失败");

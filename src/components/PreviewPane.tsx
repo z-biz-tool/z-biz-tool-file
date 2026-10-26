@@ -41,7 +41,10 @@ export default function PreviewPane({ onCollapse, editingImage, onEditImage, onE
       setDirLoading(true);
       invoke<FileInfo>("get_file_info", { path: selectedFile.path })
         .then((info) => setDirInfo(info))
-        .catch(() => setDirInfo(null))
+        .catch((e) => {
+          console.warn("[preview] 读取文件夹信息失败:", e);
+          setDirInfo(null);
+        })
         .finally(() => setDirLoading(false));
     } else {
       setDirInfo(null);

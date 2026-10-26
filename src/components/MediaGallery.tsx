@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { Spin, theme, Dropdown } from "antd";
+import { Spin, theme, Dropdown, Button, App as AntdApp } from "antd";
 import { PictureOutlined, VideoCameraOutlined, AudioOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import type { FileEntry } from "../stores/fileStore";
@@ -35,14 +35,9 @@ interface MediaGalleryProps {
   onDelete?: (item: MediaItem, afterDeleted: () => void) => void;
 }
 
-// 获取媒体文件列表
+// 获取媒体文件列表。失败要让调用方看见，不能当成"这个目录没有媒体"
 async function fetchMediaFiles(directory: string, type: MediaType): Promise<MediaItem[]> {
-  try {
-    return toMediaItems(await invoke<FileEntry[]>("list_directory", { path: directory }), type);
-  } catch (error) {
-    console.error(`Failed to fetch ${type} files:`, error);
-    return [];
-  }
+  return toMediaItems(await invoke<FileEntry[]>("list_directory", { path: directory }), type);
 }
 
 // 获取图片缩略图
@@ -393,8 +388,11 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
   onDelete,
 }) => {
   const { token } = theme.useToken();
+  const { message } = AntdApp.useApp();
   const [mediaFiles, setMediaFiles] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   // 网格里的"几列"是运行时宽度决定的，不能猜：上下方向键按列走，
   // 猜出来的步长会让选中卡跳到完全无关的另一张，比没支持更坏。
@@ -435,6 +433,7 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
 
   useEffect(() => {
     setSelectedPath(null); // 换目录/换馆之后，上一张的选中环没有意义，还可能指着一个不存在的路径
+    setError(null);
     if (!directory) {
       // 目录为空时不能把 loading 留在 true：那是个转不完的圈，界面没有任何出口
       setMediaFiles([]);
@@ -443,23 +442,32 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
     }
     // 切馆（照片馆→视频馆）会并发两次拉取，后到的旧响应会把新结果盖掉
     let alive = true;
-    fetchMediaFiles(directory, mediaType).then((files) => {
-      if (!alive) return;
-      setMediaFiles(files);
-      setLoading(false);
-    });
+    setLoading(true);
+    fetchMediaFiles(directory, mediaType)
+      .then((files) => {
+        if (!alive) return;
+        setMediaFiles(files);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setMediaFiles([]);
+        setError(String(e));
+        setLoading(false);
+      });
     return () => {
       alive = false;
     };
-  }, [directory, mediaType]);
+  }, [directory, mediaType, retryKey]);
 
   // 卡片双击与菜单里的"打开"走同一个函数：分两处写迟早只改一处
   const handleOpen = (item: MediaItem) => {
     if (onOpen) {
       onOpen(item);
     } else {
-      // 默认打开方式
-      invoke("open_with_default_app", { path: item.path }).catch(console.error);
+      invoke("open_with_default_app", { path: item.path }).catch((e) => {
+        message.error(`没有用系统默认程序打开: ${e}`);
+      });
     }
   };
 
@@ -570,6 +578,27 @@ export const MediaGallery: React.FC<MediaGalleryProps> = ({
         }}
       >
         <Spin size="large" tip="正在加载媒体文件..." />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        style={{
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          gap: 8,
+          padding: 24,
+          textAlign: "center",
+          color: token.colorTextSecondary,
+        }}
+      >
+        <div style={{ color: token.colorError }}>读取这个目录失败：{error}</div>
+        <Button onClick={() => setRetryKey((v) => v + 1)}>重试</Button>
       </div>
     );
   }

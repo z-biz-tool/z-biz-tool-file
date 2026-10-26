@@ -25,6 +25,7 @@ interface ColumnViewProps {
 interface CacheEntry {
   entries: FileEntry[];
   loading: boolean;
+  error?: string;
 }
 
 /** 将路径拆分为从根到当前目录的每一段路径 */
@@ -120,7 +121,13 @@ export default function ColumnView({
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
   const inFlightRef = useRef<Set<string>>(new Set());
   const [cacheVersion, setCacheVersion] = useState(0); // 触发重渲染
+  const [reloadKey, setReloadKey] = useState(0); // 重试失败的列
   const cacheKey = (p: string, hidden: boolean) => `${p}::${hidden ? 1 : 0}`;
+
+  const retryColumn = (path: string) => {
+    cacheRef.current.delete(cacheKey(path, showHidden));
+    setReloadKey((v) => v + 1);
+  };
 
   // ——— 列宽：每列独立可调，默认 200，记忆到 localStorage ———
   const [colWidths, setColWidths] = useState<number[]>(() => {
@@ -211,8 +218,8 @@ export default function ColumnView({
             loading: false,
           });
         })
-        .catch(() => {
-          cache.set(k, { entries: [], loading: false });
+        .catch((e) => {
+          cache.set(k, { entries: [], loading: false, error: String(e) });
         })
         .finally(() => {
           inflight.delete(k);
@@ -220,7 +227,7 @@ export default function ColumnView({
         });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPath, showHidden, lastSegmentKey]);
+  }, [currentPath, showHidden, lastSegmentKey, reloadKey]);
 
   /** 自动滚动到最右侧列 */
   useEffect(() => {
@@ -271,7 +278,7 @@ export default function ColumnView({
           entries: [],
           loading: true,
         };
-        const { entries, loading } = cacheEntry;
+        const { entries, loading, error } = cacheEntry;
         return (
         <div
           key={seg.path}
@@ -321,7 +328,15 @@ export default function ColumnView({
                 加载中...
               </div>
             )}
-            {!loading && entries.length === 0 && (
+            {!loading && error && (
+              <div style={{ padding: 12, fontSize: 12, color: token.colorError }}>
+                <div>读取失败：{error}</div>
+                <Button size="small" type="link" style={{ padding: 0 }} onClick={() => retryColumn(seg.path)}>
+                  重试
+                </Button>
+              </div>
+            )}
+            {!loading && !error && entries.length === 0 && (
               <div
                 style={{
                   padding: 12,
@@ -337,11 +352,21 @@ export default function ColumnView({
               return (
                 <div
                   key={entry.path}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${entry.is_dir ? "打开文件夹" : "选中文件"}「${entry.name}」`}
                   onClick={() => {
                     if (entry.is_dir) {
                       handleFolderClick(entry);
                     } else {
                       handleFileClick(entry);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      if (entry.is_dir) handleFolderClick(entry);
+                      else handleFileClick(entry);
                     }
                   }}
                   style={{

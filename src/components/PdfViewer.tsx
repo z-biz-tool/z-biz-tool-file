@@ -46,7 +46,11 @@ export default function PdfViewer({ filePath }: Props) {
       .then((result: unknown) => {
         setMeta(result as PdfMeta);
       })
-      .catch(() => setMeta(null))
+      .catch((e) => {
+        // 元信息只用于顶栏展示，拿不到就少一行
+        console.warn("[pdf] 读取 PDF 元信息失败:", e);
+        setMeta(null);
+      })
       .finally(() => setLoading(false));
   }, [filePath]);
 

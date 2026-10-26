@@ -283,7 +283,8 @@ function AppShellInner() {
     try {
       const raw = localStorage.getItem("z-tool-table-col-widths");
       return raw ? (JSON.parse(raw) as Record<string, number>) : {};
-    } catch {
+    } catch (e) {
+      console.warn("[ui] 表头列宽记录损坏，本次用默认列宽:", e);
       return {};
     }
   });
@@ -292,7 +293,10 @@ function AppShellInner() {
   useEffect(() => {
     invoke("updater_silent_check").then((status) => {
       if (status) setHasUpdate(true);
-    }).catch(() => {});
+    }).catch((e) => {
+      /* 静默检查本来就不打扰用户，但失败原因要能查 */
+      console.warn("[updater] 静默检查失败（不影响使用）:", e);
+    });
   }, []);
 
   useEffect(() => {
@@ -370,7 +374,9 @@ function AppShellInner() {
   // 组件 unmount 时停止监听
   useEffect(() => {
     return () => {
-      invoke("stop_watching").catch(() => {});
+      invoke("stop_watching").catch((e) => {
+        console.warn("[watch] 停止文件监听失败（退出后由后端回收）:", e);
+      });
     };
   }, []);
   const {
@@ -434,15 +440,18 @@ function AppShellInner() {
 
   // 加载目录
   const [dirLoading, setDirLoading] = useState(true);
+  const [dirError, setDirError] = useState<string | null>(null);
   const loadDirectory = useCallback((path: string) => {
     const cmd = showHidden ? "list_directory_with_hidden" : "list_directory";
     const args = showHidden ? { path, showHidden: true } : { path };
     setDirLoading(true);
+    setDirError(null);
     invoke(cmd, args)
       .then((entries: unknown) => {
         const list = entries as FileEntry[];
         setFileList(list);
         setDirLoading(false);
+        setDirError(null);
         // 列表是唯一权威：这一层现在有什么就按什么对齐索引（后台跑，不挡渲染）
         syncDirIndex(
           path,
@@ -456,6 +465,11 @@ function AppShellInner() {
       .catch((err) => {
         // 加载失败也必须收掉骨架屏，否则视图永远停在"还在转"的状态
         setDirLoading(false);
+        // 旧目录的行不能留在新路径下面：那是在把上一层的文件冒充成这一层的
+        setFileList([]);
+        setSelectedFile(null);
+        setSelectedRowKeys([]);
+        setDirError(String(err));
         message.error("加载目录失败: " + err);
       });
   }, [showHidden, setFileList, message]);
@@ -474,6 +488,9 @@ function AppShellInner() {
   // 导航到路径
   const navigateTo = useCallback((path: string, isRoot: boolean = false) => {
     setCurrentPath(path);
+    // 换目录先清掉上一层的行：慢盘上加载那一两秒里不能把旧目录冒充成新目录
+    setFileList([]);
+    setDirError(null);
     loadDirectory(path);
     // 同步更新 active tab 的 path
     if (activeTabId) updateActiveTabPath(path);
@@ -519,7 +536,10 @@ function AppShellInner() {
       .then(setArchiveOpenExts)
       // 取不到就退回"压缩包一律交给系统"：那是这次改动之前的行为，
       // 降级可用，比让双击整个失效（连目录都进不去）好
-      .catch(() => setArchiveOpenExts([]));
+      .catch((e) => {
+        console.warn("[archive] 读取可解压扩展名失败，压缩包改交给系统打开:", e);
+        setArchiveOpenExts([]);
+      });
   }, []);
 
   // showHidden变化时重新加载
@@ -530,7 +550,9 @@ function AppShellInner() {
   // 监听开关 / 切换目录：全局唯一一处 start_watching，关闭时显式 stop_watching
   useEffect(() => {
     if (!autoWatch) {
-      invoke("stop_watching").catch(() => {});
+      invoke("stop_watching").catch((e) => {
+        console.warn("[watch] 停止文件监听失败（退出后由后端回收）:", e);
+      });
       return;
     }
     if (!currentPath) return;
@@ -860,9 +882,10 @@ function AppShellInner() {
               failed.push(`${r.name}: ${err}`);
             }
           }
-          message.success(`已处理 ${ok} 项${failed.length ? `，失败 ${failed.length} 项` : ""}`);
+          // 一项都没成功就别报「已处理」：那会让用户以为删掉了
+          if (ok > 0) message.success(`已删除 ${ok} 项`);
           // 被拦下的那条路径往往才是用户要的答案（path_guard 会说明原因），只报第一条
-          if (failed.length) message.error(failed[0]);
+          if (failed.length) message.error(`${failed.length} 项没有删除：${failed[0]}`);
           setSelectedRowKeys([]);
           setSelectionAnchor(null);
           loadDirectory(currentPath);
@@ -2166,7 +2189,25 @@ function AppShellInner() {
               role="region"
               aria-label="文件列表"
             >
-              {viewMode === "table" ? (
+              {dirError ? (
+                <div
+                  role="alert"
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    padding: 24,
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ color: "var(--ant-color-error)" }}>读取这个目录失败：{dirError}</div>
+                  <div style={{ color: "var(--ant-color-text-secondary)", fontSize: 12 }}>{currentPath}</div>
+                  <Button size="small" onClick={() => loadDirectory(currentPath)}>重试</Button>
+                </div>
+              ) : viewMode === "table" ? (
                 <Dropdown
                   trigger={["contextMenu"]}
                   menu={{ items: selectedFile ? contextMenuItems(selectedFile) : [] }}

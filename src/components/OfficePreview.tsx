@@ -136,7 +136,13 @@ export default function OfficePreview({ filePath, fileName }: Props) {
               size="small"
               type="text"
               icon={<FolderOpenOutlined />}
-              onClick={() => invoke("open_with_default_app", { path: filePath }).catch(() => {})}
+              onClick={async () => {
+                try {
+                  await invoke("open_with_default_app", { path: filePath });
+                } catch (e) {
+                  message.error(`没有用系统默认程序打开: ${e}`);
+                }
+              }}
             />
           </Tooltip>
         </div>

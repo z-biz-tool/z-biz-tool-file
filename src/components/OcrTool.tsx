@@ -59,11 +59,20 @@ export default function OcrTool({ open, onClose, initialPath }: OcrToolProps) {
 
   useEffect(() => {
     if (open) {
-      invoke<OcrLanguage[]>("list_ocr_languages").then(setLanguages).catch(() => {});
-      invoke<boolean>("check_tesseract").then(setTesseractOk).catch(() => setTesseractOk(false));
+      invoke<OcrLanguage[]>("list_ocr_languages")
+        .then(setLanguages)
+        .catch((e) => {
+          message.warning(`没读到已装的语言包，只能先选内置语言: ${e}`);
+        });
+      invoke<boolean>("check_tesseract")
+        .then(setTesseractOk)
+        .catch((e) => {
+          console.warn("[ocr] 检测 tesseract 失败，按未安装处理:", e);
+          setTesseractOk(false);
+        });
       if (initialPath) setImagePath(initialPath);
     }
-  }, [open, initialPath]);
+  }, [open, initialPath, message]);
 
   const pickImage = async () => {
     try {

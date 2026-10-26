@@ -124,10 +124,13 @@ export default function FileContentPreview({
       return;
     }
 
-    // 文件元信息
+    // 文件元信息：拿不到就少显示一行，不挡预览，但要在控制台留痕
     invoke<FileInfo>("get_file_info", { path: file.path })
       .then((info) => setFileInfo(info))
-      .catch(() => setFileInfo(null));
+      .catch((e) => {
+        console.warn("[preview] 读取文件信息失败:", e);
+        setFileInfo(null);
+      });
 
     if (fileType === "text" || fileType === "markdown") {
       setLoading(true);
@@ -142,6 +145,24 @@ export default function FileContentPreview({
         .catch((err) => setError("读取文件失败: " + err))
         .finally(() => setLoading(false));
     }
+  }, [file.path, file.is_dir, fileType]);
+
+  // EXIF 只能在 effect 里拉：放在 render 里每次重渲染都会再 invoke 一次（setExif 触发重渲染 → 死循环）
+  useEffect(() => {
+    if (file.is_dir || fileType !== "image") return;
+    let alive = true;
+    invoke<ExifInfo | null>("read_exif", { path: file.path })
+      .then((info) => {
+        if (alive) setExif(info);
+      })
+      .catch((e) => {
+        // 很多格式本来就没有 EXIF，读不到不算错误，但要能查
+        console.warn("[preview] 读取 EXIF 失败:", e);
+        if (alive) setExif(null);
+      });
+    return () => {
+      alive = false;
+    };
   }, [file.path, file.is_dir, fileType]);
 
   const handleMdCopy = useCallback(async () => {
@@ -194,10 +215,7 @@ export default function FileContentPreview({
   } else {
     switch (fileType) {
       case "image": {
-        // 异步加载 EXIF（仅 JPEG/TIFF 有意义，HEIC/WebP 等可能没数据）
-        invoke<ExifInfo | null>("read_exif", { path: file.path })
-          .then(setExif)
-          .catch(() => setExif(null));
+        // EXIF 在 effect 里异步加载（仅 JPEG/TIFF 有意义，HEIC/WebP 等可能没数据）
         // 在图片下方显示 EXIF 信息
         const showExif = !!(
           exif &&

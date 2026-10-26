@@ -139,12 +139,14 @@ export default function DuplicateFinder({
         setDeleting(true);
         let successCount = 0;
         let failCount = 0;
+        let firstError = "";
         for (const path of pathsToDelete) {
           try {
             await invoke("delete_file", { path });
             successCount++;
-          } catch {
+          } catch (e) {
             failCount++;
+            if (!firstError) firstError = String(e);
           }
         }
         setDeleting(false);
@@ -164,7 +166,7 @@ export default function DuplicateFinder({
           onRefresh();
         }
         if (failCount > 0) {
-          message.error(`${failCount} 个文件删除失败`);
+          message.error(`${failCount} 个文件删除失败：${firstError}`);
         }
       },
     });

@@ -84,7 +84,9 @@ export default function SettingsModal({ open, onClose }: Props) {
       .finally(() => setLoading(false));
     invoke<string>("get_llm_config_path")
       .then(setConfigPath)
-      .catch(() => {});
+      .catch((e) => {
+        console.warn("[settings] 读不到配置文件路径:", e);
+      });
   }, [open]);
 
   const onProviderChange = (provider: string) => {
