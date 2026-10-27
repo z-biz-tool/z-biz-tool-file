@@ -201,6 +201,16 @@ function ResizableHeaderCell({
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
   const { message, modal } = AntdApp.useApp();
+  // 剪贴板可能被权限/非安全上下文拒绝；先 await 再报成功
+  const copyToClipboard = async (text: string, okText: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success(okText);
+    } catch (e) {
+      console.warn("[file] 写入剪贴板失败:", e);
+      message.error("复制失败，请手动复制");
+    }
+  };
   // ⌘ + ⇧ + L 走的就是这里（注册表那条 spec）；主题本身由 _shared/ThemeProvider 持久化
   const { toggle: toggleTheme } = useTheme();
   const [rootPath, setRootPath] = useState("");
@@ -1044,8 +1054,7 @@ function AppShellInner() {
       { key: "cut", label: `剪切${hint("剪切选中")}`, icon: <ScissorOutlined />, onClick: () => handleCut([record]) },
       { key: "rename", label: `重命名${hint("重命名选中项")}`, icon: <EditOutlined />, onClick: () => handleRenameOne([record]) },
       { key: "copy-path", label: "复制完整路径", icon: <CopyFilled />, onClick: () => {
-        navigator.clipboard.writeText(record.path);
-        message.success("已复制路径");
+        void copyToClipboard(record.path, "已复制路径");
       }},
       { key: "delete", label: "移到回收站", icon: <DeleteOutlined />, onClick: () => handleDelete(record, false) },
       { key: "delete_permanent", label: "永久删除", danger: true, onClick: () => handleDelete(record, true) },
@@ -1183,8 +1192,7 @@ function AppShellInner() {
         label: `复制 ${count} 个路径`,
         icon: <CopyFilled />,
         onClick: () => {
-          navigator.clipboard.writeText(records.map((r) => r.path).join("\n"));
-          message.success(`已复制 ${count} 个路径`);
+          void copyToClipboard(records.map((r) => r.path).join("\n"), `已复制 ${count} 个路径`);
         },
       },
       {
@@ -1192,8 +1200,7 @@ function AppShellInner() {
         label: `复制 ${count} 个文件名`,
         icon: <CopyFilled />,
         onClick: () => {
-          navigator.clipboard.writeText(records.map((r) => r.name).join("\n"));
-          message.success(`已复制 ${count} 个文件名`);
+          void copyToClipboard(records.map((r) => r.name).join("\n"), `已复制 ${count} 个文件名`);
         },
       },
       { type: "divider" as const },
