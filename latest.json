@@ -1,0 +1,23 @@
+{
+  "version": "0.2.2",
+  "notes": "See the assets below to download this version.",
+  "pub_date": "2026-10-28T17:58:53Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://github.com/z-biz-tool/z-biz-tool-file/releases/download/v0.2.2/z-biz-tool-file_aarch64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK1pncElyOXF1bFpiZktCS1JpNFZOeG9qVGpiSW52WnJLeGpDMXNpQ3VKNktmbWJTMElVWmNrZTgxbk96c3AxK0UxOU5pMXRlOWxsdHBIQjdGMlB6UUFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjEwMDYwCWZpbGU6ei1iaXotdG9vbC1maWxlLmFwcC50YXIuZ3oKTDNWMFkyZWpkTWlMalZMeHMzWGhDWTQ4TTlPbWUwd2ptSzhTK09lZERmbTVmbWZSM1AxeXYvYzhhdVlxUThkVWZ6bGQ5UjBMM3M0ekxIaU5scWJBREE9PQo="
+    },
+    "darwin-x86_64": {
+      "url": "https://github.com/z-biz-tool/z-biz-tool-file/releases/download/v0.2.2/z-biz-tool-file_x64.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK1NUcDNKdWYzaXJhaEg5aDFudmswZjNMY0tzdm05Z3JZelpuc2lyTDlSbGFHZ3AvbStpckdVYktHZnhpcGpxVTVRaTY4c013UHM3UHh6aHpYdmxQV0FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjEwMjk4CWZpbGU6ei1iaXotdG9vbC1maWxlLmFwcC50YXIuZ3oKRllyb3dXTkpreFhndWpYUTNvMVJ6NUxPeEJGU2NjU0Jjb0l4RTVGM2YxTGN6TDRabGg3M2xOMjhMMGl2ZGxabXhLcmR5VlNaVTdqOFVaVWNSNlJSRHc9PQo="
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/z-biz-tool/z-biz-tool-file/releases/download/v0.2.2/z-biz-tool-file_0.2.2_amd64.AppImage",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK1RlQTJxbG9qYU14MzFMRGdjOHFaS0NjZUF0eUV2SnJ4QWJScDNkQ0VNcENFUWFhK1E1c3BHRG94dXUrajBmTU1udTlOL0R6c2VEaGZOWVZVZjNieXdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA5NjYwCWZpbGU6ei1iaXotdG9vbC1maWxlXzAuMi4yX2FtZDY0LkFwcEltYWdlCmdpbWtQVDQyeW9IVmNXSlNORVFvZE9mb3kzSktZNDdmdG1KUE96elpiKzhhVGF3bWlWUXg2QTVRYzJtSHdDcWljd2JhbDlHbWdLZkNBS2M0bEl4TkRnPT0K"
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/z-biz-tool/z-biz-tool-file/releases/download/v0.2.2/z-biz-tool-file_0.2.2_x64_en-US.msi",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSdXNzZDVpbWtnK2FCdFRaNGVjM2syU3BSZTJZdWd4cXJiZGpXWFE5dXc1ZDN0LzVxZGV1Zkh6L3Y5OXN4T2dzRE1pcGhJdTV1aTdiV3Q0VkhIT093MU9OWVZOd0FnZVFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjA5ODgxCWZpbGU6ei1iaXotdG9vbC1maWxlXzAuMi4yX3g2NF9lbi1VUy5tc2kKL2RYaU1WRVd4SXRsbVlCYzFxQzIyaUhqbWJTRDFvTzlnMHkwV014cUV5Z3VROTdRTW5mYkNxZjRFNzZLaXp6UFVwa3YzcW1mNkZFL2phbDhHVzV2Q0E9PQo="
+    }
+  }
+}
