@@ -158,6 +158,8 @@ pub fn run() {
             llm_config::save_llm_config,
             llm_config::get_llm_config_path,
             llm_config::test_llm_config,
+            llm_config::list_llm_presets,
+            llm_config::list_llm_models,
             trash::move_to_trash,
             trash::list_trash,
             trash::restore_from_trash,

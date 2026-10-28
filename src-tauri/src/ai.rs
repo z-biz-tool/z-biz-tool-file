@@ -155,6 +155,50 @@ mod tests {
     }
 
     #[test]
+    fn preset_supplies_base_url_when_config_leaves_it_empty() {
+        // 本轮改动的主目的：存量配置里 provider 写 "deepseek"、base_url 空着，
+        // 以前必须用户手抄地址（抄错一个字符就是 404），现在自动补上。
+        let c = cfg("deepseek");
+        assert!(c.base_url.is_empty(), "前置条件：本测试依赖 base_url 为空");
+        let cap = c.to_cap().unwrap();
+        assert_eq!(cap.preset, Some("deepseek"));
+        assert_eq!(
+            cap.endpoint(cap_llm::Action::Chat).unwrap(),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn preset_covers_the_common_chinese_vendors() {
+        for (provider, expect_contains) in [
+            ("deepseek", "api.deepseek.com"),
+            ("qwen", "dashscope.aliyuncs.com"),
+            ("kimi", "api.moonshot.cn"),
+            ("glm", "open.bigmodel.cn"),
+            ("doubao", "volces.com"),
+        ] {
+            let cap = cfg(provider).to_cap().unwrap();
+            let ep = cap.endpoint(cap_llm::Action::Chat).unwrap();
+            assert!(
+                ep.contains(expect_contains),
+                "provider={provider} 端点没落到预设地址：{ep}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_base_url_still_wins_over_preset() {
+        // 用户显式填的地址永远优先 —— 预设只是兜底，不是强制
+        let mut c = cfg("deepseek");
+        c.base_url = "https://my-proxy.corp/v1".to_string();
+        let cap = c.to_cap().unwrap();
+        assert_eq!(
+            cap.endpoint(cap_llm::Action::Chat).unwrap(),
+            "https://my-proxy.corp/v1/chat/completions"
+        );
+    }
+
+    #[test]
     fn zero_temperature_is_passed_through() {
         let mut c = cfg("openai");
         c.temperature = 0.0;
