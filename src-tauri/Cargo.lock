@@ -631,6 +631,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-hub"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+]
+
+[[package]]
 name = "cap-img"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7320,6 +7329,7 @@ dependencies = [
  "bzip2",
  "cab",
  "cap-doc",
+ "cap-hub",
  "cap-img",
  "cap-llm",
  "chrono",

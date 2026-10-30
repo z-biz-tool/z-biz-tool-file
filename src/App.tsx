@@ -518,6 +518,43 @@ function AppShellInner() {
     });
   }, [historyIndex, setCurrentPath, loadDirectory, activeTabId, updateActiveTabPath]);
 
+  // 家族深链（zbiz://file/open?file=…）：box 等产品递过来的文件，切到它所在目录。
+  // navigateTo 依赖 historyIndex 会频繁变化，监听器里用 ref 取最新一份。
+  const navigateToRef = useRef(navigateTo);
+  useEffect(() => { navigateToRef.current = navigateTo; }, [navigateTo]);
+
+  const applyZbizPending = useCallback(async () => {
+    try {
+      const items = await invoke<
+        Array<{ product: string; action: string; params: Record<string, string> }>
+      >("zbiz_take_pending");
+      for (const h of items ?? []) {
+        const file = h.params?.file;
+        if (h.product === "file" && h.action === "open" && file) {
+          navigateToRef.current(parentOfPath(file));
+        }
+      }
+    } catch (err) {
+      console.warn("[file] 处理家族深链失败:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("zbiz-open", () => {
+      void applyZbizPending();
+    })
+      .then((fn) => { unlisten = fn; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, [applyZbizPending]);
+
+  // 冷启动时队列里已经有深链（前端还没挂监听）。等主目录定位完成后再取，
+  // 否则会被紧随其后的主目录导航覆盖。
+  useEffect(() => {
+    if (rootPath) void applyZbizPending();
+  }, [rootPath, applyZbizPending]);
+
   // 初始化：定位到当前登录用户的主目录（跨平台解析，不硬编码）
   useEffect(() => {
     let cancelled = false;

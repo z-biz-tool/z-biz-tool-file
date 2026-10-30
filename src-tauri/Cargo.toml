@@ -13,6 +13,8 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# 家族统一深链协议（cap-hub）：zbiz:// 的构造、解析、待处理队列与产品清单。
+cap-hub = { path = "../../z-biz-tool-capability/crates/cap-hub", features = ["tauri"] }
 tauri = { version = "2", features = ["protocol-asset"] }
 # 文档解析原语（GAP-06 文档一片）：PDF / EPUB / MOBI。
 # 版本与实现统一收口到 z-biz-tool-capability/crates/cap-doc，
