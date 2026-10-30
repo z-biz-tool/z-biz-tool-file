@@ -2478,15 +2478,38 @@ pub fn diff_files_blocking(old_path: &str, new_path: &str) -> Result<DiffResult,
     })
 }
 
+/// 一条目录差异条目。
+///
+/// 相对路径是"身份"，左右绝对路径是"落点"：前端点某个条目要能直接下钻到文件级 diff，
+/// 光有 `sub/a.txt` 这个相对路径是不够的 —— 后端得能把两侧的真实路径还原出来。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirDiffEntry {
+    /// 相对各自根目录的路径，子目录里的文件形如 `sub/a.txt`
+    pub rel_path: String,
+    /// 左侧（基准侧）的绝对路径；该侧不存在时为 None
+    pub left_path: Option<String>,
+    /// 右侧（对比侧）的绝对路径；该侧不存在时为 None
+    pub right_path: Option<String>,
+    /// "added" | "removed" | "modified"
+    pub status: String,
+}
+
 /// 比较两个目录（简单对比文件列表）
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DirDiffSummary {
-    pub added_files: Vec<String>,
-    pub removed_files: Vec<String>,
-    pub modified_files: Vec<String>,
+    pub added_files: Vec<DirDiffEntry>,
+    pub removed_files: Vec<DirDiffEntry>,
+    pub modified_files: Vec<DirDiffEntry>,
 }
 
-/// 比较目录内容（仅比较文件名 + 大小 + 修改时间）
+/// 比较目录内容（大小不同即"已修改"；大小相同则比内容）
+///
+/// 判定口径与 `compare_directories` 一致（`diff -r` 同款）：**大小不同即"已修改"；
+/// 大小相同则以内容为准，修改时间不参与判定**。
+///
+/// 早先这里比的是"大小 + 修改时间"，而 mtime 精度只到秒 —— 同一秒里写出的两个
+/// 同尺寸不同内容的文件会被判成"相同"，于是目录 diff 列表里根本不出现这一项，
+/// 用户点不进去也就永远发现不了。这不是显示问题，是漏报。
 #[tauri::command]
 pub async fn quick_diff_dirs(
     left_dir: String,
@@ -2499,50 +2522,202 @@ pub async fn quick_diff_dirs(
 }
 
 pub fn quick_diff_dirs_blocking(left_dir: &str, right_dir: &str) -> Result<DirDiffSummary, String> {
-    let collect = |dir: &str| -> Result<std::collections::HashMap<String, (u64, u64)>, String> {
-        let mut map = std::collections::HashMap::new();
-        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    // 两个目录都要过路径守卫：目录 diff 会把里面的每个文件的绝对路径吐给前端，
+    // 守卫是"这些路径能被点开"这条承诺的唯一依据。
+    let left_root = crate::path_guard::validate(left_dir).map_err(|e| e.to_string())?;
+    let right_root = crate::path_guard::validate(right_dir).map_err(|e| e.to_string())?;
+    if !left_root.is_dir() {
+        return Err(format!("左侧不是目录: {}", left_dir));
+    }
+    if !right_root.is_dir() {
+        return Err(format!("右侧不是目录: {}", right_dir));
+    }
+
+    let collect = |root: &Path| -> HashMap<String, u64> {
+        let mut map = HashMap::new();
+        for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
             if entry.file_type().is_file() {
-                let meta = entry.metadata().ok();
-                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let mtime = meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let rel = entry.path().strip_prefix(dir).unwrap_or(entry.path());
-                map.insert(rel.to_string_lossy().to_string(), (size, mtime));
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
+                map.insert(rel.to_string_lossy().to_string(), size);
             }
         }
-        Ok(map)
+        map
     };
 
-    let left = collect(left_dir)?;
-    let right = collect(right_dir)?;
+    let left = collect(&left_root);
+    let right = collect(&right_root);
 
     let mut added = Vec::new();
     let mut removed = Vec::new();
     let mut modified = Vec::new();
 
-    for (k, v) in &right {
+    for (k, rsize) in &right {
         match left.get(k) {
-            None => added.push(k.clone()),
-            Some(lv) if *lv != *v => modified.push(k.clone()),
-            _ => {}
+            None => added.push(DirDiffEntry {
+                rel_path: k.clone(),
+                left_path: None,
+                right_path: Some(right_root.join(k).to_string_lossy().to_string()),
+                status: "added".to_string(),
+            }),
+            Some(lsize) => {
+                // 尺寸不同已经足够定论，不必付读内容的 IO；尺寸相同才真读一遍。
+                let differs =
+                    lsize != rsize || !same_content(&left_root.join(k), &right_root.join(k));
+                if differs {
+                    modified.push(DirDiffEntry {
+                        rel_path: k.clone(),
+                        left_path: Some(left_root.join(k).to_string_lossy().to_string()),
+                        right_path: Some(right_root.join(k).to_string_lossy().to_string()),
+                        status: "modified".to_string(),
+                    });
+                }
+            }
         }
     }
     for k in left.keys() {
         if !right.contains_key(k) {
-            removed.push(k.clone());
+            removed.push(DirDiffEntry {
+                rel_path: k.clone(),
+                left_path: Some(left_root.join(k).to_string_lossy().to_string()),
+                right_path: None,
+                status: "removed".to_string(),
+            });
         }
     }
+
+    // HashMap 的遍历顺序是不确定的，而前端要按名字排序展示、测试也要稳定断言，
+    // 所以三组各自排一次。
+    added.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    removed.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    modified.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
     Ok(DirDiffSummary {
         added_files: added,
         removed_files: removed,
         modified_files: modified,
     })
+}
+
+// ============================================================================
+// diff 结果落地：把一侧的内容应用到另一侧
+// ============================================================================
+
+/// diff 应用的方向。
+///
+/// 名字读作"从哪一侧流向哪一侧"，源在前、目标在后：
+/// - `left_to_right`：拿左侧的内容盖掉右侧（"用左侧覆盖右侧"）
+/// - `right_to_left`：拿右侧的内容盖掉左侧（"用右侧覆盖左侧"）
+/// - `swap`：两侧内容互换
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffApplyMode {
+    LeftToRight,
+    RightToLeft,
+    Swap,
+}
+
+/// 应用结果：告诉前端实际写了哪几个文件、各多少字节。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffApplyResult {
+    /// 被写入的目标路径（swap 时是两个）
+    pub written: Vec<String>,
+    /// 每个写入文件的字节数
+    pub bytes: Vec<u64>,
+}
+
+/// 把 diff 的一侧应用到另一侧。
+///
+/// 这是全站 diff 能力里唯一会**写用户文件**的入口，所以三道关口一道都不能少：
+/// 1. 两条路径都要过 `path_guard::validate`（绝对路径、拒绝 `..`、黑名单、拆穿符号链接）；
+/// 2. 两条路径都必须是已存在的普通文件 —— 目录、二进制占位、符号链接一律拒绝；
+/// 3. 写入走 `atomic_write`（tmp + rename），中途断电不会留下半截文件。
+///
+/// 两条路径指向同一个文件时直接报错：那不是"覆盖自己"那么简单，
+/// swap 会把内容原地换掉（等于没变），left_to_right 会把自己盖成自己。
+#[tauri::command]
+pub async fn apply_diff_side(
+    left_path: String,
+    right_path: String,
+    mode: DiffApplyMode,
+) -> Result<DiffApplyResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        apply_diff_side_blocking(&left_path, &right_path, mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub fn apply_diff_side_blocking(
+    left_path: &str,
+    right_path: &str,
+    mode: DiffApplyMode,
+) -> Result<DiffApplyResult, String> {
+    let left = crate::path_guard::validate(left_path).map_err(|e| e.to_string())?;
+    let right = crate::path_guard::validate(right_path).map_err(|e| e.to_string())?;
+
+    if left == right {
+        return Err("两侧是同一个文件，没法应用".to_string());
+    }
+    for (p, raw) in [(&left, left_path), (&right, right_path)] {
+        if p.is_dir() {
+            return Err(format!("是目录，不能按文件应用: {}", raw));
+        }
+        if !p.is_file() {
+            return Err(format!("不是普通文件，不能应用: {}", raw));
+        }
+    }
+
+    // 两侧内容都要先读进内存：swap 是两个写入，读完再写才不会互相踩。
+    let left_bytes = fs::read(&left).map_err(|e| format!("读取左侧失败: {}", e))?;
+    let right_bytes = fs::read(&right).map_err(|e| format!("读取右侧失败: {}", e))?;
+
+    match mode {
+        DiffApplyMode::LeftToRight => {
+            write_preserving_mode(&right, &left_bytes)?;
+            Ok(DiffApplyResult {
+                written: vec![right.to_string_lossy().to_string()],
+                bytes: vec![left_bytes.len() as u64],
+            })
+        }
+        DiffApplyMode::RightToLeft => {
+            write_preserving_mode(&left, &right_bytes)?;
+            Ok(DiffApplyResult {
+                written: vec![left.to_string_lossy().to_string()],
+                bytes: vec![right_bytes.len() as u64],
+            })
+        }
+        DiffApplyMode::Swap => {
+            // 两个写入，其中一个失败的话另一个已经改了 —— 用内存里留着的原内容回滚，
+            // 免得用户看到"只换了一半"的两份文件。
+            write_preserving_mode(&left, &right_bytes)?;
+            if let Err(e) = write_preserving_mode(&right, &left_bytes) {
+                let _ = write_preserving_mode(&left, &left_bytes);
+                return Err(format!("写入右侧失败，已回滚左侧: {}", e));
+            }
+            Ok(DiffApplyResult {
+                written: vec![
+                    left.to_string_lossy().to_string(),
+                    right.to_string_lossy().to_string(),
+                ],
+                bytes: vec![right_bytes.len() as u64, left_bytes.len() as u64],
+            })
+        }
+    }
+}
+
+/// 原子写，并保留目标文件原有的权限位。
+///
+/// `atomic_write` 走 tmp + rename，rename 换掉的是 inode，原文件的权限位会退回
+/// 创建 tmp 时的默认值 —— 一个原本 0600 的私密文件被盖一下就变成 0644 了。
+/// 所以写完把权限补回去。
+fn write_preserving_mode(target: &Path, bytes: &[u8]) -> Result<(), String> {
+    let perms = fs::metadata(target).ok().map(|m| m.permissions());
+    crate::atomic_write::atomic_write(target, bytes)?;
+    if let Some(p) = perms {
+        let _ = fs::set_permissions(target, p);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2814,6 +2989,352 @@ mod diff_tests {
         assert_eq!(r.removed, 8000);
         assert_eq!(r.added, 8000);
         eprintln!("diff 8000x8000 (degraded fallback) elapsed = {:?}", elapsed);
+    }
+}
+
+#[cfg(test)]
+mod dir_diff_tests {
+    use super::*;
+    use crate::test_bridge::TempDir;
+
+    /// 建一对左右目录，返回 (TempDir, 左侧根, 右侧根)。
+    ///
+    /// TempDir 只有一个，所以左右两侧都放在它底下：左侧 `L/`、右侧 `R/`。
+    fn pair(tag: &str) -> (TempDir, PathBuf, PathBuf) {
+        let ws = TempDir::new(tag);
+        let left = ws.join("L");
+        let right = ws.join("R");
+        fs::create_dir_all(&left).unwrap();
+        fs::create_dir_all(&right).unwrap();
+        (ws, left, right)
+    }
+
+    fn write(root: &Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&p, content).unwrap();
+    }
+
+    /// 目录 diff 的每一条都必须能还原出左右两侧的绝对路径。
+    ///
+    /// 这是"点目录 diff 结果能下钻到文件级 diff"的地基：前端拿到 rel_path 是没法
+    /// 自己拼出绝对路径的（两侧根目录不同，且中间可能隔着一层符号链接）。
+    #[test]
+    fn dir_diff_entries_carry_both_absolute_paths() {
+        let (_ws, left, right) = pair("dirdiff");
+
+        write(&left, "same.txt", "same");
+        write(&right, "same.txt", "same");
+        write(&left, "changed.txt", "old content");
+        write(&right, "changed.txt", "new content");
+        write(&right, "only_right.txt", "right only");
+        write(&left, "only_left.txt", "left only");
+        // 子目录里的文件：相对路径必须保留目录层级，否则绝对路径拼不出来
+        write(&left, "sub/nested.txt", "left nested");
+        write(&right, "sub/nested.txt", "right nested");
+
+        let summary =
+            quick_diff_dirs_blocking(left.to_str().unwrap(), right.to_str().unwrap()).unwrap();
+
+        // 修改项：两侧路径都在，且各自能读回当初写进去的内容
+        let m = summary
+            .modified_files
+            .iter()
+            .find(|e| e.rel_path == "changed.txt")
+            .expect("changed.txt 应被判为 modified");
+        assert_eq!(m.status, "modified");
+        let lp = m.left_path.as_deref().expect("modified 条目必须有左侧路径");
+        let rp = m
+            .right_path
+            .as_deref()
+            .expect("modified 条目必须有右侧路径");
+        assert_eq!(fs::read_to_string(lp).unwrap(), "old content");
+        assert_eq!(fs::read_to_string(rp).unwrap(), "new content");
+        // 路径守卫会把根目录 canonicalize（macOS 上 /var → /private/var），
+        // 所以断言要拿 canonical 过的根来比，不然会把"路径是对的"误判成"路径错了"。
+        let lc = left.canonicalize().unwrap();
+        let rc = right.canonicalize().unwrap();
+        assert!(
+            lp.starts_with(lc.to_str().unwrap()),
+            "左侧路径不在左根下: {}",
+            lp
+        );
+        assert!(
+            rp.starts_with(rc.to_str().unwrap()),
+            "右侧路径不在右根下: {}",
+            rp
+        );
+
+        // 新增项：只有右侧有
+        let a = summary
+            .added_files
+            .iter()
+            .find(|e| e.rel_path == "only_right.txt")
+            .expect("only_right.txt 应被判为 added");
+        assert_eq!(a.status, "added");
+        assert!(a.left_path.is_none(), "新增项左侧不该有路径");
+        let arp = a.right_path.as_deref().expect("新增项必须有右侧路径");
+        assert_eq!(fs::read_to_string(arp).unwrap(), "right only");
+
+        // 删除项：只有左侧有
+        let r = summary
+            .removed_files
+            .iter()
+            .find(|e| e.rel_path == "only_left.txt")
+            .expect("only_left.txt 应被判为 removed");
+        assert_eq!(r.status, "removed");
+        assert!(r.right_path.is_none(), "删除项右侧不该有路径");
+        let rlp = r.left_path.as_deref().expect("删除项必须有左侧路径");
+        assert_eq!(fs::read_to_string(rlp).unwrap(), "left only");
+
+        // 子目录：相对路径带层级，两侧路径都指到真正的那个文件
+        let n = summary
+            .modified_files
+            .iter()
+            .find(|e| e.rel_path == "sub/nested.txt")
+            .expect("sub/nested.txt 应被判为 modified");
+        assert_eq!(n.rel_path, "sub/nested.txt");
+        assert_eq!(
+            fs::read_to_string(n.left_path.as_deref().unwrap()).unwrap(),
+            "left nested"
+        );
+        assert_eq!(
+            fs::read_to_string(n.right_path.as_deref().unwrap()).unwrap(),
+            "right nested"
+        );
+    }
+
+    /// 下钻闭环：目录 diff 给出的那对路径，直接喂给 diff_files 要能拿到行级差异。
+    ///
+    /// 钉的是"前端点一下就能落到行内高亮"这条链路的最后一段 ——
+    /// 光有路径还不够，diff_files 必须真的认这对路径。
+    #[test]
+    fn dir_diff_entry_paths_feed_into_diff_files() {
+        let (_ws, left, right) = pair("dirdiff-drill");
+        write(&left, "doc.txt", "line1\nline2\nline3\n");
+        write(&right, "doc.txt", "line1\nline2 changed\nline3\n");
+
+        let summary =
+            quick_diff_dirs_blocking(left.to_str().unwrap(), right.to_str().unwrap()).unwrap();
+        let e = summary
+            .modified_files
+            .iter()
+            .find(|e| e.rel_path == "doc.txt")
+            .expect("doc.txt 应被判为 modified");
+
+        let r = diff_files_blocking(
+            e.left_path.as_deref().unwrap(),
+            e.right_path.as_deref().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(r.added, 1);
+        assert_eq!(r.removed, 1);
+        assert_eq!(r.equal, 2);
+        assert!(r
+            .lines
+            .iter()
+            .any(|l| l.kind == "remove" && l.content == "line2"));
+        assert!(r
+            .lines
+            .iter()
+            .any(|l| l.kind == "add" && l.content == "line2 changed"));
+    }
+
+    /// 两侧都有的、且内容完全相同的文件不进差异列表。
+    #[test]
+    fn identical_files_are_not_reported() {
+        let (_ws, left, right) = pair("dirdiff-same");
+        write(&left, "same.txt", "same");
+        write(&right, "same.txt", "same");
+
+        let summary =
+            quick_diff_dirs_blocking(left.to_str().unwrap(), right.to_str().unwrap()).unwrap();
+        assert!(summary.modified_files.is_empty());
+        assert!(summary.added_files.is_empty());
+        assert!(summary.removed_files.is_empty());
+    }
+
+    /// 同尺寸、内容不同的文件必须报出来。
+    ///
+    /// 这条钉的是目录 diff 的判定口径。早先它比的是"大小 + 修改时间"，而 mtime
+    /// 精度只到秒 —— 两个在同一秒里写出来的同尺寸文件会被判成"相同"，这一项就
+    /// 从列表里整个消失了，用户连点都点不到。改判据时别把它改回去。
+    #[test]
+    fn same_size_different_content_is_reported_as_modified() {
+        let (_ws, left, right) = pair("dirdiff-samesize");
+        write(&left, "cfg.txt", "aaa");
+        write(&right, "cfg.txt", "bbb");
+
+        let summary =
+            quick_diff_dirs_blocking(left.to_str().unwrap(), right.to_str().unwrap()).unwrap();
+        assert_eq!(summary.modified_files.len(), 1, "同尺寸不同内容必须报出来");
+        assert_eq!(summary.modified_files[0].rel_path, "cfg.txt");
+    }
+
+    /// 目录 diff 的路径要过守卫：非目录、非绝对路径都得被挡下。
+    #[test]
+    fn dir_diff_rejects_non_directories() {
+        let ws = TempDir::new("dirdiff-guard");
+        let file = ws.join("a.txt");
+        fs::write(&file, "x").unwrap();
+
+        let err =
+            quick_diff_dirs_blocking(file.to_str().unwrap(), file.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("左侧不是目录"), "实际: {}", err);
+
+        let err = quick_diff_dirs_blocking("relative/path", "relative/path").unwrap_err();
+        assert!(err.contains("不允许相对路径"), "实际: {}", err);
+    }
+}
+
+#[cfg(test)]
+mod apply_diff_tests {
+    use super::*;
+    use crate::test_bridge::TempDir;
+
+    fn pair(tag: &str) -> (TempDir, PathBuf, PathBuf) {
+        let ws = TempDir::new(tag);
+        let left = ws.join("left.txt");
+        let right = ws.join("right.txt");
+        fs::write(&left, "left content\n").unwrap();
+        fs::write(&right, "right content\n").unwrap();
+        (ws, left, right)
+    }
+
+    #[test]
+    fn left_to_right_overwrites_right_side() {
+        let (_ws, left, right) = pair("apply-lr");
+        let r = apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap();
+        assert_eq!(r.written.len(), 1);
+        assert_eq!(fs::read_to_string(&right).unwrap(), "left content\n");
+        // 源侧不能被自己改掉
+        assert_eq!(fs::read_to_string(&left).unwrap(), "left content\n");
+    }
+
+    #[test]
+    fn right_to_left_overwrites_left_side() {
+        let (_ws, left, right) = pair("apply-rl");
+        apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            DiffApplyMode::RightToLeft,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&left).unwrap(), "right content\n");
+        assert_eq!(fs::read_to_string(&right).unwrap(), "right content\n");
+    }
+
+    #[test]
+    fn swap_exchanges_both_sides() {
+        let (_ws, left, right) = pair("apply-swap");
+        let r = apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            DiffApplyMode::Swap,
+        )
+        .unwrap();
+        assert_eq!(r.written.len(), 2);
+        assert_eq!(fs::read_to_string(&left).unwrap(), "right content\n");
+        assert_eq!(fs::read_to_string(&right).unwrap(), "left content\n");
+    }
+
+    /// 写操作必须走路径守卫：黑名单目录、`..` 穿越、相对路径都要被挡下。
+    #[test]
+    fn apply_refuses_paths_the_guard_blocks() {
+        let (_ws, left, right) = pair("apply-guard");
+
+        // 相对路径
+        let err = apply_diff_side_blocking(
+            "relative.txt",
+            right.to_str().unwrap(),
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap_err();
+        assert!(err.contains("不允许相对路径"), "实际: {}", err);
+
+        // `..` 穿越
+        let traversal = format!(
+            "{}/../escape.txt",
+            right.parent().unwrap().to_str().unwrap()
+        );
+        let err = apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            &traversal,
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap_err();
+        assert!(err.contains("不允许相对路径"), "实际: {}", err);
+
+        // 两侧同一个文件：不是"覆盖自己"，是压根不该做
+        let err = apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            left.to_str().unwrap(),
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap_err();
+        assert!(err.contains("同一个文件"), "实际: {}", err);
+        // 被拒之后内容不能变
+        assert_eq!(fs::read_to_string(&left).unwrap(), "left content\n");
+    }
+
+    /// 目录不能被当成文件来应用。
+    #[test]
+    fn apply_refuses_directories() {
+        let ws = TempDir::new("apply-dir");
+        let file = ws.join("a.txt");
+        fs::write(&file, "x").unwrap();
+        let dir = ws.join("d");
+        fs::create_dir_all(&dir).unwrap();
+
+        let err = apply_diff_side_blocking(
+            dir.to_str().unwrap(),
+            file.to_str().unwrap(),
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap_err();
+        assert!(err.contains("是目录"), "实际: {}", err);
+    }
+
+    /// 写完之后两侧内容一致 —— 这是"应用"这个动作的验收口径。
+    #[test]
+    fn applying_makes_both_sides_identical() {
+        let (_ws, left, right) = pair("apply-identical");
+        apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap();
+        let r = diff_files_blocking(left.to_str().unwrap(), right.to_str().unwrap()).unwrap();
+        assert_eq!(r.added, 0);
+        assert_eq!(r.removed, 0);
+    }
+
+    /// 目标文件原有的权限位不能被写坏（0600 的私密文件不能变成 0644）。
+    #[cfg(unix)]
+    #[test]
+    fn apply_preserves_target_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_ws, left, right) = pair("apply-perm");
+        fs::set_permissions(&right, fs::Permissions::from_mode(0o600)).unwrap();
+
+        apply_diff_side_blocking(
+            left.to_str().unwrap(),
+            right.to_str().unwrap(),
+            DiffApplyMode::LeftToRight,
+        )
+        .unwrap();
+
+        let mode = fs::metadata(&right).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "目标权限被写成了 {:o}", mode);
     }
 }
 

@@ -120,8 +120,10 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 88 → 87：工具栏那个「压缩为ZIP」图标按钮删掉了 —— 工具条上已经有一个「压缩」文字按钮
  * 顶同一件事，而且它不靠 `disabled` 表达"没选中"（没选中就退化成开文件选择框）。
  * 同一个动作摆两个按钮，其中一个是灰的，正是这次要收掉的那种噪音。
+ * 87 → 88：文件对比面板新增一个「统一视图 / 双栏视图」切换按钮（DiffViewer）。
+ * 它只有图标（跟着 tooltip 也只有视觉提示），所以带了 aria-label="切换双栏视图"。
  */
-const TOTAL_ICON_ONLY = 87;
+const TOTAL_ICON_ONLY = 88;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

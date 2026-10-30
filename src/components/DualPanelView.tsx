@@ -16,8 +16,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
 import { resolveHomeDir } from "../utils/homeDir";
-
-// 渐变色主题常量
+import SideBySideDiff from "./SideBySideDiff";
+import { describeApply, applyConfirmText, type DiffApplyAction } from "../utils/diffApply";
 
 interface PanelState {
   currentPath: string;
@@ -27,15 +27,33 @@ interface PanelState {
   selectedFile: FileEntry | null;
 }
 
+interface DiffLine {
+  kind: "context" | "add" | "remove";
+  old_line: number | null;
+  new_line: number | null;
+  content: string;
+}
+
+interface DiffResult {
+  added: number;
+  removed: number;
+  equal: number;
+  lines: DiffLine[];
+  old_size: number;
+  new_size: number;
+}
+
 const Panel: React.FC<{
   panelId: "left" | "right";
   state: PanelState;
-  setState: (s: PanelState) => void;
+  setState: React.Dispatch<React.SetStateAction<PanelState>>;
   onFileOpen: (path: string, isDir: boolean) => void;
   showHidden: boolean;
   onToggleHidden: () => void;
   syncNavigate?: (path: string) => void;
-}> = ({ panelId, state, setState, onFileOpen, showHidden, onToggleHidden, syncNavigate }) => {
+  /** 对比模式下：点文件只选中，不交给系统打开 */
+  selectOnly?: boolean;
+}> = ({ panelId, state, setState, onFileOpen, showHidden, onToggleHidden, syncNavigate, selectOnly }) => {
   const { message } = AntdApp.useApp();
   const { token } = theme.useToken();
 
@@ -45,21 +63,27 @@ const Panel: React.FC<{
       const args = showHidden ? { path, showHidden: true } : { path };
       invoke(cmd, args)
         .then((entries: unknown) => {
-          setState({ ...state, currentPath: path, fileList: entries as FileEntry[] });
+          // 用函数式更新而不是 `{...state}`：加载是异步的，回来时 state 可能已经被
+          // 导航/同步改过了，展开旧快照会把那些改动整个盖掉（选中的文件会消失）。
+          setState((prev) => ({ ...prev, currentPath: path, fileList: entries as FileEntry[] }));
         })
         .catch((err) => {
           message.error(`${panelId} 加载失败: ${err}`);
         });
     },
-    [panelId, showHidden, state, setState]
+    [panelId, showHidden, setState, message]
   );
 
+  // 当前路径变化时重载列表。
+  //
+  // 早先这里只跟 showHidden，于是"同步浏览"把另一侧导航到新路径后，路径变了
+  // 列表却还是旧的 —— 路径条和列表内容对不上。路径是列表的来源，就得跟它走。
   useEffect(() => {
     if (state.currentPath) {
       loadDirectory(state.currentPath);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showHidden]);
+  }, [showHidden, state.currentPath]);
 
   const navigateTo = (path: string, isRoot = false) => {
     if (isRoot) {
@@ -81,7 +105,6 @@ const Panel: React.FC<{
         selectedFile: null,
       });
     }
-    loadDirectory(path);
     // 同步浏览：通知另一个面板跟随导航
     syncNavigate?.(path);
   };
@@ -91,7 +114,6 @@ const Panel: React.FC<{
       const newIndex = state.historyIndex - 1;
       const path = state.history[newIndex];
       setState({ ...state, historyIndex: newIndex, currentPath: path, selectedFile: null });
-      loadDirectory(path);
     }
   };
 
@@ -100,7 +122,6 @@ const Panel: React.FC<{
       const newIndex = state.historyIndex + 1;
       const path = state.history[newIndex];
       setState({ ...state, historyIndex: newIndex, currentPath: path, selectedFile: null });
-      loadDirectory(path);
     }
   };
 
@@ -139,6 +160,16 @@ const Panel: React.FC<{
     return items;
   };
 
+  /** 对比模式下点文件只选中（不打开、不双击触发系统程序） */
+  const handleClick = (record: FileEntry) => {
+    setState({ ...state, selectedFile: record });
+    if (record.is_dir) {
+      navigateTo(record.path);
+    } else if (!selectOnly) {
+      onFileOpen(record.path, false);
+    }
+  };
+
   const columns = [
     {
       title: "名称",
@@ -152,14 +183,7 @@ const Panel: React.FC<{
             alignItems: "center",
             gap: 6,
           }}
-          onClick={() => {
-            setState({ ...state, selectedFile: record });
-            if (record.is_dir) {
-              navigateTo(record.path);
-            } else {
-              onFileOpen(record.path, false);
-            }
-          }}
+          onClick={() => handleClick(record)}
           onDoubleClick={() => {
             if (record.is_dir) {
               navigateTo(record.path);
@@ -311,9 +335,33 @@ interface DualPanelViewProps {
   onOpenFile: (path: string) => void;
 }
 
+/**
+ * 同步浏览：把另一侧导航到同一个路径。
+ *
+ * 只在"同步"开关打开时接线。两侧的 history 各自记一份 —— 面板的后退/前进
+ * 语义是"我这一侧走过哪里"，同步的是当前位置，不是历史。
+ */
+function syncTo(
+  target: PanelState,
+  setTarget: (s: PanelState) => void,
+  path: string
+) {
+  if (!path || target.currentPath === path) return;
+  setTarget({
+    ...target,
+    currentPath: path,
+    history: [...target.history.slice(0, target.historyIndex + 1), path],
+    historyIndex: target.historyIndex + 1,
+    selectedFile: null,
+  });
+}
+
 export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProps) {
+  const { message, modal } = AntdApp.useApp();
   const [showHidden, setShowHidden] = useState(false);
   const [syncBrowsing, setSyncBrowsing] = useState(false);
+  /** "browse" = 两个浏览器；"compare" = 底部展开并排 diff */
+  const [mode, setMode] = useState<"browse" | "compare">("browse");
   const emptyPanel = (): PanelState => ({
     currentPath: "",
     history: [],
@@ -323,6 +371,8 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
   });
   const [leftPanel, setLeftPanel] = useState<PanelState>(emptyPanel);
   const [rightPanel, setRightPanel] = useState<PanelState>(emptyPanel);
+  const [diffResult, setDiffResult] = useState<DiffResult | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
   const { token } = theme.useToken();
 
   // 双栏面板打开时落到当前用户主目录
@@ -338,6 +388,74 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
       cancelled = true;
     };
   }, []);
+
+  const leftFile = leftPanel.selectedFile && !leftPanel.selectedFile.is_dir
+    ? leftPanel.selectedFile.path
+    : null;
+  const rightFile = rightPanel.selectedFile && !rightPanel.selectedFile.is_dir
+    ? rightPanel.selectedFile.path
+    : null;
+
+  /** 两侧都选好了文件就跑一次对比。 */
+  const runDiff = useCallback(async () => {
+    if (!leftFile || !rightFile) {
+      message.warning("请在左右两侧各选一个文件");
+      return;
+    }
+    setDiffLoading(true);
+    try {
+      const result = await invoke<DiffResult>("diff_files", {
+        oldPath: leftFile,
+        newPath: rightFile,
+      });
+      setDiffResult(result);
+      message.success(`对比完成：+${result.added} / -${result.removed}`);
+    } catch (e: any) {
+      message.error("对比失败: " + e);
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [leftFile, rightFile, message]);
+
+  /**
+   * 把一侧应用到另一侧（覆盖 / 互换）。
+   *
+   * 与 DiffViewer 走同一套文案与后端命令；确认框必须走 context 的 modal.confirm，
+   * 并把目标路径摊开 —— 这是会改写用户文件的操作。
+   */
+  const applySide = useCallback(
+    async (action: DiffApplyAction) => {
+      const desc = describeApply(action, leftFile, rightFile);
+      if (!desc) {
+        message.warning("请在左右两侧各选一个文件");
+        return;
+      }
+      const go = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: desc.title,
+          content: applyConfirmText(desc),
+          okText: desc.okText,
+          okType: "danger",
+          cancelText: "取消",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!go) return;
+      try {
+        await invoke("apply_diff_side", {
+          leftPath: leftFile,
+          rightPath: rightFile,
+          mode: desc.mode,
+        });
+        message.success("已应用");
+        await runDiff();
+      } catch (e: any) {
+        message.error("应用失败: " + e);
+      }
+    },
+    [leftFile, rightFile, message, modal, runDiff]
+  );
 
   return (
     <div
@@ -366,7 +484,9 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
         <ColumnHeightOutlined style={{ fontSize: 18, color: token.colorPrimary }} />
         <span style={{ fontWeight: 600 }}>双面板模式</span>
         <span style={{ color: token.colorTextSecondary, fontSize: 12, marginLeft: 8 }}>
-          双击文件夹进入 · 单击文件可触发右侧
+          {mode === "compare"
+            ? "对比模式 · 左右各选一个文件，点「开始对比」看并排差异"
+            : "双击文件夹进入 · 单击文件可触发右侧"}
         </span>
         <Tooltip title={syncBrowsing ? "同步浏览已开启，点此关闭" : "开启同步浏览（两侧面板联动导航）"}>
           <Button
@@ -378,6 +498,13 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
             {syncBrowsing ? "同步" : "同步"}
           </Button>
         </Tooltip>
+        <Button
+          size="small"
+          type={mode === "compare" ? "primary" : "text"}
+          onClick={() => setMode(mode === "compare" ? "browse" : "compare")}
+        >
+          {mode === "compare" ? "退出对比" : "对比模式"}
+        </Button>
         <div style={{ flex: 1 }} />
         <Button
           size="small"
@@ -387,28 +514,100 @@ export default function DualPanelView({ onClose, onOpenFile }: DualPanelViewProp
           关闭双面板
         </Button>
       </div>
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        <div style={{ flex: 1, borderRight: `1px solid ${token.colorBorderSecondary}` }}>
-          <Panel
-            panelId="left"
-            state={leftPanel}
-            setState={setLeftPanel}
-            onFileOpen={onOpenFile}
-            showHidden={showHidden}
-            onToggleHidden={() => setShowHidden(!showHidden)}
-            syncNavigate={undefined}
-          />
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", flexDirection: "column" }}>
+        <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+          <div style={{ flex: 1, borderRight: `1px solid ${token.colorBorderSecondary}` }}>
+            <Panel
+              panelId="left"
+              state={leftPanel}
+              setState={setLeftPanel}
+              onFileOpen={onOpenFile}
+              showHidden={showHidden}
+              onToggleHidden={() => setShowHidden(!showHidden)}
+              // 同步浏览：两侧联动导航。之前这个按钮一直挂着但没人接线，
+              // 开着"同步"点过去另一侧纹丝不动 —— 按钮承诺的事没兑现。
+              syncNavigate={syncBrowsing ? (p) => syncTo(rightPanel, setRightPanel, p) : undefined}
+              selectOnly={mode === "compare"}
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <Panel
+              panelId="right"
+              state={rightPanel}
+              setState={setRightPanel}
+              onFileOpen={onOpenFile}
+              showHidden={showHidden}
+              onToggleHidden={() => setShowHidden(!showHidden)}
+              syncNavigate={syncBrowsing ? (p) => syncTo(leftPanel, setLeftPanel, p) : undefined}
+              selectOnly={mode === "compare"}
+            />
+          </div>
         </div>
-        <div style={{ flex: 1 }}>
-          <Panel
-            panelId="right"
-            state={rightPanel}
-            setState={setRightPanel}
-            onFileOpen={onOpenFile}
-            showHidden={showHidden}
-            onToggleHidden={() => setShowHidden(!showHidden)}
-          />
-        </div>
+
+        {mode === "compare" && (
+          <div
+            style={{
+              flex: "0 0 45%",
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              borderTop: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgContainer,
+              padding: 8,
+              gap: 8,
+              overflow: "auto",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Button
+                type="primary"
+                size="small"
+                loading={diffLoading}
+                disabled={!leftFile || !rightFile}
+                onClick={runDiff}
+              >
+                开始对比
+              </Button>
+              <Button
+                size="small"
+                disabled={!leftFile || !rightFile}
+                onClick={() => applySide("left_to_right")}
+              >
+                用左侧覆盖右侧
+              </Button>
+              <Button
+                size="small"
+                disabled={!leftFile || !rightFile}
+                onClick={() => applySide("right_to_left")}
+              >
+                用右侧覆盖左侧
+              </Button>
+              <Button
+                size="small"
+                disabled={!leftFile || !rightFile}
+                onClick={() => applySide("swap")}
+              >
+                左右互换
+              </Button>
+              <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>
+                左：{leftFile || "（未选）"} · 右：{rightFile || "（未选）"}
+              </span>
+            </div>
+
+            {diffResult ? (
+              <SideBySideDiff
+                lines={diffResult.lines}
+                leftLabel={leftFile || "左侧"}
+                rightLabel={rightFile || "右侧"}
+                maxHeight={320}
+              />
+            ) : (
+              <div style={{ color: token.colorTextSecondary, fontSize: 12 }}>
+                选好左右两个文件后点「开始对比」。
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

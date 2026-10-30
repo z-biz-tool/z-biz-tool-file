@@ -13,6 +13,7 @@ import {
   Tag,
   Table,
   App as AntdApp,
+  Tooltip,
 } from "antd";
 import {
   SwapOutlined,
@@ -22,9 +23,17 @@ import {
   MinusOutlined,
   EditOutlined,
   DownloadOutlined,
+  ArrowRightOutlined,
+  ColumnHeightOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import SideBySideDiff from "./SideBySideDiff";
+import {
+  describeApply,
+  applyConfirmText,
+  type DiffApplyAction,
+} from "../utils/diffApply";
 
 const { Text } = Typography;
 
@@ -44,10 +53,23 @@ interface DiffResult {
   new_size: number;
 }
 
+/**
+ * 一条目录差异条目。
+ *
+ * 后端已经把相对路径还原成了左右两侧的绝对路径（`left_path` / `right_path`），
+ * 所以点条目就能直接下钻到文件级 diff —— 前端不用也不该自己拼路径。
+ */
+interface DirDiffEntry {
+  rel_path: string;
+  left_path: string | null;
+  right_path: string | null;
+  status: "added" | "removed" | "modified";
+}
+
 interface DirDiffSummary {
-  added_files: string[];
-  removed_files: string[];
-  modified_files: string[];
+  added_files: DirDiffEntry[];
+  removed_files: DirDiffEntry[];
+  modified_files: DirDiffEntry[];
 }
 
 interface DiffViewerProps {
@@ -58,7 +80,7 @@ interface DiffViewerProps {
 }
 
 export default function DiffViewer({ open, onClose, initialLeft, initialRight }: DiffViewerProps) {
-  const { message } = AntdApp.useApp();
+  const { message, modal } = AntdApp.useApp();
   const [tab, setTab] = useState<"file" | "dir">("file");
 
   // 文件对比
@@ -74,6 +96,8 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
   }, [open, initialLeft, initialRight]);
   const [diffResult, setDiffResult] = useState<DiffResult | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
+  /** "统一" | "双栏"：并排视图与行内视图两种看法 */
+  const [viewMode, setViewMode] = useState<"unified" | "split">("unified");
 
   // 目录对比
   const [leftDir, setLeftDir] = useState<string | null>(null);
@@ -100,16 +124,17 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
     }
   };
 
-  const doFileDiff = useCallback(async () => {
-    if (!leftFile || !rightFile) {
+  /** 跑一次文件对比并把结果放进 state。left/right 缺一就不跑。 */
+  const runFileDiff = useCallback(async (left: string | null, right: string | null) => {
+    if (!left || !right) {
       message.warning("请选择两个文件");
       return;
     }
     setDiffLoading(true);
     try {
       const result = await invoke<DiffResult>("diff_files", {
-        oldPath: leftFile,
-        newPath: rightFile,
+        oldPath: left,
+        newPath: right,
       });
       setDiffResult(result);
       message.success(`对比完成：+${result.added} / -${result.removed}`);
@@ -118,7 +143,11 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
     } finally {
       setDiffLoading(false);
     }
-  }, [leftFile, rightFile]);
+  }, [message]);
+
+  const doFileDiff = useCallback(async () => {
+    await runFileDiff(leftFile, rightFile);
+  }, [leftFile, rightFile, runFileDiff]);
 
   const doDirDiff = useCallback(async () => {
     if (!leftDir || !rightDir) {
@@ -140,7 +169,76 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
     } finally {
       setDirLoading(false);
     }
-  }, [leftDir, rightDir]);
+  }, [leftDir, rightDir, message]);
+
+  /**
+   * 目录 diff 的条目下钻：把左右两侧的绝对路径填进文件对比，并立刻跑一次。
+   *
+   * 这是"目录 diff 点不进去"那个缺口的正面解法：条目自带两侧绝对路径，
+   * 所以这里不需要猜路径，也不需要用户再手挑两个文件。
+   */
+  const drillIntoFile = useCallback(
+    async (entry: DirDiffEntry) => {
+      // 一侧不存在的条目（纯新增/纯删除）没法做双文件对比：
+      // 那一侧不存在，diff_files 会直接报"读取失败"。
+      if (!entry.left_path || !entry.right_path) {
+        message.info(
+          entry.status === "added"
+            ? "这个文件只存在于右侧，无法双栏对比（可以到文件对比页选它与左侧任意文件比）"
+            : "这个文件只存在于左侧，无法双栏对比（可以到文件对比页选它与右侧任意文件比）"
+        );
+        return;
+      }
+      setLeftFile(entry.left_path);
+      setRightFile(entry.right_path);
+      setTab("file");
+      await runFileDiff(entry.left_path, entry.right_path);
+    },
+    [message, runFileDiff]
+  );
+
+  /**
+   * 把一侧应用到另一侧（覆盖 / 互换）。
+   *
+   * 这是全站 diff 里唯一会改写用户文件的入口，所以确认框必须走 context 的
+   * `modal.confirm`（静态 Modal.confirm 在深色主题下是白底黑字），并且
+   * 把"目标路径是哪个"摊开写清楚。
+   */
+  const applySide = useCallback(
+    async (action: DiffApplyAction) => {
+      const desc = describeApply(action, leftFile, rightFile);
+      if (!desc) {
+        message.warning("请先选择两个文件");
+        return;
+      }
+      const go = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: desc.title,
+          content: applyConfirmText(desc),
+          okText: desc.okText,
+          okType: "danger",
+          cancelText: "取消",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!go) return;
+
+      try {
+        await invoke("apply_diff_side", {
+          leftPath: leftFile,
+          rightPath: rightFile,
+          mode: desc.mode,
+        });
+        message.success("已应用");
+        // 应用完两侧应当一致了，重跑一次让界面跟上真实状态
+        await runFileDiff(leftFile, rightFile);
+      } catch (e: any) {
+        message.error("应用失败: " + e);
+      }
+    },
+    [leftFile, rightFile, message, modal, runFileDiff]
+  );
 
   // 导出 diff
   const exportDiff = () => {
@@ -158,6 +256,56 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
     URL.revokeObjectURL(url);
   };
 
+  /** 目录 diff 的一张表：三组条目共用一套渲染，只是配色不同。 */
+  const renderDirTable = (
+    entries: DirDiffEntry[],
+    color: string,
+    statusLabel: string
+  ) => {
+    if (entries.length === 0) return null;
+    return (
+      <Card
+        size="small"
+        title={
+          <span>
+            {statusLabel} ({entries.length})
+          </span>
+        }
+      >
+        <Table
+          size="small"
+          pagination={false}
+          scroll={{ y: 220 }}
+          dataSource={entries.slice(0, 200).map((e) => ({ key: e.rel_path, ...e }))}
+          columns={[
+            {
+              title: "文件",
+              dataIndex: "rel_path",
+              ellipsis: true,
+              render: (rel: string, row: DirDiffEntry) => (
+                <span
+                  style={{ color: "#1677ff", cursor: "pointer" }}
+                  onClick={() => drillIntoFile(row)}
+                >
+                  {rel}
+                </span>
+              ),
+            },
+            {
+              title: "状态",
+              dataIndex: "status",
+              width: 90,
+              render: (s: string) => <Tag color={color}>{s}</Tag>,
+            },
+          ]}
+        />
+        {entries.length > 200 && (
+          <Text type="secondary">... 还有 {entries.length - 200} 个</Text>
+        )}
+      </Card>
+    );
+  };
+
   return (
     <Modal
       title={
@@ -168,7 +316,7 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
       }
       open={open}
       onCancel={onClose}
-      width={1000}
+      width={1100}
       footer={null}
       destroyOnClose
     >
@@ -199,14 +347,25 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
                   </Col>
                 </Row>
 
-                <Button
-                  type="primary" icon={<SwapOutlined />} loading={diffLoading}
-                  disabled={!leftFile || !rightFile}
-                  onClick={doFileDiff}
-                  block size="large"
-                >
-                  开始对比
-                </Button>
+                <Space.Compact style={{ width: "100%" }}>
+                  <Button
+                    type="primary" icon={<SwapOutlined />} loading={diffLoading}
+                    disabled={!leftFile || !rightFile}
+                    onClick={doFileDiff}
+                    block size="large"
+                  >
+                    开始对比
+                  </Button>
+                  <Tooltip title="并排双栏视图">
+                    <Button
+                      size="large"
+                      icon={<ColumnHeightOutlined />}
+                      aria-label="切换双栏视图"
+                      type={viewMode === "split" ? "default" : "text"}
+                      onClick={() => setViewMode(viewMode === "split" ? "unified" : "split")}
+                    />
+                  </Tooltip>
+                </Space.Compact>
 
                 {/* 统计 */}
                 {diffResult && (
@@ -257,8 +416,46 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
                   </Row>
                 )}
 
-                {/* Diff 显示 */}
+                {/* 把一侧应用到另一侧 */}
                 {diffResult && (
+                  <Space wrap>
+                    <Button
+                      size="small"
+                      icon={<ArrowRightOutlined />}
+                      disabled={!leftFile || !rightFile}
+                      onClick={() => applySide("left_to_right")}
+                    >
+                      用左侧覆盖右侧
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<ArrowRightOutlined />}
+                      disabled={!leftFile || !rightFile}
+                      onClick={() => applySide("right_to_left")}
+                    >
+                      用右侧覆盖左侧
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<SwapOutlined />}
+                      disabled={!leftFile || !rightFile}
+                      onClick={() => applySide("swap")}
+                    >
+                      左右互换
+                    </Button>
+                  </Space>
+                )}
+
+                {/* Diff 显示 */}
+                {diffResult && viewMode === "split" && (
+                  <SideBySideDiff
+                    lines={diffResult.lines}
+                    leftLabel={leftFile || "原文件"}
+                    rightLabel={rightFile || "新文件"}
+                  />
+                )}
+
+                {diffResult && viewMode === "unified" && (
                   <Card
                     size="small"
                     title="对比结果"
@@ -340,6 +537,9 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
 
                 {dirDiff && (
                   <Space direction="vertical" style={{ width: "100%" }}>
+                    <Text type="secondary">
+                      点文件名可直接下钻到该文件的行内对比。
+                    </Text>
                     <Row gutter={12}>
                       <Col span={8}>
                         <Card size="small">
@@ -373,39 +573,9 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
                       </Col>
                     </Row>
 
-                    {dirDiff.added_files.length > 0 && (
-                      <Card size="small" title={<span><PlusOutlined style={{ color: "#52c41a" }} /> 新增 ({dirDiff.added_files.length})</span>}>
-                        {dirDiff.added_files.slice(0, 50).map((f) => (
-                          <Tag key={f} color="green" style={{ margin: 2 }}>{f}</Tag>
-                        ))}
-                        {dirDiff.added_files.length > 50 && (
-                          <Text type="secondary">... 还有 {dirDiff.added_files.length - 50} 个</Text>
-                        )}
-                      </Card>
-                    )}
-
-                    {dirDiff.removed_files.length > 0 && (
-                      <Card size="small" title={<span><MinusOutlined style={{ color: "#ff4d4f" }} /> 删除 ({dirDiff.removed_files.length})</span>}>
-                        {dirDiff.removed_files.slice(0, 50).map((f) => (
-                          <Tag key={f} color="red" style={{ margin: 2 }}>{f}</Tag>
-                        ))}
-                        {dirDiff.removed_files.length > 50 && (
-                          <Text type="secondary">... 还有 {dirDiff.removed_files.length - 50} 个</Text>
-                        )}
-                      </Card>
-                    )}
-
-                    {dirDiff.modified_files.length > 0 && (
-                      <Card size="small" title={<span><EditOutlined style={{ color: "#faad14" }} /> 修改 ({dirDiff.modified_files.length})</span>}>
-                        <Table
-                          size="small"
-                          pagination={false}
-                          scroll={{ y: 200 }}
-                          dataSource={dirDiff.modified_files.slice(0, 100).map((f) => ({ key: f, name: f }))}
-                          columns={[{ title: "文件", dataIndex: "name", ellipsis: true }]}
-                        />
-                      </Card>
-                    )}
+                    {renderDirTable(dirDiff.added_files, "green", "新增")}
+                    {renderDirTable(dirDiff.removed_files, "red", "删除")}
+                    {renderDirTable(dirDiff.modified_files, "gold", "修改")}
                   </Space>
                 )}
               </Space>
