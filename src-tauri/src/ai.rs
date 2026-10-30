@@ -71,7 +71,8 @@ fn read_text_preview(path: &Path) -> Result<String, String> {
         }
         Ok(format!(
             "{}\n\n... (文件过长，截断到前 {} 字)",
-            &s[..cut], MAX
+            &s[..cut],
+            MAX
         ))
     } else {
         Ok(s)
@@ -301,6 +302,9 @@ mod minimax_live_tests {
             "期望 401/403，实际：{err}"
         );
         // 关键：错误串里不能出现 key 本身
-        assert!(!err.contains("sk-cp-definitely-invalid-key"), "错误串泄露了 key");
+        assert!(
+            !err.contains("sk-cp-definitely-invalid-key"),
+            "错误串泄露了 key"
+        );
     }
 }

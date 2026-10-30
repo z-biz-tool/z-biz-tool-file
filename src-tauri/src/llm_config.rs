@@ -138,9 +138,7 @@ pub fn get_llm_config_path(app: tauri::AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub async fn test_llm_config(config: LlmConfig) -> Result<String, LlmFailure> {
     let cap = config.to_cap().map_err(LlmFailure::from)?;
-    let elapsed = cap_llm::ping(&cap)
-        .await
-        .map_err(LlmFailure::from_error)?;
+    let elapsed = cap_llm::ping(&cap).await.map_err(LlmFailure::from_error)?;
     Ok(format!(
         "连接成功（{} · {}），耗时 {}ms",
         cap.kind.label(),
@@ -312,11 +310,9 @@ fn hint_for(kind: cap_llm::ErrorKind, status: Option<u16>) -> String {
              如果你开了代理，先关掉再试；海外厂商（OpenAI / Gemini / Anthropic）相反，需要代理。"
                 .into()
         }
-        (E::Timeout, _) => {
-            "等太久没等到回应。可能是网络到该地区的链路慢，也可能是模型正在排队。\
+        (E::Timeout, _) => "等太久没等到回应。可能是网络到该地区的链路慢，也可能是模型正在排队。\
              可以先换一个更小的模型试，或把超时调大。"
-                .into()
-        }
+            .into(),
         (E::Http, Some(401)) | (E::Http, Some(403)) => {
             "API Key 无效、已过期，或这个 key 没有该模型的权限。请重新粘贴密钥；\
              若刚续费过，确认用的是新 key。"
@@ -329,20 +325,16 @@ fn hint_for(kind: cap_llm::ErrorKind, status: Option<u16>) -> String {
                 .into()
         }
         (E::Http, Some(429)) => {
-            "额度用尽或被限流。这不是配置写错了 —— 换个时段再试，或在服务商后台充值／提额。"
-                .into()
+            "额度用尽或被限流。这不是配置写错了 —— 换个时段再试，或在服务商后台充值／提额。".into()
         }
         (E::Http, Some(s)) if s >= 500 => {
             "服务商那边出故障了，不是你配置的问题。稍后重试即可。".into()
         }
         (E::Http, _) => "服务端拒绝了这次请求。原始错误见下方详情。".into(),
-        (E::Parse, _) => {
-            "对方回了内容，但不是预期的格式。多半是这个地址其实不是该协议的服务 —— \
-             例如把 Anthropic 的地址填在了 OpenAI 兼容这一档。".into()
-        }
-        (E::Unsupported, _) => {
-            "这家服务不支持当前操作。换一个厂商，或改用手动填写模型名。".into()
-        }
+        (E::Parse, _) => "对方回了内容，但不是预期的格式。多半是这个地址其实不是该协议的服务 —— \
+             例如把 Anthropic 的地址填在了 OpenAI 兼容这一档。"
+            .into(),
+        (E::Unsupported, _) => "这家服务不支持当前操作。换一个厂商，或改用手动填写模型名。".into(),
         (E::Io, _) => "本机读写配置出错。检查配置文件所在目录是否可写。".into(),
     }
 }
@@ -387,7 +379,14 @@ mod interaction_tests {
             assert!(!p.verified_on.is_empty(), "{} 缺核对日期", p.id);
         }
         // 国内厂商必须覆盖到：这是本仓用户最可能买的几家
-        for id in ["deepseek", "qwen", "moonshot", "zhipu", "volcengine", "minimax"] {
+        for id in [
+            "deepseek",
+            "qwen",
+            "moonshot",
+            "zhipu",
+            "volcengine",
+            "minimax",
+        ] {
             assert!(all.iter().any(|p| p.id == id), "缺国内预设 {}", id);
         }
         // Ollama 不需要 key，界面要靠这个字段隐藏密钥框

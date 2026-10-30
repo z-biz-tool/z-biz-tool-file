@@ -207,18 +207,15 @@ mod guard_tests {
             err
         );
 
-        let err = watermark_pdf_checked(input, dest, "x".into(), 0.3)
-            .expect_err("敏感目录必须被拦下");
+        let err =
+            watermark_pdf_checked(input, dest, "x".into(), 0.3).expect_err("敏感目录必须被拦下");
         assert!(
             err.contains("保护") || err.contains("拒绝"),
             "watermark 输出未过写守卫: {}",
             err
         );
 
-        assert!(
-            !dir.join(".ssh").exists(),
-            "拒绝之前不能把敏感目录建出来"
-        );
+        assert!(!dir.join(".ssh").exists(), "拒绝之前不能把敏感目录建出来");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -230,7 +227,11 @@ mod guard_tests {
         let input_path = dir.join("src.pdf");
         std::fs::write(&input_path, b"%PDF-1.4\n%%EOF\n").unwrap();
         let input = input_path.to_string_lossy().to_string();
-        let traversal = dir.join("..").join("evil-out").to_string_lossy().to_string();
+        let traversal = dir
+            .join("..")
+            .join("evil-out")
+            .to_string_lossy()
+            .to_string();
 
         let err = split_pdf(input, traversal, vec![[1, 1]]).expect_err("`..` 必须被拒");
         assert!(err.contains("不允许相对路径"), "实际: {}", err);

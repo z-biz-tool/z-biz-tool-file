@@ -37,8 +37,8 @@ mod updater;
 mod video_thumb;
 mod watcher;
 
-use watcher::WatcherState;
 use tauri::Manager;
+use watcher::WatcherState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
