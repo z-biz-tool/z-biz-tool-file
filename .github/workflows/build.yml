@@ -124,7 +124,7 @@ jobs:
           args: ${{ matrix.args }} ${{ steps.signing.outputs.extra-args }}
           # latest.json 由下面的 latest-json 作业统一生成：4 个矩阵各自生成会互相覆盖，
           # 最终只剩最后一个平台的条目。资产与 .sig 的上传不受此开关影响。
-          uploadUpdaterJson: false
+          includeUpdaterJson: false
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
