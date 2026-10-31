@@ -51,6 +51,8 @@ import {
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { startDeepLinkReceiver, ZBIZ_TAKE_PENDING } from "z-biz-tool-shared/protocol";
+import { resolveFileDeepLink, type HandoffItem } from "./_shared/deepLink";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
@@ -405,6 +407,23 @@ function AppShellInner() {
     bumpIndexEpoch,
   } = useFileStore();
 
+  // 家族深链要定位的文件路径。
+  //
+  // 深链落地要两步：先 navigateTo 切目录（异步加载列表），再在列表里选中那个文件。
+  // 这里存住「待选中的路径」，等 fileList 里真的出现它时再落地 ——
+  // 直接造一个 FileEntry 会带进编造的 size/modified，排序和预览都会失真。
+  const [pendingRevealPath, setPendingRevealPath] = useState<string | null>(null);
+
+  // 目录列表就绪后落地待选中的文件。
+  useEffect(() => {
+    if (!pendingRevealPath) return;
+    const hit = fileList.find((e) => e.path === pendingRevealPath);
+    if (!hit) return;
+    setSelectedFile(hit);
+    setSelectedRowKeys([hit.path]);
+    setPendingRevealPath(null);
+  }, [pendingRevealPath, fileList, setSelectedFile]);
+
   // 记忆侧栏折叠状态
   useEffect(() => {
     localStorage.setItem("z-tool-sider-collapsed", siderCollapsed ? "1" : "0");
@@ -519,41 +538,47 @@ function AppShellInner() {
   }, [historyIndex, setCurrentPath, loadDirectory, activeTabId, updateActiveTabPath]);
 
   // 家族深链（zbiz://file/open?file=…）：box 等产品递过来的文件，切到它所在目录。
+  //
+  // 机制（冷启动补取 + zbiz-open 监听 + 不静默吞掉）在共享层 startDeepLinkReceiver，
+  // 本仓只提供语义：resolveFileDeepLink 决定「定位到哪个路径、要不要真的打开」。
+  //
   // navigateTo 依赖 historyIndex 会频繁变化，监听器里用 ref 取最新一份。
   const navigateToRef = useRef(navigateTo);
   useEffect(() => { navigateToRef.current = navigateTo; }, [navigateTo]);
 
-  const applyZbizPending = useCallback(async () => {
-    try {
-      const items = await invoke<
-        Array<{ product: string; action: string; params: Record<string, string> }>
-      >("zbiz_take_pending");
-      for (const h of items ?? []) {
-        const file = h.params?.file;
-        if (h.product === "file" && h.action === "open" && file) {
-          navigateToRef.current(parentOfPath(file));
+  useEffect(() => {
+    const stop = startDeepLinkReceiver({
+      productId: "file",
+      invoke: () => invoke<HandoffItem[]>(ZBIZ_TAKE_PENDING),
+      listen: (event, handler) => listen(event, handler),
+      translate: (item) => {
+        const out = resolveFileDeepLink(item);
+        if (!out.path) {
+          return { ok: false, problem: out.problem ?? "深链里没有可定位的路径" };
         }
-      }
-    } catch (err) {
-      console.warn("[file] 处理家族深链失败:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("zbiz-open", () => {
-      void applyZbizPending();
-    })
-      .then((fn) => { unlisten = fn; })
-      .catch(() => {});
-    return () => { unlisten?.(); };
-  }, [applyZbizPending]);
-
-  // 冷启动时队列里已经有深链（前端还没挂监听）。等主目录定位完成后再取，
-  // 否则会被紧随其后的主目录导航覆盖。
-  useEffect(() => {
-    if (rootPath) void applyZbizPending();
-  }, [rootPath, applyZbizPending]);
+        return { ok: true, effect: { path: out.path, shouldOpen: out.shouldOpen } };
+      },
+      onProblem: (msg) => {
+        console.warn("[file] 深链:", msg);
+        message.warning(msg);
+      },
+      onEffect: (effect) => {
+        const path = String(effect.path ?? "");
+        if (!path) return;
+        // 先切到目标所在目录，让文件出现在列表里。
+        navigateToRef.current(parentOfPath(path));
+        // 再选中它 —— 只有 open 动作才承诺打开，reveal 只保证「看得见」。
+        //
+        // 选中必须等目录列表加载完（navigateTo → loadDirectory → setFileList 是异步的），
+        // 所以挂一个待选路径，由下面那个 effect 在 fileList 就绪时落地。
+        //
+        // 不在这里订阅 store：深链指向的文件若不存在，订阅永远不会命中也永远不会解除。
+        if (effect.shouldOpen) setPendingRevealPath(path);
+      },
+      log: (msg, item) => console.debug("[file] 深链", msg, item),
+    });
+    return stop;
+  }, [message]);
 
   // 初始化：定位到当前登录用户的主目录（跨平台解析，不硬编码）
   useEffect(() => {
