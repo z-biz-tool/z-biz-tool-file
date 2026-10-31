@@ -1,0 +1,16 @@
+{
+  "id": "file",
+  "displayName": "万能文件管理器",
+  "description": "文件 / 媒体 / 电子书 / 全盘搜索",
+  "acceptsDeepLink": true,
+  "actions": [
+    "open",
+    "reveal"
+  ],
+  "keywords": [
+    "文件",
+    "搜索",
+    "电子书",
+    "管理"
+  ]
+}
