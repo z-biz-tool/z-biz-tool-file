@@ -334,12 +334,19 @@ mod minimax_live_tests {
             temperature: 0.3,
         };
 
-        let reply = call_llm(&cfg, "你是一个简洁的助手。", "用一句话介绍你自己，不超过30字。")
-            .await
-            .expect("真实调用失败");
+        let reply = call_llm(
+            &cfg,
+            "你是一个简洁的助手。",
+            "用一句话介绍你自己，不超过30字。",
+        )
+        .await
+        .expect("真实调用失败");
         assert!(!reply.content.trim().is_empty(), "返回为空（网关 {gw}）");
         assert!(
-            reply.content.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+            reply
+                .content
+                .chars()
+                .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
             "应返回中文，实际：{}",
             reply.content
         );
