@@ -307,4 +307,42 @@ mod minimax_live_tests {
             "错误串泄露了 key"
         );
     }
+
+    // ==================== 真实网关直连 ====================
+
+    /// 免密钥的本地网关必须能跑通 `call_llm`（未设 `ZBIZ_GW` 时静默跳过）。
+    ///
+    /// file 的 key 校验只在 `cap_llm::validate` 里，本轮给它加了「私有地址
+    /// 免鉴权」判据；这条用例确认它真的落到 file 的调用路径上。
+    ///
+    /// ```sh
+    /// ZBIZ_GW=http://192.168.31.249:8200/v1 ZBIZ_MODEL=zBiz-Text-35B \
+    ///   cargo test -p z-biz-tool-file live_zbiz -- --nocapture
+    /// ```
+    #[tokio::test]
+    async fn live_zbiz_gateway_accepts_keyless_and_replies() {
+        let Ok(gw) = std::env::var("ZBIZ_GW") else {
+            return;
+        };
+        let model = std::env::var("ZBIZ_MODEL").unwrap_or_else(|_| "zBiz-Text-35B".to_string());
+        let cfg = LlmConfig {
+            provider: "zbiz-local".to_string(),
+            api_key: String::new(), // 本地网关没有鉴权层
+            base_url: gw.clone(),
+            model,
+            timeout_secs: 120,
+            temperature: 0.3,
+        };
+
+        let reply = call_llm(&cfg, "你是一个简洁的助手。", "用一句话介绍你自己，不超过30字。")
+            .await
+            .expect("真实调用失败");
+        assert!(!reply.content.trim().is_empty(), "返回为空（网关 {gw}）");
+        assert!(
+            reply.content.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+            "应返回中文，实际：{}",
+            reply.content
+        );
+        println!("[file → {gw}] {}", reply.content.trim());
+    }
 }
