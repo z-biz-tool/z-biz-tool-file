@@ -57,6 +57,7 @@ import {
   ReloadOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
+import { findPreset, llmNeedsApiKey } from "../lib/llmNeedsKey";
 
 const { Text } = Typography;
 
@@ -190,8 +191,9 @@ export default function SettingsModal({ open, onClose }: Props) {
       });
   }, [open]);
 
+  // 认预设：**先按 id，再按别名**（见 lib/llmNeedsKey.ts 的说明）。
   const preset = useMemo(
-    () => presets.find((p) => p.id === config.provider),
+    () => findPreset(presets, config.provider),
     [presets, config.provider],
   );
 
@@ -207,7 +209,14 @@ export default function SettingsModal({ open, onClose }: Props) {
     return v !== preset.base_url;
   }, [config.base_url, preset]);
 
-  const needsKey = preset ? preset.requires_api_key : true;
+  // 要不要密钥：与后端 cap-llm 的 `needs_api_key()` 严格同序。
+  //
+  // 2026-10-31 修：此前是 `preset ? preset.requires_api_key : true` ——
+  // 只认预设，自定义地址一律要 Key。而后端放行私网地址（自建服务没有鉴权层），
+  // 于是出现判据分裂：后端放行、前端逼用户填一个无处可用的密钥。
+  //
+  // shared 的 `needsApiKey()` 是 Rust `is_private_endpoint()` 的逐条镜像。
+  const needsKey = llmNeedsApiKey(presets, config.provider, config.base_url);
   const hasKey = config.api_key.trim().length > 0;
   const dirty = useMemo(
     () => JSON.stringify(config) !== JSON.stringify(saved),
