@@ -1532,21 +1532,9 @@ pub fn calculate_file_hash_blocking(path: &str, algorithm: &str) -> Result<Strin
             Ok(format!("{:x}", result))
         }
         "crc32" => {
-            // 流式 CRC32：每次读 64KB 进哈希表，恒定内存
+            // 流式 CRC32：每次读 64KB 进哈希表，恒定内存（算法与查表都在 cap-hash）
             use std::io::Read;
-            let mut table = [0u32; 256];
-            for (i, slot) in table.iter_mut().enumerate() {
-                let mut c = i as u32;
-                for _ in 0..8 {
-                    c = if c & 1 != 0 {
-                        (c >> 1) ^ 0xEDB88320
-                    } else {
-                        c >> 1
-                    };
-                }
-                *slot = c;
-            }
-            let mut crc = 0xFFFFFFFFu32;
+            let mut crc = cap_hash::Crc32::new();
             let mut buf = [0u8; 64 * 1024];
             loop {
                 let n = file
@@ -1555,11 +1543,9 @@ pub fn calculate_file_hash_blocking(path: &str, algorithm: &str) -> Result<Strin
                 if n == 0 {
                     break;
                 }
-                for &b in &buf[..n] {
-                    crc = (crc >> 8) ^ table[((crc ^ b as u32) & 0xFF) as usize];
-                }
+                crc.update(&buf[..n]);
             }
-            Ok(format!("{:08x}", crc ^ 0xFFFFFFFF))
+            Ok(format!("{:08x}", crc.finalize()))
         }
         _ => Err(format!(
             "不支持的哈希算法: {}，支持: md5, sha1, sha256, crc32",

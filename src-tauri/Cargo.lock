@@ -631,6 +631,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-hash"
+version = "0.1.0"
+
+[[package]]
 name = "cap-hub"
 version = "0.1.0"
 dependencies = [
@@ -7346,6 +7350,7 @@ dependencies = [
  "bzip2",
  "cab",
  "cap-doc",
+ "cap-hash",
  "cap-hub",
  "cap-img",
  "cap-llm",

@@ -24,6 +24,9 @@ cap-doc = { path = "../../z-biz-tool-capability/crates/cap-doc" }
 # parse_response/call_llm，与 aigen/pet/db/note/kb 里的同类代码是同一件事的第六次重写。
 # 现在协议与传输全在 cap-llm，本仓只留提示词与结果结构。见 src/ai.rs 头部。
 cap-llm = { path = "../../z-biz-tool-capability/crates/cap-llm" }
+# 哈希原语（cap-hash）：CRC-32 的实现与查表收口到能力层，
+# 本仓只留「打开文件 + 流式喂字节」的编排（mind 仓有同一份 CRC-32 的 TS 抄本）。
+cap-hash = { path = "../../z-biz-tool-capability/crates/cap-hash" }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
