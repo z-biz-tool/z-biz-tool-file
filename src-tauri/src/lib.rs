@@ -159,10 +159,9 @@ pub fn run() {
             commands::open_terminal_at,
             image_utils::get_image_info,
             image_utils::save_image_data,
-            llm_config::load_llm_config,
-            llm_config::save_llm_config,
-            llm_config::get_llm_config_path,
-            llm_config::test_llm_config,
+            llm_config::get_ai_config,
+            llm_config::save_ai_config,
+            llm_config::test_ai_config,
             llm_config::list_llm_presets,
             llm_config::list_llm_models,
             trash::move_to_trash,
@@ -214,6 +213,13 @@ pub fn run() {
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
             cap_hub::receiver::seed_cold_start(app.handle(), &zbiz_pending);
+            // 迁移一次历史 AI 配置到家族统一落点（幂等；失败不阻断启动）。
+            // 本仓旧落点是明文 llm.json，迁移器会把明文密钥搬进 OS 密钥库并抹掉旧文件里的密钥字段。
+            match llm_config::migrate_legacy() {
+                Ok(Some(from)) => eprintln!("已把 {} 的 AI 配置迁移到家族统一位置", from),
+                Ok(None) => {}
+                Err(e) => eprintln!("AI 配置迁移未完成, 本次按现状继续运行: {}", e),
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

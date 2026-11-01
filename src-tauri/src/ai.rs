@@ -14,18 +14,19 @@
 //!
 //! 现在只保留「产品差异」：提示词、文件读取、结果结构。协议与传输全在 `cap-llm`。
 //!
-//! ## 保留不动的东西
+//! ## 2026-11-01 改造：配置接入家族统一落点
 //!
-//! - 两个命令的名字与签名（`ai_summarize_file` / `ai_chat`）—— 前端不用改
-//! - 配置文件格式（`llm.json`）与存放位置 —— 用户不用重填 key
-//! - `read_text_preview` 的 20KB 截断 —— 这是产品策略（防超上下文），不是基础设施
+//! 配置不再从本仓 `llm.json` 读（那也退役了），改从统一落点
+//! `~/.z-biz-tool/llm/config.json` + OS 密钥库读 —— 在 terminal 配好的
+//! 服务商，这里直接能用。`call_llm` 不再接收 `LlmConfig` 参数，每次调用
+//! 自行取配置（见 `llm_config::read_shared_config_with_key`）。
 
 use serde::{Deserialize, Serialize};
 
 use std::path::Path;
 use tauri::AppHandle;
 
-use crate::llm_config::{load_llm_config, LlmConfig};
+use crate::llm_config::read_shared_config_with_key;
 
 /// AI 摘要结果
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -41,13 +42,13 @@ pub struct AiSummaryResult {
     pub tokens_used: Option<u32>,
 }
 
-/// 调 LLM（单轮 chat completion）。
+/// 调 LLM（单轮 chat completion），配置每次从统一落点取。
 ///
 /// 保留这个函数名：本仓的 live test 与未来可能的调用点都用它。
-/// 内部只做「配置转换 + 调 cap-llm」，不再有任何协议代码。
-async fn call_llm(cfg: &LlmConfig, system: &str, user: &str) -> Result<cap_llm::ChatReply, String> {
-    // 配置翻译在 llm_config.rs（test_llm_config 也要用同一份）
-    let cap_cfg = cfg.to_cap()?;
+/// 内部只做「取配置 + 调 cap-llm」，不再有任何协议代码。
+async fn call_llm(system: &str, user: &str) -> Result<cap_llm::ChatReply, String> {
+    let (cfg, key) = read_shared_config_with_key()?;
+    let cap_cfg = crate::llm_config::to_cap(&cfg, &key)?;
     let messages = [
         cap_llm::Message::system(system),
         cap_llm::Message::user(user),
@@ -82,12 +83,11 @@ fn read_text_preview(path: &Path) -> Result<String, String> {
 /// 总结一个文本文件（带 LLM 配置）
 #[tauri::command]
 pub async fn ai_summarize_file(
-    app: AppHandle,
+    _app: AppHandle,
     path: String,
     custom_prompt: Option<String>,
 ) -> Result<AiSummaryResult, String> {
     let start = std::time::Instant::now();
-    let cfg = load_llm_config(app)?;
 
     let p = Path::new(&path);
     if !p.exists() {
@@ -102,7 +102,7 @@ pub async fn ai_summarize_file(
     let user =
         custom_prompt.unwrap_or_else(|| format!("请总结这个文件：\n\n```\n{}\n```", preview));
 
-    let reply = call_llm(&cfg, system, &user).await?;
+    let reply = call_llm(system, &user).await?;
     Ok(AiSummaryResult {
         summary: reply.content,
         elapsed_ms: start.elapsed().as_millis() as u64,
@@ -112,32 +112,58 @@ pub async fn ai_summarize_file(
 
 /// 通用 chat：用户给 system + user 消息，返回助手回复
 #[tauri::command]
-pub async fn ai_chat(app: AppHandle, system: String, user: String) -> Result<String, String> {
-    let cfg = load_llm_config(app)?;
-    let reply = call_llm(&cfg, &system, &user).await?;
+pub async fn ai_chat(_app: AppHandle, system: String, user: String) -> Result<String, String> {
+    let reply = call_llm(&system, &user).await?;
     Ok(reply.content)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm_config::{to_cap, AiConfigDraft};
+    use cap_llm_config::LlmConfigFile;
 
-    fn cfg(provider: &str) -> LlmConfig {
-        LlmConfig {
+    /// 统一落点测试隔离（不碰用户真实配置与密钥库）。
+    fn iso(tag: &str) -> cap_llm_config::testing::IsolatedLlm {
+        cap_llm_config::testing::IsolatedLlm::new(tag)
+    }
+
+    fn file_cfg(provider: &str) -> LlmConfigFile {
+        LlmConfigFile {
+            preset: provider.to_string(),
             provider: provider.to_string(),
-            api_key: "sk-test-1234567890".to_string(),
             base_url: String::new(),
             model: "m".to_string(),
-            timeout_secs: 30,
-            temperature: 0.2,
+            temperature: Some(0.2),
+            max_tokens: None,
+            timeout_ms: Some(30_000),
+            updated_at_ms: None,
         }
+    }
+
+    /// 把 provider 写进统一落点再走 to_cap —— 本仓发请求都走这条路。
+    fn saved_cap(provider: &str, key: &str) -> cap_llm::LlmConfig {
+        iso("file-cap");
+        crate::llm_config::write_shared_config(&AiConfigDraft {
+            provider: provider.to_string(),
+            base_url: String::new(),
+            model: "m".to_string(),
+            api_key: key.to_string(),
+            temperature: Some(0.2),
+            max_tokens: None,
+            timeout_secs: Some(30),
+        })
+        .expect("写入统一落点应成功");
+        let (cfg, key) = read_shared_config_with_key().expect("读取应成功");
+        to_cap(&cfg, &key).expect("转换应成功")
     }
 
     #[test]
     fn maps_all_legacy_provider_names() {
         // 本仓历史只写过这四个，一个都不能报「未知 provider」
         for p in ["openai", "anthropic", "ollama", "custom"] {
-            assert!(cfg(p).to_cap().is_ok(), "provider={p} 转换失败");
+            let c = file_cfg(p);
+            assert!(to_cap(&c, "sk-x").is_ok(), "provider={p} 转换失败");
         }
     }
 
@@ -145,23 +171,25 @@ mod tests {
     fn maps_other_products_provider_names_too() {
         // 用户把配置从 pet/mind 抄过来时会出现这些值
         for p in ["minimax", "deepseek", "claude", "gemini"] {
-            assert!(cfg(p).to_cap().is_ok(), "provider={p} 转换失败");
+            let c = file_cfg(p);
+            assert!(to_cap(&c, "sk-x").is_ok(), "provider={p} 转换失败");
         }
     }
 
     #[test]
     fn unknown_provider_is_rejected_not_silently_openai() {
-        let err = cfg("some-typo").to_cap().unwrap_err();
+        let c = file_cfg("some-typo");
+        let err = to_cap(&c, "sk-x").unwrap_err();
         assert!(err.contains("some-typo"));
     }
 
     #[test]
     fn preset_supplies_base_url_when_config_leaves_it_empty() {
-        // 本轮改动的主目的：存量配置里 provider 写 "deepseek"、base_url 空着，
+        // 存量配置里 provider 写 "deepseek"、base_url 空着，
         // 以前必须用户手抄地址（抄错一个字符就是 404），现在自动补上。
-        let c = cfg("deepseek");
+        let c = file_cfg("deepseek");
         assert!(c.base_url.is_empty(), "前置条件：本测试依赖 base_url 为空");
-        let cap = c.to_cap().unwrap();
+        let cap = to_cap(&c, "sk-x").unwrap();
         assert_eq!(cap.preset, Some("deepseek"));
         assert_eq!(
             cap.endpoint(cap_llm::Action::Chat).unwrap(),
@@ -178,7 +206,7 @@ mod tests {
             ("glm", "open.bigmodel.cn"),
             ("doubao", "volces.com"),
         ] {
-            let cap = cfg(provider).to_cap().unwrap();
+            let cap = to_cap(&file_cfg(provider), "sk-x").unwrap();
             let ep = cap.endpoint(cap_llm::Action::Chat).unwrap();
             assert!(
                 ep.contains(expect_contains),
@@ -190,9 +218,9 @@ mod tests {
     #[test]
     fn explicit_base_url_still_wins_over_preset() {
         // 用户显式填的地址永远优先 —— 预设只是兜底，不是强制
-        let mut c = cfg("deepseek");
+        let mut c = file_cfg("deepseek");
         c.base_url = "https://my-proxy.corp/v1".to_string();
-        let cap = c.to_cap().unwrap();
+        let cap = to_cap(&c, "sk-x").unwrap();
         assert_eq!(
             cap.endpoint(cap_llm::Action::Chat).unwrap(),
             "https://my-proxy.corp/v1/chat/completions"
@@ -201,16 +229,24 @@ mod tests {
 
     #[test]
     fn zero_temperature_is_passed_through() {
-        let mut c = cfg("openai");
-        c.temperature = 0.0;
-        assert_eq!(c.to_cap().unwrap().temperature, Some(0.0));
+        let mut c = file_cfg("openai");
+        c.temperature = Some(0.0);
+        assert_eq!(to_cap(&c, "sk-x").unwrap().temperature, Some(0.0));
     }
 
     #[test]
     fn zero_timeout_is_clamped_to_one_second() {
-        let mut c = cfg("openai");
-        c.timeout_secs = 0;
-        assert_eq!(c.to_cap().unwrap().timeout.as_secs(), 1);
+        let mut c = file_cfg("openai");
+        c.timeout_ms = Some(0);
+        assert_eq!(to_cap(&c, "sk-x").unwrap().timeout.as_secs(), 1);
+    }
+
+    #[test]
+    fn key_from_the_shared_secret_store_reaches_the_cap_config() {
+        // 统一落点改造的核心链路：写进密钥库的密钥，发请求时能取到
+        let cap = saved_cap("deepseek", "sk-test-1234567890");
+        assert_eq!(cap.api_key, "sk-test-1234567890");
+        assert_eq!(cap.preset, Some("deepseek"));
     }
 
     #[test]
@@ -243,10 +279,10 @@ mod tests {
 #[cfg(test)]
 mod minimax_live_tests {
     use super::call_llm;
-    use crate::llm_config::LlmConfig;
+    use crate::llm_config::{write_shared_config, AiConfigDraft};
 
     /// **真实 API 实测**：用真的 MiniMax 端点跑一遍本仓的接入链路
-    /// （本仓 `LlmConfig::to_cap` → `cap_llm::chat` → MiniMax）。
+    /// （统一落点 → `to_cap` → `cap_llm::chat` → MiniMax）。
     ///
     /// 跑法：`MINIMAX_API_KEY=<key> cargo test --lib minimax`
     /// 没设 key 时**显式打印跳过原因** —— 「没跑」和「跑过了」必须能区分。
@@ -256,17 +292,20 @@ mod minimax_live_tests {
             eprintln!("[LIVE] 跳过 minimax 真实 API 实测：未设置 MINIMAX_API_KEY（这是「没跑」，不是「跑过了」）");
             return;
         };
-        let cfg = LlmConfig {
+        let _iso = cap_llm_config::testing::IsolatedLlm::new("file-live-minimax");
+        write_shared_config(&AiConfigDraft {
             provider: "minimax".to_string(),
-            api_key: key,
             base_url: std::env::var("MINIMAX_BASE_URL")
                 .unwrap_or_else(|_| "https://api.minimaxi.com/v1".to_string()),
             model: std::env::var("MINIMAX_MODEL")
                 .unwrap_or_else(|_| "MiniMax-M3.1-Flash".to_string()),
-            timeout_secs: 60,
-            temperature: 0.2,
-        };
-        let reply = call_llm(&cfg, "你是助手", "只回两个字：收到")
+            api_key: key,
+            temperature: Some(0.2),
+            max_tokens: None,
+            timeout_secs: Some(60),
+        })
+        .expect("写入统一落点应成功");
+        let reply = call_llm("你是助手", "只回两个字：收到")
             .await
             .expect("真实调用应成功");
         assert!(!reply.content.trim().is_empty(), "返回内容为空");
@@ -286,15 +325,18 @@ mod minimax_live_tests {
             eprintln!("[LIVE] 跳过（未设置 MINIMAX_API_KEY）");
             return;
         };
-        let cfg = LlmConfig {
+        let _iso = cap_llm_config::testing::IsolatedLlm::new("file-live-badkey");
+        write_shared_config(&AiConfigDraft {
             provider: "minimax".to_string(),
-            api_key: "sk-cp-definitely-invalid-key".to_string(),
             base_url: "https://api.minimaxi.com/v1".to_string(),
             model: "MiniMax-M3.1-Flash".to_string(),
-            timeout_secs: 60,
-            temperature: 0.2,
-        };
-        let err = call_llm(&cfg, "你是助手", "hi")
+            api_key: "sk-cp-definitely-invalid-key".to_string(),
+            temperature: Some(0.2),
+            max_tokens: None,
+            timeout_secs: Some(60),
+        })
+        .expect("写入统一落点应成功");
+        let err = call_llm("你是助手", "hi")
             .await
             .expect_err("假 key 必须被拒");
         assert!(
@@ -312,9 +354,6 @@ mod minimax_live_tests {
 
     /// 免密钥的本地网关必须能跑通 `call_llm`（未设 `ZBIZ_GW` 时静默跳过）。
     ///
-    /// file 的 key 校验只在 `cap_llm::validate` 里，本轮给它加了「私有地址
-    /// 免鉴权」判据；这条用例确认它真的落到 file 的调用路径上。
-    ///
     /// ```sh
     /// ZBIZ_GW=http://192.168.31.249:8200/v1 ZBIZ_MODEL=zBiz-Text-35B \
     ///   cargo test -p z-biz-tool-file live_zbiz -- --nocapture
@@ -325,22 +364,21 @@ mod minimax_live_tests {
             return;
         };
         let model = std::env::var("ZBIZ_MODEL").unwrap_or_else(|_| "zBiz-Text-35B".to_string());
-        let cfg = LlmConfig {
+        let _iso = cap_llm_config::testing::IsolatedLlm::new("file-live-gw");
+        write_shared_config(&AiConfigDraft {
             provider: "zbiz-local".to_string(),
-            api_key: String::new(), // 本地网关没有鉴权层
             base_url: gw.clone(),
             model,
-            timeout_secs: 120,
-            temperature: 0.3,
-        };
+            api_key: String::new(), // 本地网关没有鉴权层
+            temperature: Some(0.3),
+            max_tokens: None,
+            timeout_secs: Some(120),
+        })
+        .expect("写入统一落点应成功");
 
-        let reply = call_llm(
-            &cfg,
-            "你是一个简洁的助手。",
-            "用一句话介绍你自己，不超过30字。",
-        )
-        .await
-        .expect("真实调用失败");
+        let reply = call_llm("你是一个简洁的助手。", "用一句话介绍你自己，不超过30字。")
+            .await
+            .expect("真实调用失败");
         assert!(!reply.content.trim().is_empty(), "返回为空（网关 {gw}）");
         assert!(
             reply
