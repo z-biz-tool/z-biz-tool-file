@@ -647,13 +647,15 @@ dependencies = [
 
 [[package]]
 name = "cap-img"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73db90b3eca9d341c4df85740e58dea99daeaf0dcbe9a9b02bf7ac46f1827eb1"
+checksum = "d9aa86f18de0eb14c8b18ee308daa076bb09686f6990e479c51e192b51d32501"
 dependencies = [
  "base64 0.22.1",
  "image",
+ "kamadak-exif",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7364,7 +7366,6 @@ dependencies = [
  "getrandom 0.2.17",
  "html2text",
  "image",
- "kamadak-exif",
  "lopdf",
  "lz4_flex",
  "md-5",

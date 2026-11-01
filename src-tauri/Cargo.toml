@@ -37,7 +37,6 @@ getrandom = "0.2"
 # reqwest 已随 AI 接入层迁入 cap-llm（本仓 src/ 中不再出现 reqwest）
 ssh2 = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-kamadak-exif = "0.6"
 walkdir = "2"
 notify = "6"
 epub = "2"
@@ -67,7 +66,10 @@ regex = "1"
 #   3. 「名字说谎」的文件 —— 变换族按源图扩展名决定输出格式、export 按参数决定，
 #      两者都不看目标扩展名 ⇒ 写出的 .jpg 里其实是 PNG 字节。
 # 0.x 语义下 minor 即 breaking，且 crates.io 不可覆盖 ⇒ 只能走 0.3.0。
-cap-img = "0.3.0"
+#
+# 0.4.0：EXIF 全量读写进能力层 —— 本仓私藏的 image_exif.rs 解析器退役，
+# 只保留「平铺成 ExifInfo 给预览面板」的展示映射。kamadak-exif 随之删依赖。
+cap-img = "0.4.0"
 sha2 = "0.10"
 chrono = "0.4"
 
