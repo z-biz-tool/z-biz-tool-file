@@ -633,6 +633,8 @@ dependencies = [
 [[package]]
 name = "cap-hash"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44134b67c29827df8f9fc1576ebe549219f5e1066a14f428d67807e8406de97b"
 
 [[package]]
 name = "cap-hub"

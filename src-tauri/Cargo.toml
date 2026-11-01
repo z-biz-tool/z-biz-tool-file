@@ -26,7 +26,9 @@ cap-doc = { path = "../../z-biz-tool-capability/crates/cap-doc" }
 cap-llm = { path = "../../z-biz-tool-capability/crates/cap-llm" }
 # 哈希原语（cap-hash）：CRC-32 的实现与查表收口到能力层，
 # 本仓只留「打开文件 + 流式喂字节」的编排（mind 仓有同一份 CRC-32 的 TS 抄本）。
-cap-hash = { path = "../../z-biz-tool-capability/crates/cap-hash" }
+# 2026-11-01 起走 crates.io 正式版（0.1.0 已发布，名字已占住）：
+# path 依赖只在本地能编，发出去的包在别人机器上装不上。
+cap-hash = "0.1.0"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
