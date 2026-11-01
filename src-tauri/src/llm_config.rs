@@ -265,103 +265,12 @@ pub async fn list_llm_models(config: LlmConfig) -> Result<Vec<String>, LlmFailur
 
 /// 给界面的结构化失败。
 ///
-/// ## 为什么不是 `Result<_, String>`
-///
-/// 字符串错误只能被「读」不能被「判断」。界面要给出的恰恰是判断：
-/// 401 该聚焦密钥框、404 该提示地址、429 该说「这不是你的配置问题」。
-/// 靠正则去猜 `HTTP 401 — ...` 里的数字，等于把协议塞进文案里，
-/// 哪天文案改一个字（比如加个中文破折号），分流就静默失效 ——
-/// 而失效的表现是「所有错误都显示同一句话」，没人会当成 bug 报上来。
-#[derive(Debug, Serialize)]
-pub struct LlmFailure {
-    /// 机器可判的类别：notConfigured / network / timeout / http / parse / unsupported / io
-    pub kind: &'static str,
-    /// HTTP 状态码（仅 kind == "http" 时非空）。
-    pub status: Option<u16>,
-    /// 原始错误，已脱敏、已按字符截断。给「想知道细节」的用户。
-    pub message: String,
-    /// 一句话动机 + 一个动作。给「只想让它能用」的用户。
-    pub hint: String,
-}
+/// 判据（分类 / 动作 / 落点）已下沉到 `cap_llm::failure` —— 家族里五个仓
+/// 各抄了一份 `hint_for`，抄到第 5 遍时已经开始漂移（本仓曾缺 `focus`
+/// 字段，同一个 401 在 note 会跳密钥框、在这里光标不动）。
+/// 此处只做**转发**，不再维护副本。
+pub use cap_llm::LlmFailure;
 
-fn kind_key(k: cap_llm::ErrorKind) -> &'static str {
-    use cap_llm::ErrorKind as E;
-    match k {
-        E::NotConfigured => "notConfigured",
-        E::Network => "network",
-        E::Timeout => "timeout",
-        E::Http => "http",
-        E::Parse => "parse",
-        E::Unsupported => "unsupported",
-        E::Io => "io",
-    }
-}
-
-/// 把类别 + 状态码翻译成「用户下一步该做什么」。
-///
-/// 每一条都必须指向**一个具体动作**，而不是复述错误。
-/// 「请求失败，请重试」这种文案的价值是零 —— 用户已经知道失败了。
-fn hint_for(kind: cap_llm::ErrorKind, status: Option<u16>) -> String {
-    use cap_llm::ErrorKind as E;
-    match (kind, status) {
-        (E::NotConfigured, _) => "配置还差一项。请补齐上方标红的字段后重试。".into(),
-        (E::Network, _) => {
-            "连不上这个地址。国内厂商（DeepSeek / 通义 / Kimi / 智谱 / 豆包）一般直连即可，\
-             如果你开了代理，先关掉再试；海外厂商（OpenAI / Gemini / Anthropic）相反，需要代理。"
-                .into()
-        }
-        (E::Timeout, _) => "等太久没等到回应。可能是网络到该地区的链路慢，也可能是模型正在排队。\
-             可以先换一个更小的模型试，或把超时调大。"
-            .into(),
-        (E::Http, Some(401)) | (E::Http, Some(403)) => {
-            "API Key 无效、已过期，或这个 key 没有该模型的权限。请重新粘贴密钥；\
-             若刚续费过，确认用的是新 key。"
-                .into()
-        }
-        (E::Http, Some(404)) => {
-            "地址或模型名不存在。最常见的原因是 Base URL 多写／少写了一段路径 —— \
-             各家都不完全一样（DeepSeek 带 /v1，智谱是 /api/paas/v4，火山是 /api/v3）。\
-             点「恢复默认地址」用该厂商的标准地址最稳。"
-                .into()
-        }
-        (E::Http, Some(429)) => {
-            "额度用尽或被限流。这不是配置写错了 —— 换个时段再试，或在服务商后台充值／提额。".into()
-        }
-        (E::Http, Some(s)) if s >= 500 => {
-            "服务商那边出故障了，不是你配置的问题。稍后重试即可。".into()
-        }
-        (E::Http, _) => "服务端拒绝了这次请求。原始错误见下方详情。".into(),
-        (E::Parse, _) => "对方回了内容，但不是预期的格式。多半是这个地址其实不是该协议的服务 —— \
-             例如把 Anthropic 的地址填在了 OpenAI 兼容这一档。"
-            .into(),
-        (E::Unsupported, _) => "这家服务不支持当前操作。换一个厂商，或改用手动填写模型名。".into(),
-        (E::Io, _) => "本机读写配置出错。检查配置文件所在目录是否可写。".into(),
-    }
-}
-
-impl LlmFailure {
-    fn from_error(e: cap_llm::LlmError) -> Self {
-        let hint = hint_for(e.kind, e.status);
-        Self {
-            kind: kind_key(e.kind),
-            status: e.status,
-            message: e.to_string(),
-            hint,
-        }
-    }
-}
-
-impl From<String> for LlmFailure {
-    /// `to_cap()` 之类的本地校验失败：没有类别可判，但同样要能显示。
-    fn from(message: String) -> Self {
-        Self {
-            kind: "notConfigured",
-            status: None,
-            hint: hint_for(cap_llm::ErrorKind::NotConfigured, None),
-            message,
-        }
-    }
-}
 #[cfg(test)]
 mod interaction_tests {
     use super::*;
@@ -428,48 +337,6 @@ mod interaction_tests {
         assert_eq!(ranked, vec!["a".to_string(), "b".to_string()]);
     }
 
-    #[test]
-    fn every_failure_kind_carries_an_actionable_hint() {
-        use cap_llm::ErrorKind as E;
-        // 这是本层存在的理由：界面不该复述错误，要给出下一步。
-        let cases = [
-            (E::NotConfigured, None, "补齐"),
-            (E::Network, None, "代理"),
-            (E::Timeout, None, "超时"),
-            (E::Http, Some(401), "密钥"),
-            (E::Http, Some(403), "权限"),
-            (E::Http, Some(404), "Base URL"),
-            (E::Http, Some(429), "限流"),
-            (E::Http, Some(502), "故障"),
-            (E::Parse, None, "协议"),
-            (E::Unsupported, None, "不支持"),
-            (E::Io, None, "配置"),
-        ];
-        for (kind, status, must_mention) in cases {
-            let hint = hint_for(kind, status);
-            assert!(
-                hint.contains(must_mention),
-                "{:?}/{:?} 的提示里没提到「{}」，实际：{}",
-                kind,
-                status,
-                must_mention,
-                hint
-            );
-            // 「请重试」这类空话不构成动作；提示必须有实质长度
-            assert!(hint.chars().count() >= 12, "提示过短：{}", hint);
-        }
-    }
-
-    #[test]
-    fn hint_does_not_leak_the_api_key() {
-        // 提示是给人看的，可能被截图发群。密钥绝不能出现在这里。
-        for (kind, status) in [
-            (cap_llm::ErrorKind::Network, None),
-            (cap_llm::ErrorKind::Http, Some(401)),
-            (cap_llm::ErrorKind::Parse, None),
-        ] {
-            let hint = hint_for(kind, status);
-            assert!(!hint.contains("sk-"), "提示里出现了疑似密钥：{}", hint);
-        }
-    }
+    // 注：失败提示的判据测试（每个错误类别都有可执行的下一步、
+    // 提示里不泄露密钥）已下沉到 `cap_llm::failure`，家族五仓共用一份。
 }
