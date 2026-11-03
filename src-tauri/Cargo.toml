@@ -14,19 +14,19 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # 家族统一深链协议（cap-hub）：zbiz:// 的构造、解析、待处理队列与产品清单。
-cap-hub = { path = "../../z-biz-tool-capability/crates/cap-hub", features = ["tauri"] }
+cap-hub = { path = "../../z-biz-tool-capability/crates/cap-hub", version = "0.1.0", features = ["tauri"] }
 tauri = { version = "2", features = ["protocol-asset"] }
 # 文档解析原语（GAP-06 文档一片）：PDF / EPUB / MOBI。
 # 版本与实现统一收口到 z-biz-tool-capability/crates/cap-doc，
 # 本仓只保留命令层（守卫 + 线程调度），见 src/doc_cmd.rs。
-cap-doc = { path = "../../z-biz-tool-capability/crates/cap-doc" }
+cap-doc = { path = "../../z-biz-tool-capability/crates/cap-doc", version = "0.1.0" }
 # 统一 AI 接入层（2026-10-26）：原本本仓自带一套 llm_endpoint/chat_request_body/
 # parse_response/call_llm，与 aigen/pet/db/note/kb 里的同类代码是同一件事的第六次重写。
 # 现在协议与传输全在 cap-llm，本仓只留提示词与结果结构。见 src/ai.rs 头部。
-cap-llm = { path = "../../z-biz-tool-capability/crates/cap-llm" }
+cap-llm = { path = "../../z-biz-tool-capability/crates/cap-llm", version = "0.1.0" }
 # 家族统一 LLM 配置落点（2026-11-01）：~/.z-biz-tool/llm/config.json + OS 密钥库。
 # 本仓原明文 llm.json 由启动迁移器搬入并抹掉密钥。
-cap-llm-config = { path = "../../z-biz-tool-capability/crates/cap-llm-config" }
+cap-llm-config = { path = "../../z-biz-tool-capability/crates/cap-llm-config", version = "0.1.0" }
 # 哈希原语（cap-hash）：CRC-32 的实现与查表收口到能力层，
 # 本仓只留「打开文件 + 流式喂字节」的编排（mind 仓有同一份 CRC-32 的 TS 抄本）。
 # 2026-11-01 起走 crates.io 正式版（0.1.0 已发布，名字已占住）：
