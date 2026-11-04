@@ -155,7 +155,23 @@ npm run build
 info "[2/3] 编译 Rust 后端 + 打 .app bundle（首次约 5-10 分钟）..."
 # --no-bundle 可以只产出二进制不打包，但我们要 .app 所以保留 bundle
 # 我们这里只产出 .app，不生成 .dmg（用户场景是替换现有 .app，无需 dmg）
-TAURI_SKIP_DMG=1 npx tauri build --bundles app
+#
+# ⚠️ updater 签名必须 fail-soft（2026-11-04 实测踩到，note 仓同款）：
+# tauri.conf.json 里 createUpdaterArtifacts=true 且 pubkey 非空时，
+# `tauri build` 在拿不到 TAURI_SIGNING_PRIVATE_KEY 时会**直接报错**：
+#   "A public key has been found, but no private key."
+# 私钥只存在 GitHub Secrets 里，本地没有。脚本是 set -e ⇒ 这一步非 0 退出，
+# 整个脚本在「[2/3]」就挂掉，结果是**编译好的 .app 明明躺在
+# target/release/bundle/macos/ 里，却装不进系统**。
+# 参照 build-release.yml 的 signing 步骤：本地没私钥就加 --no-sign 跳过签名
+# （不影响 .app 本体，只是没有 updater 更新包），让本地安装能走完。
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  info "检测到 TAURI_SIGNING_PRIVATE_KEY，启用 updater 签名"
+  TAURI_SKIP_DMG=1 npx tauri build --bundles app
+else
+  warn "未配置 TAURI_SIGNING_PRIVATE_KEY：本次构建跳过 updater 签名（--no-sign），只影响自动更新包，不影响 .app 本体"
+  TAURI_SKIP_DMG=1 npx tauri build --bundles app --no-sign
+fi
 
 # 查找 .app 产物（以 cargo metadata 为准，见文件头说明）
 TARGET_DIR=""
