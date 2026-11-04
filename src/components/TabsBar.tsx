@@ -1,5 +1,6 @@
 import { Tabs, Button, Tooltip } from "antd";
 import { PlusOutlined, CloseOutlined, BookOutlined, PictureOutlined, FolderOpenOutlined } from "@ant-design/icons";
+import type { ReactNode } from "react";
 import { useFileStore } from "../stores/fileStore";
 import { shortenHome } from "../utils/homeDir";
 import { useShortcutHint } from "../_shared/ShortcutHints";
@@ -7,6 +8,15 @@ import { useShortcutHint } from "../_shared/ShortcutHints";
 interface Props {
   onOpenNewTab: () => void;
   onSwitchTo: (path: string) => void;
+  /**
+   * 标签条右端的窗口级操作区（刷新 / 显示隐藏文件 / 快捷键 / 主题切换）。
+   *
+   * 这些按钮原来在 48px 高的顶栏里，而顶栏左边只有一个品牌图标 ——
+   * 一整条横向空间换几个图标，跟下面的标签条又各占一行。
+   * 合到标签条右端后：窗口只有一条"顶栏"，标签在左、动作在右，
+   * 也和「标签条 = 当前窗口的操作带」这个心智对齐。
+   */
+  actions?: ReactNode;
 }
 
 /** 把绝对路径压缩成 tab 标题：~/Downloads/foo */
@@ -18,21 +28,25 @@ function tabTitle(tab: { path: string; kind: string }): string {
   return shortenHome(tab.path) || "/";
 }
 
-/** 不同类型 tab 的图标 */
+/** 不同类型 tab 的图标
+ *  文件夹 tab 之前套了渐变文字（紫的→后来蓝的），渐变在 12px 图标上只是糊掉，
+ *  并不会真的「更好看」。这里跟另外两个一样用纯色，靠图标形状区分类型。 */
 function tabIcon(kind: string): React.ReactNode {
-  if (kind === "library") return <BookOutlined style={{ fontSize: 12, color: '#667eea' }} />;
-  if (kind === "media") return <PictureOutlined style={{ fontSize: 12, color: '#764ba2' }} />;
-  return <FolderOpenOutlined style={{ fontSize: 12, background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }} />;
+  if (kind === "library") return <BookOutlined style={{ fontSize: 12, color: '#1677ff' }} />;
+  if (kind === "media") return <PictureOutlined style={{ fontSize: 12, color: '#13c2c2' }} />;
+  return <FolderOpenOutlined style={{ fontSize: 12 }} />;
 }
 
-export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
+export default function TabsBar({ onOpenNewTab, onSwitchTo, actions }: Props) {
   const hint = useShortcutHint();
   const tabs = useFileStore((s) => s.tabs);
   const activeTabId = useFileStore((s) => s.activeTabId);
   const closeTab = useFileStore((s) => s.closeTab);
   const switchTab = useFileStore((s) => s.switchTab);
 
-  if (tabs.length === 0) return null;
+  // 注意：原来这里有一句 `if (tabs.length === 0) return null`。
+  // 按钮搬进来之后那句话会把右端的窗口级动作一起藏掉 —— 一条 tab 都没有时
+  // 连主题切换都点不到。改成只让 Tabs 这一段条件渲染，容器与 actions 常驻。
 
   const items = tabs.map((t) => {
     // 下面 title 的取材规则：目录 tab 用真实 path；library/media 的 path 是伪路径
@@ -59,7 +73,7 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
           }}
           onMouseEnter={(ev) => {
             if ((ev.target as HTMLElement).closest('.ant-tabs-tab')) {
-              (ev.currentTarget as HTMLElement).style.background = "rgba(102,126,234,0.08)";
+              (ev.currentTarget as HTMLElement).style.background = "rgba(22,119,255,0.08)";
             }
           }}
           onMouseLeave={(ev) => {
@@ -126,52 +140,69 @@ export default function TabsBar({ onOpenNewTab, onSwitchTo }: Props) {
         borderBottom: "1px solid var(--ant-color-border-secondary)",
         paddingLeft: 4,
         boxShadow: "0 2px 4px var(--ant-color-fill-secondary)",
+        // 顶栏取消后这一条就是窗口最上面，给它一个最小高度，
+        // 免得 tab 全关掉时整条塌下去、右边按钮贴到窗口边缘
+        minHeight: 40,
       }}
     >
-      {/* v5 的 cardGutter 在 v6 已被移除（tsc：Property 'cardGutter' does not exist）。
-          之前挂着它没人发现：实测卡片间距 2px（antd 默认 margin），8px 从来没生效过。 */}
-      <Tabs
-        type="editable-card"
-        hideAdd
-        size="small"
-        activeKey={activeTabId ?? undefined}
-        onChange={(key) => {
-          switchTab(key as string);
-          const tab = tabs.find((t) => t.id === key);
-          // 仅 directory tab 才触发目录切换；library/media tab 不调用 onSwitchTo
-          if (tab && tab.kind === "directory") onSwitchTo(tab.path);
-        }}
-        onEdit={(targetKey, action) => {
-          if (action === "remove") {
-            closeTab(targetKey as string);
-          }
-        }}
-        items={items}
-        style={{ flex: 1, minHeight: 32 }}
-        tabBarStyle={{ margin: 0, borderBottom: "none" }}
-      />
-      <Tooltip title={`新建标签页${hint("新建标签页")}`}>
-        <Button
-          type="text"
-          size="small"
-          icon={<PlusOutlined />}
-          onClick={onOpenNewTab}
-          style={{ 
-            marginRight: 8,
-            borderRadius: 8,
-            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-            color: "white",
-            transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+      {tabs.length > 0 && (
+        <>
+          {/* v5 的 cardGutter 在 v6 已被移除（tsc：Property 'cardGutter' does not exist）。
+              之前挂着它没人发现：实测卡片间距 2px（antd 默认 margin），8px 从来没生效过。 */}
+          <Tabs
+            type="editable-card"
+            hideAdd
+            size="small"
+            activeKey={activeTabId ?? undefined}
+            onChange={(key) => {
+              switchTab(key as string);
+              const tab = tabs.find((t) => t.id === key);
+              // 仅 directory tab 才触发目录切换；library/media tab 不调用 onSwitchTo
+              if (tab && tab.kind === "directory") onSwitchTo(tab.path);
+            }}
+            onEdit={(targetKey, action) => {
+              if (action === "remove") {
+                closeTab(targetKey as string);
+              }
+            }}
+            items={items}
+            style={{ flex: 1, minHeight: 32 }}
+            tabBarStyle={{ margin: 0, borderBottom: "none" }}
+          />
+          <Tooltip title={`新建标签页${hint("新建标签页")}`}>
+            {/* 新建标签是"随时可点"的轻量动作，原来是实心渐变圆块，
+                在标签条末尾像个主按钮。改成和其他 text 按钮一样的无底色样式。 */}
+            <Button
+              type="text"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={onOpenNewTab}
+              style={{ borderRadius: 8, flexShrink: 0 }}
+              aria-label="新建标签页"
+            />
+          </Tooltip>
+        </>
+      )}
+      {/* 右端动作区。左侧那条细线把「标签」和「窗口操作」分开，
+          没有标签时线也没意义，一并省掉。 */}
+      {actions && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            marginLeft: tabs.length > 0 ? 4 : "auto",
+            paddingLeft: tabs.length > 0 ? 8 : 0,
+            paddingRight: 8,
+            borderLeft: tabs.length > 0 ? "1px solid var(--ant-color-border-secondary)" : "none",
+            flexShrink: 0,
           }}
-          aria-label="新建标签页"
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.transform = "scale(1.05)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.transform = "scale(1)";
-          }}
-        />
-      </Tooltip>
+        >
+          {actions}
+        </div>
+      )}
+      {/* 没有 tab 时 actions 靠 marginLeft:auto 贴右；没有 actions 时
+          整个容器可能只剩 40px 高的一条空带，这里不再额外撑开 */}
     </div>
   );
 }

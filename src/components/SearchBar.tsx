@@ -10,9 +10,8 @@ import { App as AntdApp } from "antd";
 
 const { Text } = Typography;
 
-// 渐变色定义
-const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
-const searchBgGradient = "linear-gradient(135deg, rgba(102,126,234,0.08) 0%, rgba(118,75,162,0.08) 100%)";
+// 搜索框的淡蓝底（原来是一套紫色品牌渐变，跟全站主色 #1677ff 不是一路）
+const searchBgGradient = "linear-gradient(135deg, rgba(22,119,255,0.06) 0%, rgba(64,150,255,0.06) 100%)";
 
 interface SearchBarProps {
   rootPath: string;
@@ -183,22 +182,22 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
           placeholder="全盘搜索文件名或内容..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          prefix={<SearchOutlined style={{ color: "#667eea", fontSize: 16 }} />}
+          prefix={<SearchOutlined style={{ color: "#1677ff", fontSize: 16 }} />}
           allowClear
           style={{ 
             flex: 1,
             background: searchBgGradient,
             borderRadius: 10,
-            border: '1px solid rgba(102,126,234,0.1)',
+            border: '1px solid rgba(22,119,255,0.1)',
             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
           }}
           onFocus={(e) => {
-            e.currentTarget.style.boxShadow = '0 2px 8px rgba(102,126,234,0.15)';
-            e.currentTarget.style.border = '1px solid rgba(102,126,234,0.3)';
+            e.currentTarget.style.boxShadow = '0 2px 8px rgba(22,119,255,0.15)';
+            e.currentTarget.style.border = '1px solid rgba(22,119,255,0.3)';
           }}
           onBlur={(e) => {
             e.currentTarget.style.boxShadow = 'none';
-            e.currentTarget.style.border = '1px solid rgba(102,126,234,0.1)';
+            e.currentTarget.style.border = '1px solid rgba(22,119,255,0.1)';
           }}
         />
         <Segmented
@@ -226,7 +225,7 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
             padding: "6px 10px",
             fontSize: 12,
             color: "var(--ant-color-text-secondary)",
-            background: "linear-gradient(90deg, rgba(102,126,234,0.04) 0%, rgba(118,75,162,0.04) 100%)",
+            background: "linear-gradient(90deg, rgba(22,119,255,0.05) 0%, rgba(64,150,255,0.05) 100%)",
             borderRadius: 8,
             marginTop: 6
           }}
@@ -245,7 +244,10 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
               type="link"
               size="small"
               onClick={() => buildIndex()}
-              style={{ padding: 0, height: "auto", color: brandGradient, fontWeight: 500 }}
+              // 这里原本写的是 color: brandGradient —— 把一个渐变字符串塞给 color
+              // 是无效 CSS（color 只收颜色），实际一直被浏览器丢掉。
+              // 现在直接给主题主色，链接按钮才有该有的颜色。
+              style={{ padding: 0, height: "auto", color: "var(--ant-color-primary)", fontWeight: 500 }}
             >
               [重新构建]
             </Button>

@@ -184,7 +184,7 @@ const Omnibar: FC<OmnibarProps> = ({
             onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)'}
             onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = 'transparent'}
           >
-            <HomeOutlined style={{ color: '#667eea' }} />
+            <HomeOutlined style={{ color: '#1677ff' }} />
           </div>
         </Dropdown>
 
@@ -194,15 +194,9 @@ const Omnibar: FC<OmnibarProps> = ({
             <div key={path} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 10 }}>•</span>
               {isLast ? (
-                <span 
-                  style={{ 
-                    fontWeight: 600,
-                    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                    backgroundClip: "text",
-                  }}
-                >
+                // 当前目录：加粗即可。原来是渐变文字（紫→蓝都试过），
+                // 在小字号下渐变会把字压得发虚，反而不如直接加重来得分明。
+                <span style={{ fontWeight: 600, color: "var(--ant-color-text)" }}>
                   {parts[index - 1] || 'Home'}
                 </span>
               ) : (
@@ -347,7 +341,10 @@ const Omnibar: FC<OmnibarProps> = ({
         (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)';
       }}
     >
-      {/* 导航控制按钮 */}
+      {/* 导航控制按钮
+          原来三个都是实心渐变块（紫的，后来改蓝的还是块），一排色块压在路径栏最前面，
+          视觉上比下面的文件列表还抢眼。文件管理器的前进/后退本来就是"顺手点一下"的
+          次级操作，改成无底色的图标按钮 + hover 才浮出底色，和下面那排普通按钮一致。 */}
       <div style={{ display: 'flex', gap: 2 }}>
         <button
           aria-label="后退"
@@ -357,23 +354,29 @@ const Omnibar: FC<OmnibarProps> = ({
             padding: '6px 10px',
             borderRadius: 8,
             border: 'none',
-            background: historyIndex <= 0 ? 'transparent' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: historyIndex <= 0 ? '#999' : 'white',
+            background: 'transparent',
+            color: 'var(--ant-color-text-secondary)',
             cursor: historyIndex <= 0 ? 'not-allowed' : 'pointer',
-            opacity: historyIndex <= 0 ? 0.4 : 1,
-            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            opacity: historyIndex <= 0 ? 0.35 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            transition: 'background 0.15s, color 0.15s',
           }}
           title={`后退${hint("后退")}`}
           onMouseEnter={(e) => {
-            if (historyIndex > 0) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
+            if (historyIndex > 0) {
+              e.currentTarget.style.background = 'var(--ant-color-fill-tertiary)';
+              e.currentTarget.style.color = 'var(--ant-color-text)';
+            }
           }}
           onMouseLeave={(e) => {
-            if (historyIndex > 0) (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
           }}
         >
           <ArrowLeftOutlined />
         </button>
-        
+
         <button
           aria-label="前进"
           onClick={onForward}
@@ -382,18 +385,24 @@ const Omnibar: FC<OmnibarProps> = ({
             padding: '6px 10px',
             borderRadius: 8,
             border: 'none',
-            background: historyIndex >= history.length - 1 ? 'transparent' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: historyIndex >= history.length - 1 ? '#999' : 'white',
+            background: 'transparent',
+            color: 'var(--ant-color-text-secondary)',
             cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer',
-            opacity: historyIndex >= history.length - 1 ? 0.4 : 1,
-            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            opacity: historyIndex >= history.length - 1 ? 0.35 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            transition: 'background 0.15s, color 0.15s',
           }}
           title={`前进${hint("前进")}`}
           onMouseEnter={(e) => {
-            if (historyIndex < history.length - 1) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
+            if (historyIndex < history.length - 1) {
+              e.currentTarget.style.background = 'var(--ant-color-fill-tertiary)';
+              e.currentTarget.style.color = 'var(--ant-color-text)';
+            }
           }}
           onMouseLeave={(e) => {
-            if (historyIndex < history.length - 1) (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
           }}
         >
           <ArrowLeftOutlined rotate={180} />
@@ -406,21 +415,30 @@ const Omnibar: FC<OmnibarProps> = ({
             padding: '6px 10px',
             borderRadius: 8,
             border: 'none',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: 'white',
+            background: 'transparent',
+            color: 'var(--ant-color-text-secondary)',
             cursor: 'pointer',
-            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            transition: 'background 0.15s, color 0.15s',
           }}
           title={`上级目录${hint("返回上级")}`}
-          onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)'}
-          onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.transform = 'scale(1)'}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--ant-color-fill-tertiary)';
+            e.currentTarget.style.color = 'var(--ant-color-text)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
+          }}
         >
           <ArrowUpOutlined />
         </button>
       </div>
 
-      {/* 模式切换 */}
-      <div style={{ display: 'flex', gap: 2, background: 'rgba(0,0,0,0.04)', padding: 4, borderRadius: 8 }}>
+      {/* 模式切换：容器灰底 + 激活项白底，是 antd Segmented 的常规观感。
+          原来激活项是实心渐变块，跟左边的导航按钮叠在一起就是一条彩色条带。 */}
+      <div style={{ display: 'flex', gap: 2, background: 'var(--ant-color-fill-quaternary)', padding: 3, borderRadius: 8 }}>
         {[
           { key: 'navigation', icon: <HistoryOutlined />, label: '路径' },
           { key: 'search', icon: <SearchOutlined />, label: '搜索' },
@@ -431,24 +449,25 @@ const Omnibar: FC<OmnibarProps> = ({
             aria-label={m.label}
             onClick={() => setMode(m.key as any)}
             style={{
-              padding: '6px 12px',
+              padding: '5px 10px',
               borderRadius: 6,
               border: 'none',
-              background: mode === m.key ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : 'transparent',
-              color: mode === m.key ? 'white' : 'var(--ant-color-text)',
+              background: mode === m.key ? 'var(--ant-color-bg-container)' : 'transparent',
+              color: mode === m.key ? 'var(--ant-color-primary)' : 'var(--ant-color-text-secondary)',
+              boxShadow: mode === m.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
               cursor: 'pointer',
               fontSize: 12,
               fontWeight: mode === m.key ? 600 : 500,
               display: 'flex',
               alignItems: 'center',
               gap: 4,
-              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+              transition: 'all 0.15s',
             }}
             onMouseEnter={(e) => {
-              if (mode !== m.key) (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.06)';
+              if (mode !== m.key) e.currentTarget.style.color = 'var(--ant-color-text)';
             }}
             onMouseLeave={(e) => {
-              if (mode !== m.key) (e.currentTarget as HTMLElement).style.background = 'transparent';
+              if (mode !== m.key) e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
             }}
           >
             {m.icon}

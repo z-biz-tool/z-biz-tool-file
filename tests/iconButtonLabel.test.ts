@@ -125,8 +125,12 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 88 → 90：左侧改成活动栏（ActivityBar）后新增两个图标按钮 ——
  * SidebarPanel 的「关闭侧栏」（aria-label="关闭侧栏"）与活动栏底部的「更多工具」
  * （aria-label="更多工具"）。两个都是纯图标，都带了可及名称。
+ * 90 → 89：取消 48px 顶栏、把窗口级按钮挪进标签条右端那轮。顶栏里 6 个按钮
+ * 走了 5 个图标按钮（后退/前进/刷新/显示隐藏/快捷键，其中「上级」有文字不算），
+ * 标签条右端重新落了 4 个（刷新/显示隐藏/快捷键/主题切换）；后退/前进本身就在
+ * 下面的路径栏里有一份，没有搬第二份。净减 1，都带了 aria-label。
  */
-const TOTAL_ICON_ONLY = 90;
+const TOTAL_ICON_ONLY = 89;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

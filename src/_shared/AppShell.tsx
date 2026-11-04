@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { Layout, Button, Space, Typography, Tooltip } from "antd";
+import { Layout, Button, Space, Tooltip, theme } from "antd";
 import {
   BulbOutlined,
   BulbFilled,
@@ -27,6 +27,17 @@ interface AppShellProps {
   /** 面板区宽度，默认 280 */
   railPanelWidth?: number;
   headerExtra?: ReactNode;
+  /**
+   * 不渲染顶部 Header。
+   *
+   * file 仓走活动栏布局后，Header 左边只剩一个品牌图标、右边是一排窗口级按钮，
+   * 而中间那条 48px 的高度什么都放不下 —— 等于用一整条横向空间换 7 个图标。
+   * 打开这个开关后，调用方把那些按钮挪进自己的标签条（见 TabsBar 的 actions），
+   * 品牌图标挪进活动栏顶部，窗口的"顶栏"就是标签条本身。
+   *
+   * 默认 false：其它形态（宽侧栏模式）仍然需要 Header 放折叠按钮。
+   */
+  hideHeader?: boolean;
   children: ReactNode;
   siderWidth?: number;
   collapsedSider?: boolean;
@@ -41,12 +52,14 @@ export function AppShell({
   railPanel,
   railPanelWidth = 280,
   headerExtra,
+  hideHeader = false,
   children,
   siderWidth = 220,
   collapsedSider = false,
   onToggleSider,
 }: AppShellProps) {
   const { mode, toggle } = useTheme();
+  const { token } = theme.useToken();
 
   // 监听系统主题变化（仅在用户未手动覆盖时，这里仅作为提示）
   useEffect(() => {
@@ -57,17 +70,20 @@ export function AppShell({
   // 脱钩（注册表改了这里不会跟），也是全应用第三种书写口径。
   const hint = useShortcutHint();
 
-  // 渐变色主题
+  // 顶栏背景：两套主题都用同一套，不再区分
   const headerGradient = mode === "dark"
     ? "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
     : "linear-gradient(135deg, #ffffff 0%, #f8fafd 100%)";
-  
-  const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
 
   return (
     <Layout style={{ height: "100vh" }}>
+      {/* hideHeader 时不渲染这一条：file 仓改成「标签条即顶栏」，
+          按钮交给 TabsBar.actions，品牌图标交给活动栏顶部 */}
+      {!hideHeader && (
       <Header
         role="banner"
+        // 应用名不再目视显示，但仍要留给读屏与窗口识别，否则顶栏就成了无标签区域
+        aria-label={title}
         style={{
           display: "flex",
           alignItems: "center",
@@ -107,42 +123,24 @@ export function AppShell({
               />
             </Tooltip>
           )}
+          {/* 品牌图标：只留图标，不放应用名。
+              macOS 的标题栏本来就写着窗口名，顶栏再重复一遍是同一个信息说两次，
+              还占掉横向空间（右侧的操作按钮反而被挤）。紫渐变底也一并去掉 ——
+              全站主色是 #1677ff，那个 #667eea→#764ba2 是另一套色，跟按钮对不上。 */}
           <div
             style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              background: mode === "dark" 
-                ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-                : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+              width: 28,
+              height: 28,
+              borderRadius: 7,
+              background: token.colorFillTertiary,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              boxShadow: "0 4px 12px rgba(102,126,234,0.25)",
-              transition: "transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.transform = "scale(1.05) rotate(5deg)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.transform = "scale(1) rotate(0deg)";
+              flexShrink: 0,
             }}
           >
-            {icon || <FolderOutlined style={{ color: "white", fontSize: 16 }} />}
+            {icon || <FolderOutlined style={{ color: token.colorPrimary, fontSize: 15 }} />}
           </div>
-          <Typography.Text
-            strong
-            style={{
-              fontSize: 15,
-              fontWeight: 600,
-              background: brandGradient,
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
-            }}
-          >
-            {title}
-          </Typography.Text>
         </Space>
         <Space size={4}>
           {headerExtra}
@@ -172,6 +170,7 @@ export function AppShell({
           </Tooltip>
         </Space>
       </Header>
+      )}
       {/*
         hasSider 是必须的：antd 的 Layout 默认 flex-direction: column，
         只有当它认得出来"这一行里有侧栏"时才切成 row。
@@ -251,7 +250,8 @@ export function AppShell({
               ? "linear-gradient(180deg, #0f0f23 0%, #1a1a2e 100%)"
               : "linear-gradient(180deg, #f8fafd 0%, #eef2f7 100%)",
             transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-            minHeight: "calc(100vh - 48px)",
+            // 没有 Header 时整条内容区就是满高，不能再减 48px（否则底部会空一条）
+            minHeight: hideHeader ? "100vh" : "calc(100vh - 48px)",
           }}
         >
           {children}

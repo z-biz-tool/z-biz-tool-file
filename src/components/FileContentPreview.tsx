@@ -25,6 +25,7 @@ import CsvPreview from "./CsvPreview";
 import JsonPreview from "./JsonPreview";
 import YamlPreview from "./YamlPreview";
 import TextConverter from "./TextConverter";
+import { buildExifItems, hasDisplayableExif, type ExifInfo } from "../utils/exifItems";
 
 interface FileContentPreviewProps {
   file: FileEntry;
@@ -53,22 +54,6 @@ interface FileInfo {
   size: number;
   modified: number;
   is_dir: boolean;
-}
-
-interface ExifInfo {
-  make?: string;
-  model?: string;
-  date_time?: string;
-  exposure_time?: string;
-  f_number?: string;
-  iso?: string;
-  focal_length?: string;
-  pixel_x_dimension?: number;
-  pixel_y_dimension?: number;
-  latitude?: number;
-  longitude?: number;
-  altitude?: number;
-  lens_model?: string;
 }
 
 /**
@@ -217,14 +202,9 @@ export default function FileContentPreview({
       case "image": {
         // EXIF 在 effect 里异步加载（仅 JPEG/TIFF 有意义，HEIC/WebP 等可能没数据）
         // 在图片下方显示 EXIF 信息
-        const showExif = !!(
-          exif &&
-          (exif.make ||
-            exif.model ||
-            exif.date_time ||
-            exif.iso ||
-            exif.latitude !== undefined)
-        );
+        // 判空统一走 hasDisplayableExif：它在 utils 里用 Number.isFinite，
+        // 能挡住后端返回的 null（原来是 `!== undefined`，null 会漏过去）
+        const showExif = hasDisplayableExif(exif);
         const exifInfo: ExifInfo | null = showExif ? exif : null;
         // 图片渲染：自然尺寸 + 容器 overflow:auto，超出时出滚动条（不再用 objectFit 缩到看不见）
         const renderImage = (extraStyle?: CSSProperties) => (
@@ -494,29 +474,12 @@ export default function FileContentPreview({
   );
 }
 
+/**
+ * EXIF 面板。取值与判空逻辑在 utils/exifItems（纯函数，可被单测覆盖），
+ * 这里只负责渲染。
+ */
 function ExifPanel({ exif }: { exif: ExifInfo }) {
-  const items: Array<[string, string]> = [];
-  if (exif.make || exif.model) {
-    items.push(["相机", `${exif.make ?? ""} ${exif.model ?? ""}`.trim()]);
-  }
-  if (exif.lens_model) items.push(["镜头", exif.lens_model]);
-  if (exif.date_time) items.push(["拍摄时间", exif.date_time]);
-  if (exif.focal_length) items.push(["焦距", exif.focal_length]);
-  if (exif.f_number) items.push(["光圈", exif.f_number]);
-  if (exif.exposure_time) items.push(["快门", exif.exposure_time]);
-  if (exif.iso) items.push(["ISO", exif.iso]);
-  if (exif.pixel_x_dimension && exif.pixel_y_dimension) {
-    items.push(["尺寸", `${exif.pixel_x_dimension} × ${exif.pixel_y_dimension}`]);
-  }
-  if (exif.latitude !== undefined && exif.longitude !== undefined) {
-    items.push([
-      "GPS",
-      `${exif.latitude.toFixed(6)}, ${exif.longitude.toFixed(6)}`,
-    ]);
-  }
-  if (exif.altitude !== undefined) {
-    items.push(["海拔", `${exif.altitude.toFixed(1)}m`]);
-  }
+  const items = buildExifItems(exif);
   if (items.length === 0) return null;
   return (
     <div

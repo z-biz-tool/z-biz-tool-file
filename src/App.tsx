@@ -6,8 +6,6 @@ import type { MenuProps } from "antd";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   SearchOutlined,
-  ArrowLeftOutlined,
-  ArrowRightOutlined,
   ReloadOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -52,6 +50,8 @@ import {
   InboxOutlined,
   ToolOutlined,
   GlobalOutlined,
+  BulbOutlined,
+  BulbFilled,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -121,7 +121,7 @@ import {
 } from "./_shared/ShortcutHints";
 import Omnibar from "./_shared/Omnibar";
 import { MediaGallery } from "./components/MediaGallery";
-import ActivityBar, { ActivityBarMore, type ActivityBarItem } from "./components/ActivityBar";
+import ActivityBar, { ActivityBarMore, type ActivityBarApp, type ActivityBarItem } from "./components/ActivityBar";
 import SidebarPanel from "./components/SidebarPanel";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import { parentOfPath } from "./utils/parentDir";
@@ -205,6 +205,21 @@ function ResizableHeaderCell({
   );
 }
 
+/**
+ * 活动栏上半截的「应用」清单。
+ *
+ * 活动栏是纵向两段：
+ *  1. 应用（这里）—— 决定主区进哪个板块，永远有且只有一个处于选中态；
+ *  2. 应用之下的功能项（搜索/收藏夹/终端…）—— 点开一块面板，再点收起。
+ *
+ * file 仓的本体就是第一个应用「文件管理」，所以默认一打开就在它里面，
+ * 不需要先点一下图标。以后要把别的板块（笔记、图书馆…）并进来，
+ * 在这里加一条即可，主区的分支在下面 `activeApp === "files"` 那处。
+ */
+const RAIL_APPS: ActivityBarApp[] = [
+  { key: "files", label: "文件管理", icon: <FolderOpenOutlined /> },
+];
+
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
   const { message, modal } = AntdApp.useApp();
@@ -219,7 +234,7 @@ function AppShellInner() {
     }
   };
   // ⌘ + ⇧ + L 走的就是这里（注册表那条 spec）；主题本身由 _shared/ThemeProvider 持久化
-  const { toggle: toggleTheme } = useTheme();
+  const { mode, toggle: toggleTheme } = useTheme();
   const [rootPath, setRootPath] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -291,6 +306,24 @@ function AppShellInner() {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("z-tool-rail-active") ?? "";
   });
+  /**
+   * 活动栏上半截「应用」里当前所在的板块。
+   *
+   * 默认就是第一个应用（文件管理）—— 打开就是文件界面，不需要先点一下。
+   * 持久化方式和 railActive 一致：这次停在哪个板块，下次打开还是那个。
+   * 目前只注册了 files 一个，所以切换是恒等的；第二个应用接进来时，
+   * 主区的分支在下面 `activeApp === "files" ? ... : ...` 那处。
+   */
+  const [activeApp, setActiveApp] = useState<string>(() => {
+    if (typeof window === "undefined") return RAIL_APPS[0].key;
+    const stored = localStorage.getItem("z-tool-active-app");
+    // 白名单校验：这串是主区的渲染分支判据，读到脏值（改版本、手改存储）
+    // 会落到"未知应用"的兜底分支，界面上就是一块空白
+    return stored && RAIL_APPS.some((a) => a.key === stored) ? stored : RAIL_APPS[0].key;
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") localStorage.setItem("z-tool-active-app", activeApp);
+  }, [activeApp]);
   const [previewWidth, setPreviewWidth] = useState<number>(() => {
     if (typeof window === "undefined") return 420;
     const stored = Number(localStorage.getItem("z-tool-preview-width"));
@@ -1895,39 +1928,26 @@ function AppShellInner() {
     }
   })();
 
-  // 顶栏额外内容：工具栏
-  const headerExtra = (
+  /**
+   * 标签条右端的窗口级动作。
+   *
+   * 原来这些是顶栏的 headerExtra，和左端一个品牌图标对拉在 48px 的一条里。
+   * 顶栏取消后（AppShell hideHeader），它们跟标签挤进同一行：
+   * 左边「在哪些地方」，右边「对当前窗口整体做什么」，一行说完。
+   *
+   * 后退 / 前进 / 上级**没有**搬过来：下面路径栏（Omnibar）里本来就有这三个，
+   * 隔一行的两条一模一样，纯属重复。导航按钮摆在要导航的路径旁边才顺手。
+   */
+  const tabActions = (
     <>
-      <Tooltip title={`后退${hint("后退")}`} placement="bottom">
-        <Button
-          icon={<ArrowLeftOutlined />}
-          onClick={goBack}
-          disabled={historyIndex <= 0}
-          size="small"
-          aria-label="后退"
-        />
-      </Tooltip>
-      <Tooltip title={`前进${hint("前进")}`} placement="bottom">
-        <Button
-          icon={<ArrowRightOutlined />}
-          onClick={goForward}
-          disabled={historyIndex >= history.length - 1}
-          size="small"
-          aria-label="前进"
-        />
-      </Tooltip>
       <Tooltip title={`刷新${hint("刷新当前目录")}`} placement="bottom">
         <Button
+          type="text"
           icon={<ReloadOutlined />}
           onClick={() => loadDirectory(currentPath)}
           size="small"
           aria-label="刷新"
         />
-      </Tooltip>
-      <Tooltip title={`上级目录${hint("返回上级")}`} placement="bottom">
-        <Button onClick={goUp} size="small" aria-label="上级目录">
-          上级
-        </Button>
       </Tooltip>
       <Tooltip title={`${showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}${hint("显示/隐藏隐藏文件")}`} placement="bottom">
         <Button
@@ -1941,9 +1961,22 @@ function AppShellInner() {
       <Tooltip title={`快捷键${hint("查看快捷键面板")}`} placement="bottom">
         <Button
           size="small"
+          type="text"
           icon={<ThunderboltOutlined />}
           onClick={() => setShortcutHelpOpen(true)}
           aria-label="快捷键"
+        />
+      </Tooltip>
+      <Tooltip
+        title={`${mode === "dark" ? "切换到亮色" : "切换到暗色"}${hint("切换主题")}`}
+        placement="bottom"
+      >
+        <Button
+          type="text"
+          size="small"
+          icon={mode === "dark" ? <BulbFilled /> : <BulbOutlined />}
+          onClick={toggleTheme}
+          aria-label={mode === "dark" ? "切换到亮色" : "切换到暗色"}
         />
       </Tooltip>
     </>
@@ -1955,9 +1988,14 @@ function AppShellInner() {
     <ShortcutHintsProvider specs={shortcutSpecs}>
     <AppShell
       title="z-biz-tool-file"
-      icon={<FolderOpenOutlined style={{ fontSize: 18, color: "#1677ff" }} />}
+      // 顶栏取消：按钮进标签条右端，品牌图标进活动栏顶部。
+      // 48px 的横条只装一个图标 + 一排按钮，不如让标签条本身就是顶栏。
+      hideHeader
       rail={
         <ActivityBar
+          apps={RAIL_APPS}
+          activeApp={activeApp}
+          onAppChange={setActiveApp}
           items={railItems}
           activeKey={railActive}
           onActiveChange={setRailActive}
@@ -1968,11 +2006,16 @@ function AppShellInner() {
       }
       railPanel={railPanel}
       railPanelWidth={280}
-      headerExtra={headerExtra}
     >
+      {/* 应用切换的落点：主区渲染哪个板块由 activeApp 决定。
+          当前只注册了 files 一个应用，所以永远走第一支 —— 点活动栏顶部的
+          文件管理图标是恒等的。第二个应用接进来时在这里加分支，
+          不用回头改 ActivityBar。 */}
+      {activeApp === "files" ? (
       <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        {/* 多标签页 */}
+        {/* 多标签页（同时也是窗口的顶栏：右侧挂窗口级动作） */}
         <TabsBar
+          actions={tabActions}
           onOpenNewTab={() => {
             const id = openTab(currentPath || homeDirSync());
             // 新 tab 默认显示当前路径
@@ -2555,6 +2598,22 @@ function AppShellInner() {
         </div>
         )}
       </div>
+      ) : (
+        // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。
+        // 留一句人话，总比切过去看到一片空白、以为程序崩了强。
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100%",
+            color: "var(--ant-color-text-tertiary)",
+            fontSize: 13,
+          }}
+        >
+          「{RAIL_APPS.find((a) => a.key === activeApp)?.label ?? activeApp}」这个板块还没接进来
+        </div>
+      )}
 
       {/* 重命名弹窗 */}
       <ModalWrap
