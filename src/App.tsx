@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense, type ReactNode } from "react";
 import {
-  Input, Button, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal, Badge,
+  Input, Button, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal,
 } from "antd";
 import type { MenuProps } from "antd";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -26,7 +26,6 @@ import {
   FilePdfOutlined,
   ScanOutlined,
   CloudDownloadOutlined,
-  UpOutlined,
   BookOutlined,
   ReadOutlined,
   FormOutlined,
@@ -109,7 +108,11 @@ import OcrTool from "./components/OcrTool";
 import Aria2Manager from "./components/Aria2Manager";
 import LibraryView from "./components/LibraryView";
 import Updater from "./components/Updater";
-import UpdaterGate from "./components/UpdaterGate";
+import {
+  UpdateCenterProvider,
+  UpdateLauncher,
+  UpdateTopButton,
+} from "./components/UpdateCenter";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import {
@@ -299,7 +302,6 @@ function AppShellInner() {
   const [ocrOpen, setOcrOpen] = useState(false);
   const [aria2Open, setAria2Open] = useState(false);
     const [updaterOpen, setUpdaterOpen] = useState(false);
-    const [hasUpdate, setHasUpdate] = useState(false);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -385,15 +387,8 @@ function AppShellInner() {
     }
   });
 
-  // 启动时静默检查更新
-  useEffect(() => {
-    invoke("updater_silent_check").then((status) => {
-      if (status) setHasUpdate(true);
-    }).catch((e) => {
-      /* 静默检查本来就不打扰用户，但失败原因要能查 */
-      console.warn("[updater] 静默检查失败（不影响使用）:", e);
-    });
-  }, []);
+  // 启动后的静默检查已收进 UpdateCenterProvider：角标与「真正能装」的通道
+  // 必须是同一份状态，否则又会出现「红点亮着、点开却是手动下载」。
 
   useEffect(() => {
     try {
@@ -2157,6 +2152,9 @@ function AppShellInner() {
   );
 
   return (
+    // 更新中心放在这一层：既有 AppShell 里的两个入口（左下角 + 顶栏），
+    // 也有兜底的手动下载面板，三者都读同一份 check() 结果。
+    <UpdateCenterProvider onOpenManualDownload={() => setUpdaterOpen(true)}>
     // 子组件（Omnibar / TabsBar / 预览区）通过 useShortcutHint() 取同一份注册表，
     // 不再各自抄一份 mac 专属文案。这里不重排内部缩进，只为少 800 行噪音 diff。
     <ShortcutHintsProvider specs={shortcutSpecs}>
@@ -2178,7 +2176,11 @@ function AppShellInner() {
           onActiveChange={setRailActive}
           footer={
             activeApp === "files" ? (
-              <ActivityBarMore label="更多工具" onClick={() => setQuickActionsOpen(true)} />
+              <>
+                {/* 左下角常驻：平时安静，有新版挂红点，点一下自己装完重启 */}
+                <UpdateLauncher />
+                <ActivityBarMore label="更多工具" onClick={() => setQuickActionsOpen(true)} />
+              </>
             ) : undefined
           }
         />
@@ -2439,21 +2441,8 @@ function AppShellInner() {
               图书馆
             </Button>
           </Tooltip>
-          {hasUpdate && (
-            <Tooltip title="发现新版本，点击更新">
-              <Badge dot>
-                <Button
-                  size="small"
-                  type="primary"
-                  icon={<UpOutlined />}
-                  onClick={() => setUpdaterOpen(true)}
-                  aria-label="更新可用"
-                >
-                  更新
-                </Button>
-              </Badge>
-            </Tooltip>
-          )}
+          {/* 有新版才出现；与左下角入口共用 UpdateCenter 的同一份状态 */}
+          <UpdateTopButton />
           <Tooltip title="回收站（已删除的文件）">
             <Button
               size="small"
@@ -3116,6 +3105,7 @@ function AppShellInner() {
       <TransferQueue />
     </AppShell>
     </ShortcutHintsProvider>
+    </UpdateCenterProvider>
   );
 }
 
@@ -3161,17 +3151,12 @@ export default function App() {
   return (
     <ThemeProvider>
       <AntdApp>
-        <AppShellInner />
         {/*
-          启动后延时静默检查更新（endpoint / pubkey 见 tauri.conf.json 的 plugins.updater）。
-          这条是终端板块搬入时带过来的 UpdaterGate —— 它原来是 terminal 的 main.tsx 里
-          `<App /><UpdaterGate />` 平级的全局闸门，搬过来后没人挂就成了孤儿。更新是应用级
-          行为、不该按板块划分，所以挂在宿主这一层：
-            · 这里 = 有新版才自己弹（失败一律静默，离线 / 无 manifest 都不打扰用户）；
-            · AppShellInner 里那个 <Updater> = 用户从菜单主动点开的面板（走 GitHub Releases）。
-          两套并存是过渡态：前者是家族分发底座的新路，后者是旧的下载页。
+          更新中心挂在 AppShellInner 内部（见那里的 UpdateCenterProvider）：
+          原先这里有个从 terminal 搬来的 UpdaterGate 自己弹窗，与顶栏红点用的
+          GitHub Releases 静默检查是两套状态 —— 已收敛成一条官方 updater 通道。
         */}
-        <UpdaterGate />
+        <AppShellInner />
       </AntdApp>
     </ThemeProvider>
   );
