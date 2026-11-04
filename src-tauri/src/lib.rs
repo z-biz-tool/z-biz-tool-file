@@ -32,6 +32,10 @@ mod path_guard;
 mod search;
 mod sftp;
 mod tags;
+// 终端能力（SSH / SFTP / 端口转发 / 会话日志 / 对话式 AI）：从 z-biz-tool-terminal
+// 仓整体搬入，作为 file 的第二个板块。整棵树挂在 crate::terminal::* 下，
+// 避免和本仓已有的 commands / ai / ... 撞名。见 src/terminal/mod.rs。
+mod terminal;
 mod trash;
 mod updater;
 mod video_thumb;
@@ -58,6 +62,8 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // 更新装完「立即重启」用（终端板块的 UpdaterGate 会调，file 自己不用）
+        .plugin(tauri_plugin_process::init())
         .manage(WatcherState::default())
         .manage(aria2::Aria2State::default())
         .manage(archive::job::Jobs::default())
@@ -209,6 +215,72 @@ pub fn run() {
             watcher::stop_watching,
             watcher::get_watching_path,
             zbiz_take_pending,
+            // ───────────────────────── 终端（从 z-biz-tool-terminal 仓搬入）──
+            // 命令名保持原样，只有 7 个与 file 撞名的加了 `term_` 前缀：
+            //   read_file_content / get_ai_config / save_ai_config / ai_chat /
+            //   list_llm_presets / list_llm_models / test_ai_config
+            // 两边同名不同义（file 的 read_file_content 返回结构体、terminal 的返回
+            // 纯文本；file 的 AI 面向文档理解、terminal 的是完整对话+工具调用链路），
+            // 所以是隔离而不是合并。家族深链的 zbiz_take_pending 直接复用上面 file 那份，
+            // terminal 那份没搬。
+            terminal::commands::ssh_connect,
+            terminal::commands::ssh_connect_via_jump,
+            terminal::commands::ssh_disconnect,
+            terminal::commands::ssh_execute,
+            terminal::commands::audit_event,
+            terminal::audit::audit_records,
+            terminal::audit::audit_export,
+            terminal::commands::ssh_start_pty,
+            terminal::commands::ssh_pty_write,
+            terminal::commands::ssh_pty_resize,
+            terminal::commands::ssh_start_forward,
+            terminal::commands::ssh_stop_forward,
+            terminal::commands::ssh_list_forwards,
+            terminal::commands::sftp_list,
+            terminal::commands::sftp_upload,
+            terminal::commands::sftp_download,
+            terminal::commands::sftp_cancel_transfer,
+            terminal::commands::sftp_mkdir,
+            terminal::commands::sftp_remove,
+            terminal::commands::sftp_rename,
+            terminal::commands::ssh_generate_keypair,
+            terminal::commands::ssh_resolve_host_key,
+            terminal::hostkeys::known_hosts_list,
+            terminal::hostkeys::known_hosts_remove,
+            terminal::commands::tcp_probe,
+            terminal::commands::ssh_diagnose_ping,
+            terminal::commands::ssh_diagnose_port,
+            terminal::commands::ssh_diagnose_traceroute,
+            terminal::commands::ssh_get_server_info,
+            terminal::commands::read_ssh_config,
+            terminal::commands::get_temp_dir,
+            terminal::commands::open_file_with_default_app,
+            terminal::commands::get_file_modified_time,
+            terminal::commands::term_read_file_content,
+            terminal::commands::read_file_as_base64,
+            terminal::commands::save_key_file,
+            terminal::config::get_config,
+            terminal::config::save_servers,
+            terminal::config::save_settings,
+            terminal::config::save_snippets,
+            terminal::config::save_custom_groups,
+            terminal::config::save_tabs,
+            terminal::config::list_config_backups,
+            terminal::config::restore_config_from_backup,
+            terminal::config::export_config,
+            terminal::config::import_config,
+            terminal::config::term_get_ai_config,
+            terminal::config::term_save_ai_config,
+            terminal::ai::term_ai_chat,
+            terminal::ai::ai_chat_stream,
+            terminal::ai::ai_stream_abort,
+            terminal::ai::ai_chat_with_tools,
+            terminal::ai::term_list_llm_presets,
+            terminal::ai::term_list_llm_models,
+            terminal::ai::term_test_ai_config,
+            terminal::config::get_session_logs,
+            terminal::config::read_session_log,
+            terminal::config::delete_session_log,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
@@ -219,6 +291,18 @@ pub fn run() {
                 Ok(Some(from)) => eprintln!("已把 {} 的 AI 配置迁移到家族统一位置", from),
                 Ok(None) => {}
                 Err(e) => eprintln!("AI 配置迁移未完成, 本次按现状继续运行: {}", e),
+            }
+            // 终端板块的两项启动加固（原 terminal 仓 setup 里做的）：
+            //   1) 收紧服务器配置目录权限 + 把历史明文凭证升级为密文。失败不阻断，
+            //      明文仍能照常读 —— 否则用户会在"打不开且不知道为什么"里卡住。
+            //   2) 家族统一 AI 配置迁移。幂等：落点已有配置时什么都不做。
+            if let Err(e) = terminal::config::harden_storage() {
+                eprintln!("终端存储加固未完成, 本次按现状继续运行: {}", e);
+            }
+            match terminal::llm_shared::migrate_legacy() {
+                Ok(Some(from)) => eprintln!("已把 {} 的终端 AI 配置迁移到家族统一位置", from),
+                Ok(None) => {}
+                Err(e) => eprintln!("终端 AI 配置迁移未完成, 本次按现状继续运行: {}", e),
             }
             Ok(())
         })

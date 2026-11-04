@@ -7,6 +7,9 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- 必须排在业务 bundle 之前：接住模块加载阶段的故障（资源 404 / 顶层抛错），
+         这些 ErrorBoundary 接不到，表现出来就是一整片白、且打包后没有 console。 -->
+    <script src="/boot-guard.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,0 +1,75 @@
+/* ============================================
+   z-biz-tool-terminal 特有样式
+   ============================================ */
+
+/* 原仓的 --tool-* 变量在 shared-style.css 的 :root 里，搬入时只搬了终端特有样式，
+   变量本身没跟过来（file 的 index.css 不含这套变量）。漏了的表现是静默的：
+   padding/background 这类声明整条失效，终端贴边、服务器树 hover 与选中没有底色。
+   变量只被下面两个节点及其后代用到，就地声明即可，不往 :root 挂以免污染 file。
+   暗色一套跟随 ThemeContext 写在 <html data-theme> 上的值。 */
+.terminal-container,
+.tree-compact {
+  --tool-padding-xs: 4px;
+  --tool-radius-sm: 4px;
+  --tool-bg-hover: rgba(0, 0, 0, 0.04);
+  --tool-bg-selected: #e6f4ff;
+}
+
+[data-theme="dark"] .terminal-container,
+[data-theme="dark"] .tree-compact {
+  --tool-bg-hover: rgba(255, 255, 255, 0.08);
+  --tool-bg-selected: #111a2c;
+}
+
+/* xterm.js 终端样式 */
+.terminal-container {
+  padding: var(--tool-padding-xs);
+  background: #1e1e1e;
+  height: 100%;
+  overflow: hidden;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}
+
+/* 紧凑型 Tree - 使用统一的选中样式 */
+.tree-compact.ant-tree {
+}
+
+.tree-compact .ant-tree-treenode {
+  padding: 0;
+}
+
+.tree-compact .ant-tree-treenode.ant-tree-treenode-selected {
+  background: transparent;
+}
+
+.tree-compact .ant-tree-node-content-wrapper {
+  padding: var(--tool-padding-xs) 6px;
+  min-height: 26px;
+  border-radius: var(--tool-radius-sm);
+  line-height: 1.4;
+}
+
+.tree-compact .ant-tree-node-content-wrapper:hover {
+  background: var(--tool-bg-hover);
+}
+
+.tree-compact .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  background: var(--tool-bg-selected);
+}
+
+.tree-compact .ant-tree-switcher {
+  width: 18px;
+  height: 26px;
+  line-height: 26px;
+}
+
+.tree-compact .ant-tree-indent-unit {
+  width: 16px;
+}
+
+.tree-compact .ant-tree-title {
+  display: block;
+}

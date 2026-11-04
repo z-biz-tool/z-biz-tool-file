@@ -39,7 +39,9 @@ serde_json = "1"
 getrandom = "0.2"
 # reqwest 已随 AI 接入层迁入 cap-llm（本仓 src/ 中不再出现 reqwest）
 ssh2 = "0.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# terminal 板块的 ssh/pty/端口转发是 tokio 重用户（sync / time / net / process 都要），
+# 原来只开 rt-multi-thread + macros 是够 file 自己用的，搬入后必须放到 full。
+tokio = { version = "1", features = ["full"] }
 walkdir = "2"
 notify = "6"
 epub = "2"
@@ -80,7 +82,23 @@ chrono = "0.4"
 ureq = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
+# 更新安装后的「立即重启」：terminal 前端 UpdaterGate 用到 process 插件
+tauri-plugin-process = "2"
 dirs = "5"
+
+# ─────────────────────── 终端板块（2026-11-04 从 z-biz-tool-terminal 仓搬入）──
+# 注意这里的 SSH 栈和上面的 `ssh2` 是**两套并存**，不是笔误：
+#   - `ssh2`（libssh2 绑定）服务于本仓原有的 sftp.rs —— 把远程目录当本地目录浏览；
+#   - `russh`（纯 Rust）服务于搬进来的终端板块 —— PTY、端口转发、跳板机、sftp 双栏面板。
+# 两套的会话/通道模型不同（前者同步阻塞、后者 async），强行统一会把 terminal 的
+# 80KB ssh.rs 重写一遍，风险远大于收益。文件体积代价约为 +6MB。
+russh = "0.45"
+russh-keys = "0.45"
+russh-sftp = "2.0"
+ssh-key = { version = "0.6", features = ["ed25519"] }
+async-trait = "0.1.92"
+aes-gcm = "0.10.3"
+data-encoding = "2"
 
 # ---- 归档引擎（src/archive/）：目标是完全替掉本机的 7-Zip，所以这里全是纯 Rust/自包含实现，
 # ---- 不 shell out 到 `C:\Program Files\7-Zip\7z.exe`。理由有三条：

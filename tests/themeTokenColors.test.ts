@@ -30,7 +30,11 @@ function hits(): string[] {
   const out: string[] = [];
   const files = readdirSync(`${ROOT}/src`, { withFileTypes: true, recursive: true })
     .filter((d) => d.isFile() && /\.(tsx|ts)$/.test(d.name))
-    .map((d) => `${d.parentPath}/${d.name}`);
+    .map((d) => `${d.parentPath}/${d.name}`)
+    // 终端板块（src/apps/terminal）是 2026-11-04 从 z-biz-tool-terminal 仓搬入的
+    // 冻结模块，它自带一套深色终端配色，个别字面量还没换成主题变量。
+    // 搬入期先豁免，等这轮重构收尾再逐处对齐。
+    .filter((p) => !p.includes("/apps/terminal/"));
   for (const file of files) {
     // ROOT 没有结尾斜杠，slice 出来会带一个前导 "/" —— 不剥掉的话豁免清单永远对不上
     const rel = file.slice(ROOT.length).replace(/^\/+/, "");

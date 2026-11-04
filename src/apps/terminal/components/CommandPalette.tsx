@@ -1,0 +1,445 @@
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Modal, Input, Tag, Space, Typography, Empty, message } from "antd";
+import {
+  DesktopOutlined,
+  FolderOpenOutlined,
+  CodeOutlined,
+  SettingOutlined,
+  KeyOutlined,
+  FileTextOutlined,
+  ColumnWidthOutlined,
+  ColumnHeightOutlined,
+  AppstoreAddOutlined,
+  ReloadOutlined,
+  LinkOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
+import { ItemList, ItemRow } from "../_shared/ItemRows";
+import { useServerStore } from "../stores/serverStore";
+import { describeSnippetRun } from "../utils/snippetRun";
+import { paletteSequence } from "../utils/paletteOrder";
+import { isCurrentTab, sessionHint, stateColorOf, stateHint } from "../utils/paletteSession";
+
+const { Text } = Typography;
+
+interface CommandItem {
+  id: string;
+  type: "server" | "snippet" | "action";
+  /** 指向某个标签页的条目才带；"是不是当前会话"只看它，不从 id 前缀猜 */
+  tabId?: string;
+  /** 该标签页此刻的连接状态（只有 tabId 条目有），用来标"连接中/连接失败" */
+  tabState?: string;
+  label: string;
+  description?: string;
+  icon: React.ReactNode;
+  keywords: string[];
+  /** 用于排序的权重（数字越小越靠前） */
+  weight?: number;
+  action: () => void | Promise<void>;
+}
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onOpenShortcuts: () => void;
+  onOpenLogs: () => void;
+}
+
+function scoreItem(item: CommandItem, query: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return item.weight ?? 100;
+  const label = item.label.toLowerCase();
+  const desc = (item.description ?? "").toLowerCase();
+  const kw = item.keywords.map((k) => k.toLowerCase());
+  // 完全相等最高分
+  if (label === q) return 0;
+  // 前缀匹配次之
+  if (label.startsWith(q)) return 1;
+  // 包含匹配
+  if (label.includes(q)) return 2;
+  if (desc.includes(q)) return 3;
+  // 关键词匹配
+  for (const k of kw) {
+    if (k.startsWith(q)) return 4;
+    if (k.includes(q)) return 5;
+  }
+  return -1; // 不匹配
+}
+
+export default function CommandPalette({
+  open,
+  onClose,
+  onOpenSettings,
+  onOpenShortcuts,
+  onOpenLogs,
+}: Props) {
+  const { servers, snippets, tabs, setActiveTab, toggleSftp, toggleSnippets, splitTab, connectServer, executeSnippet, activeTabId } =
+    useServerStore();
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  /**
+   * 鼠标悬停只影响样式。曾经它是 `onMouseEnter={() => setActiveIndex(idx)}`，
+   * 实测：键盘指向第 1 行、鼠标扫过第 2 行，回车执行的是**第 2 行**（SFTP 面板被打开）
+   * —— 鼠标路过就改了要执行的动作，这在会跑命令的面板里是误操作面。
+   */
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const inputRef = useRef<any>(null);
+
+  const items: CommandItem[] = useMemo(() => {
+    const list: CommandItem[] = [];
+
+    // 已打开的终端(支持多开, 每个 tab 独立)
+    for (const tab of tabs) {
+      const server = servers.find((s) => s.id === tab.serverId);
+      // 同服务器多开时, 给后开的 tab 加 (N) 后缀以便区分
+      const sameServerCount = tabs.filter((t) => t.serverId === tab.serverId).length;
+      const sameServerIndex = tabs.filter((t) => t.serverId === tab.serverId).findIndex((t) => t.id === tab.id);
+      const labelBase = server ? server.name : tab.serverId;
+      const label = sameServerCount > 1 ? `${labelBase} (${sameServerIndex + 1})` : labelBase;
+      list.push({
+        id: `tab-${tab.id}`,
+        type: "server",
+        tabId: tab.id,
+        tabState: tab.state,
+        label,
+        description: sessionHint({ tabId: tab.id }, activeTabId),
+        icon: <DesktopOutlined style={{ color: "#1677ff" }} />,
+        keywords: ["switch", "tab", "切换", "会话", server?.host ?? "", server?.username ?? ""].filter(
+          Boolean,
+        ),
+        weight: 0,
+        action: () => setActiveTab(tab.id),
+      });
+    }
+
+    // 服务器列表
+    for (const server of servers) {
+      const connected = tabs.some((t) => t.serverId === server.id);
+      if (connected) continue; // 已添加过
+      list.push({
+        id: `server-${server.id}`,
+        type: "server",
+        label: server.name,
+        description: `${server.username}@${server.host}:${server.port}`,
+        icon: <DesktopOutlined style={{ color: server.pinned ? "#faad14" : "#52c41a" }} />,
+        keywords: [
+          server.host,
+          server.username,
+          server.group ?? "",
+          server.remark ?? "",
+          "connect",
+          "连接",
+          "ssh",
+        ].filter(Boolean),
+        weight: 10,
+        action: () => {
+          connectServer(server).catch((e) => {
+            console.warn("命令面板发起连接失败:", e);
+          });
+        },
+      });
+    }
+
+    // Snippets
+    for (const snip of snippets) {
+      list.push({
+        id: `snippet-${snip.id}`,
+        type: "snippet",
+        label: snip.name,
+        description: snip.command,
+        icon: <CodeOutlined style={{ color: "#722ed1" }} />,
+        keywords: [snip.group ?? "", snip.description ?? "", "snippet", "代码片段", "命令"].filter(
+          Boolean,
+        ),
+        weight: 20,
+        action: async () => {
+          // 目标会话由 store 按"当前标签的当前面板"决定：这里以前传的是 activeTabId
+          // 却当作 serverId 用，于是命令从没发出去过，面板却已经关掉当作成功
+          const notice = describeSnippetRun(await executeSnippet(snip.command), snip.name);
+          message[notice.type](notice.text);
+        },
+      });
+    }
+
+    // 全局动作
+    const actions: CommandItem[] = [
+      {
+        id: "action-toggle-sftp",
+        type: "action",
+        label: "切换 SFTP 面板",
+        description: "显示或隐藏 SFTP 文件管理器",
+        icon: <FolderOpenOutlined style={{ color: "#13c2c2" }} />,
+        keywords: ["sftp", "file", "文件", "面板"],
+        weight: 50,
+        action: () => toggleSftp(),
+      },
+      {
+        id: "action-toggle-snippets",
+        type: "action",
+        label: "切换代码片段面板",
+        description: "显示或隐藏快捷命令面板",
+        icon: <CodeOutlined style={{ color: "#722ed1" }} />,
+        keywords: ["snippet", "命令", "代码片段"],
+        weight: 51,
+        action: () => toggleSnippets(),
+      },
+      {
+        id: "action-split-h",
+        type: "action",
+        label: "水平分屏",
+        description: "将当前标签水平拆分为两个面板",
+        icon: <ColumnHeightOutlined style={{ color: "#fa8c16" }} />,
+        keywords: ["split", "horizontal", "分屏", "水平"],
+        weight: 52,
+        action: () => activeTabId && splitTab(activeTabId, "horizontal"),
+      },
+      {
+        id: "action-split-v",
+        type: "action",
+        label: "垂直分屏",
+        description: "将当前标签垂直拆分为两个面板",
+        icon: <ColumnWidthOutlined style={{ color: "#fa8c16" }} />,
+        keywords: ["split", "vertical", "分屏", "垂直"],
+        weight: 53,
+        action: () => activeTabId && splitTab(activeTabId, "vertical"),
+      },
+      {
+        id: "action-open-settings",
+        type: "action",
+        label: "打开设置",
+        description: "调整字体、主题、连接等偏好",
+        icon: <SettingOutlined />,
+        keywords: ["settings", "preferences", "设置", "配置"],
+        weight: 60,
+        action: () => onOpenSettings(),
+      },
+      {
+        id: "action-open-shortcuts",
+        type: "action",
+        label: "查看快捷键",
+        description: "显示所有可用的键盘快捷键",
+        icon: <KeyOutlined />,
+        keywords: ["shortcuts", "hotkey", "快捷键"],
+        weight: 61,
+        action: () => onOpenShortcuts(),
+      },
+      {
+        id: "action-open-logs",
+        type: "action",
+        label: "查看会话日志",
+        description: "浏览并下载历史 SSH 会话日志",
+        icon: <FileTextOutlined />,
+        keywords: ["log", "history", "日志", "历史"],
+        weight: 62,
+        action: () => onOpenLogs(),
+      },
+      {
+        id: "action-reload-config",
+        type: "action",
+        label: "重新加载配置",
+        description: "从磁盘重新读取服务器列表与设置",
+        icon: <ReloadOutlined />,
+        keywords: ["reload", "refresh", "重载", "刷新"],
+        weight: 70,
+        action: () => useServerStore.getState().loadConfig(),
+      },
+    ];
+    list.push(...actions);
+
+    return list;
+  }, [
+    servers,
+    snippets,
+    tabs,
+    setActiveTab,
+    toggleSftp,
+    toggleSnippets,
+    splitTab,
+    connectServer,
+    executeSnippet,
+    activeTabId,
+    onOpenSettings,
+    onOpenShortcuts,
+    onOpenLogs,
+  ]);
+
+  /** 打分后的命中顺序（未分块） */
+  const scored = useMemo(() => {
+    const ranked = items
+      .map((it) => ({ item: it, score: scoreItem(it, query) }))
+      .filter((x) => x.score >= 0);
+    ranked.sort((a, b) => a.score - b.score);
+    return ranked.map((x) => x.item);
+  }, [items, query]);
+
+  // 视觉与键盘共用的一条序列：分块只是为了插标题，不另起一套顺序
+  const { blocks, ordered: visible } = useMemo(() => paletteSequence(scored), [scored]);
+
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setActiveIndex(0);
+      // 自动聚焦
+      setTimeout(() => inputRef.current?.focus?.(), 50);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (activeIndex >= visible.length) setActiveIndex(0);
+    // 结果列表一变，鼠标停在"第 3 行"这件事就没有意义了（那一行已经换成了别的命令）
+    setHoverIndex(null);
+  }, [visible, activeIndex]);
+
+  const runItem = useCallback(
+    async (item: CommandItem) => {
+      onClose();
+      // 给关闭动画一点时间
+      setTimeout(() => item.action(), 50);
+    },
+    [onClose],
+  );
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(visible.length - 1, i + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(0, i - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const item = visible[activeIndex];
+      if (item) runItem(item);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+    }
+  };
+
+  /** 高亮序号必须来自键盘走的那条序列：id → 在 `visible` 里的位置 */
+  const indexById = useMemo(() => new Map(visible.map((it, i) => [it.id, i] as const)), [visible]);
+
+  /** ↑↓ 走到哪一行，那一行就得在窗口里：靠滚动容器把高亮行带进视野 */
+  const activeRowRef = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, query]);
+
+  const renderItem = (item: CommandItem) => {
+    const idx = indexById.get(item.id) ?? -1;
+    const isActive = idx === activeIndex;
+    const isHovered = hoverIndex === idx && !isActive;
+    const current = isCurrentTab(item, activeTabId);
+    const [stateLabel, showState] = stateHint(item.tabState);
+    return (
+      <ItemRow
+        key={item.id}
+        active={isActive}
+        hovered={isHovered}
+        rowRef={
+          isActive
+            ? (node) => {
+                activeRowRef.current = node;
+              }
+            : undefined
+        }
+        onMouseEnter={() => setHoverIndex(idx)}
+        onMouseLeave={() => setHoverIndex(null)}
+        onClick={() => runItem(item)}
+        style={{ cursor: "pointer", margin: "2px 0" }}
+        avatar={item.icon}
+        title={
+            <Space>
+              <span>{item.label}</span>
+              {current && (
+                <Tag color="blue" style={{ marginLeft: 4 }}>
+                  当前
+                </Tag>
+              )}
+              {showState && (
+                <Tag color={stateColorOf(item.tabState)} style={{ marginLeft: 4 }}>
+                  {stateLabel}
+                </Tag>
+              )}
+            </Space>
+          }
+        description={
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {item.description}
+          </Text>
+        }
+      />
+    );
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      closable={false}
+      width={600}
+      styles={{
+        body: { padding: 0, maxHeight: "70vh", overflow: "hidden", display: "flex", flexDirection: "column" },
+        mask: { background: "rgba(0,0,0,0.45)" },
+      }}
+      centered
+    >
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--ant-color-split)" }}>
+        <Input
+          ref={inputRef}
+          size="large"
+          prefix={<SearchOutlined />}
+          placeholder="搜索服务器、命令片段、操作…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onKeyDown}
+          variant="borderless"
+        />
+      </div>
+      <div style={{ flex: 1, overflow: "auto", padding: "8px 12px" }}>
+        {visible.length === 0 ? (
+          <Empty
+            description="无匹配结果"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            style={{ marginTop: 40 }}
+          />
+        ) : (
+          blocks.map((group) => (
+            <div key={group.title} style={{ marginBottom: 8 }}>
+              <Text
+                type="secondary"
+                style={{ fontSize: 11, padding: "4px 12px", textTransform: "uppercase" }}
+              >
+                {group.title} · {group.items.length}
+              </Text>
+              <ItemList ariaLabel={group.title}>{group.items.map((it) => renderItem(it))}</ItemList>
+            </div>
+          ))
+        )}
+      </div>
+      <div
+        style={{
+          padding: "8px 16px",
+          borderTop: "1px solid var(--ant-color-split)",
+          fontSize: 11,
+          color: "var(--ant-color-text-tertiary)",
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <Space size="large">
+          <span>↑↓ 选择</span>
+          <span>↵ 执行</span>
+          <span>Esc 关闭</span>
+        </Space>
+        <Space>
+          <AppstoreAddOutlined />
+          <LinkOutlined />
+          命令面板
+        </Space>
+      </div>
+    </Modal>
+  );
+}

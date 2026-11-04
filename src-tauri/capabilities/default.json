@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window — 2026-10-04 收敛：摘除 fs/shell 授权（T-4-5 同款处置）",
+  "description": "Capability for the main window — 2026-10-04 收敛：摘除 fs/shell 授权（T-4-5 同款处置）。2026-11-04 终端板块搬入后补 process:default（更新装完「立即重启」用）。",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "clipboard-manager:default",
     "dialog:default",
-    "updater:default"
+    "updater:default",
+    "process:default"
   ]
 }

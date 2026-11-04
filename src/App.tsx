@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense, type ReactNode } from "react";
 import {
   Input, Button, Table, Dropdown, App as AntdApp, Tooltip, Segmented, Modal, Badge,
 } from "antd";
@@ -57,6 +57,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startDeepLinkReceiver, ZBIZ_TAKE_PENDING } from "z-biz-tool-shared/protocol";
 import { resolveFileDeepLink, type HandoffItem } from "./_shared/deepLink";
+// 终端板块的深链交接槽（纯数据模块，不带 React/xterm，不会破坏懒加载分包）
+import { putTerminalHandoff } from "./apps/terminal/handoff";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
@@ -106,6 +108,7 @@ import OcrTool from "./components/OcrTool";
 import Aria2Manager from "./components/Aria2Manager";
 import LibraryView from "./components/LibraryView";
 import Updater from "./components/Updater";
+import UpdaterGate from "./components/UpdaterGate";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 import {
@@ -218,7 +221,18 @@ function ResizableHeaderCell({
  */
 const RAIL_APPS: ActivityBarApp[] = [
   { key: "files", label: "文件管理", icon: <FolderOpenOutlined /> },
+  { key: "terminal", label: "终端", icon: <CodeOutlined /> },
 ];
+
+/**
+ * 终端板块按需加载。
+ *
+ * 它是从 z-biz-tool-terminal 仓整体搬进来的（1300 行根组件 + 30 多个面板 +
+ * xterm + AI 一整套），静态 import 会把文件管理的首屏 bundle 直接撑大一倍，
+ * 而这些代码只有用户真的点了活动栏第二个图标才需要。
+ * 代价是首次切过去有一次 chunk 下载（本地文件协议，几十毫秒）。
+ */
+const TerminalApp = lazy(() => import("./apps/terminal/TerminalApp"));
 
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
@@ -611,7 +625,18 @@ function AppShellInner() {
         }
         return { ok: true, effect: { path: out.path, shouldOpen: out.shouldOpen } };
       },
-      onProblem: (msg) => {
+      onProblem: (msg, item) => {
+        // 终端的深链不是「发错了」，而是本仓**另一个板块**的。
+        // 共享层先按 productId 过滤、不符就丢进 onProblem，所以这里是唯一能接手的地方：
+        // 转投给终端板块并切过去。不这么做的话，两个接收器会各自 take_pending，
+        // 先跑的把队列整个取走，后跑的永远拿到空数组（take 是消费式的）。
+        //
+        // 顺带说明为什么不能靠 translate 拦：共享层在调 translate 之前就 product 过滤了。
+        if (item.product === "terminal") {
+          putTerminalHandoff(item);
+          setActiveApp("terminal");
+          return;
+        }
         console.warn("[file] 深链:", msg);
         message.warning(msg);
       },
@@ -1807,7 +1832,10 @@ function AppShellInner() {
     handleCompress, handleExtractToSibling, selectedArchives, message,
     newFileTemplateOpen, shortcutHelpOpen,
   ]);
-  useKeyboardShortcuts(shortcutSpecs);
+  // 只在「文件管理」板块内生效：终端板块自己也注册了一套全局快捷键（分屏、搜索、
+  // 命令面板…），两套同时在 window 上监听会让 ⌘F / ⌘K 这类键一次触发两个动作。
+  // 换板块时把文件管理这套整体关掉，比逐个判断"当前在哪个 app"干净。
+  useKeyboardShortcuts(shortcutSpecs, activeApp === "files");
 
   // tooltip / 右键菜单里的键位提示全部从这份注册表现算。写死 "刷新 (⌘+R)" 有两个错：
   // Windows/Linux 上用户在按一个不存在的键（matchSpec 的主修饰键在那边是 Ctrl），
@@ -1996,15 +2024,20 @@ function AppShellInner() {
           apps={RAIL_APPS}
           activeApp={activeApp}
           onAppChange={setActiveApp}
-          items={railItems}
+          // 下段「功能入口」全是文件管理板块的功能（搜索 / 收藏夹 / 暂存栈 / 终端面板…），
+          // 切到终端板块时整段让位：终端自己左边有一列服务器列表，三段竖栏并排会挤成一条缝。
+          // 面板区同理（railPanel 传 undefined = 收起），否则那边还挂着一块文件管理的面板。
+          items={activeApp === "files" ? railItems : []}
           activeKey={railActive}
           onActiveChange={setRailActive}
           footer={
-            <ActivityBarMore label="更多工具" onClick={() => setQuickActionsOpen(true)} />
+            activeApp === "files" ? (
+              <ActivityBarMore label="更多工具" onClick={() => setQuickActionsOpen(true)} />
+            ) : undefined
           }
         />
       }
-      railPanel={railPanel}
+      railPanel={activeApp === "files" ? railPanel : undefined}
       railPanelWidth={280}
     >
       {/* 应用切换的落点：主区渲染哪个板块由 activeApp 决定。
@@ -2598,6 +2631,27 @@ function AppShellInner() {
         </div>
         )}
       </div>
+      ) : activeApp === "terminal" ? (
+        // 终端板块：整块替换主区。它自带侧栏与顶栏工具条，不共用文件管理那套
+        // 标签条/路径栏 —— 两边的"导航对象"根本不是一回事（文件路径 vs SSH 会话）。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载终端…
+            </div>
+          }
+        >
+          <TerminalApp />
+        </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。
         // 留一句人话，总比切过去看到一片空白、以为程序崩了强。
@@ -2941,6 +2995,16 @@ export default function App() {
     <ThemeProvider>
       <AntdApp>
         <AppShellInner />
+        {/*
+          启动后延时静默检查更新（endpoint / pubkey 见 tauri.conf.json 的 plugins.updater）。
+          这条是终端板块搬入时带过来的 UpdaterGate —— 它原来是 terminal 的 main.tsx 里
+          `<App /><UpdaterGate />` 平级的全局闸门，搬过来后没人挂就成了孤儿。更新是应用级
+          行为、不该按板块划分，所以挂在宿主这一层：
+            · 这里 = 有新版才自己弹（失败一律静默，离线 / 无 manifest 都不打扰用户）；
+            · AppShellInner 里那个 <Updater> = 用户从菜单主动点开的面板（走 GitHub Releases）。
+          两套并存是过渡态：前者是家族分发底座的新路，后者是旧的下载页。
+        */}
+        <UpdaterGate />
       </AntdApp>
     </ThemeProvider>
   );
