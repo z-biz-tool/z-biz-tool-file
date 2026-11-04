@@ -120,6 +120,8 @@ pub fn run() {
             search::search_file_content,
             doc_cmd::parse_epub,
             doc_cmd::parse_mobi,
+            doc_cmd::parse_ebook,
+            doc_cmd::extract_comic,
             doc_cmd::get_epub_cover,
             doc_cmd::extract_pdf_text,
             doc_cmd::get_pdf_metadata,

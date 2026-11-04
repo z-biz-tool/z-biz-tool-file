@@ -441,7 +441,9 @@
 .epub-reader--immersive {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  /* 900：盖住应用自己的活动栏/标签条（都 < 100），又低于 antd 的 Modal(1000)
+     与 Tooltip(1070)，所以阅读中弹出的确认框和浮层提示不会被埋掉 */
+  z-index: 900;
   box-shadow: 0 0 0 1px var(--r-paper-edge);
 }
 

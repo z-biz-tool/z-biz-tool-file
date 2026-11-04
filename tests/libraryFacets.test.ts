@@ -76,16 +76,36 @@ describe("阅读状态判定", () => {
 describe("阅读器分派", () => {
   it("按扩展名选阅读器", () => {
     expect(resolveReaderKind({ path: "/a/b.pdf", format: null })).toBe("pdf");
-    expect(resolveReaderKind({ path: "/a/b.epub", format: null })).toBe("epub");
     expect(resolveReaderKind({ path: "/a/b.PNG", format: null })).toBe("image");
     expect(resolveReaderKind({ path: "/a/b.md", format: null })).toBe("text");
-    expect(resolveReaderKind({ path: "/a/b.mobi", format: null })).toBe(null);
+    expect(resolveReaderKind({ path: "/a/b.cbz", format: null })).toBe("comic");
+    // 未知扩展名交给系统打开，不要硬塞给某个阅读器
+    expect(resolveReaderKind({ path: "/a/b.doc", format: null })).toBe(null);
+  });
+
+  it("整条电子书家族都走同一个书本阅读器", () => {
+    // 格式差异在后端 parse_ebook 里消化掉了，前端只需认「这是书」
+    for (const ext of ["epub", "mobi", "azw", "azw3", "prc", "fb2", "txt"]) {
+      expect(resolveReaderKind({ path: `/a/b.${ext}`, format: null }), ext).toBe("book");
+    }
+  });
+
+  it("TXT 走书本阅读器而不是等宽预格式", () => {
+    // TXT 小说要能分章分页、调字号和书页主题；<pre> 不是读书的形态
+    expect(resolveReaderKind({ path: "/a/小说.txt", format: null })).toBe("book");
+    // 但代码/结构文本仍用等宽显示，排版成书反而更难读
+    expect(resolveReaderKind({ path: "/a/conf.json", format: null })).toBe("text");
+    expect(resolveReaderKind({ path: "/a/data.csv", format: null })).toBe("text");
+  });
+
+  it("CBR 是 rar 容器，没有解码库，不冒充能读", () => {
+    expect(resolveReaderKind({ path: "/a/b.cbr", format: null })).toBe(null);
   });
 
   it("扩展名与 format 字段不一致时以路径为准", () => {
     // 用户在 Finder 里把 a.txt 改名成 a.epub，扫描时记下的 format 还停在 txt。
-    // 这时必须按 .epub 走 EPUB 阅读器，否则会拿文本阅读器去解一本真 EPUB
-    expect(resolveReaderKind({ path: "/a/x.epub", format: "txt" })).toBe("epub");
+    // 这时必须按 .epub 走书本阅读器，否则会拿文本阅读器去解一本真 EPUB
+    expect(resolveReaderKind({ path: "/a/x.epub", format: "txt" })).toBe("book");
   });
 
   it("没有扩展名的路径不崩", () => {

@@ -141,8 +141,11 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 目录开关、排版设置、书页主题、切换分页/滚动、全屏，加上页脚的上一页/下一页
  * （两侧点击热区是原生 <button> 且不带 icon，不计入）。七个都带 aria-label，
  * 其中「切换分页/滚动」和「全屏」因为要跟随状态换文案，用的是条件式而非字面量。
+ * 101 → 104：漫画阅读器（ComicReader）新增 3 个纯图标按钮 ——
+ * 上一页 / 下一页 / 沉浸阅读（沉浸按钮同样按状态换 aria-label）。
+ * 「单页」「连续」两个切换按钮带文字，不计入。
  */
-const TOTAL_ICON_ONLY = 101;
+const TOTAL_ICON_ONLY = 104;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

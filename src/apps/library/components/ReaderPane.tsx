@@ -1,9 +1,11 @@
 /**
  * 右侧阅读面板：点中书之后直接在这里读，不用离开图书馆。
  *
- * 阅读器本身复用文件管理那边已经调好的两个（src/components/PdfViewer、EpubReader）：
- * PDF 走 PDF.js 的内嵌 viewer（fit-width、放大旋转都有了），EPUB 走后端 parse_epub
- * 分章渲染。这里只负责「按格式选哪个」以及图片/纯文本这两条轻量路径。
+ * 阅读器本身复用文件管理那边已经调好的几个：
+ * PDF 走 PDF.js 内嵌 viewer；EPUB / MOBI / AZW3 / TXT / FB2 全部走同一个翻页
+ * 阅读器（后端 `parse_ebook` 把格式差异吃掉了，统一吐章节数组）；CBZ 走漫画
+ * 阅读器（图片序列）。这里只负责「按扩展名选哪个」以及图片/代码文本这两条
+ * 轻量路径。
  */
 import { useEffect, useState } from "react";
 import { Button, Empty, Result, Space, Spin, Tag, theme, Typography } from "antd";
@@ -11,6 +13,7 @@ import { CloseOutlined, ExportOutlined, FolderOpenOutlined } from "@ant-design/i
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import PdfViewer from "../../../components/PdfViewer";
 import EpubReader from "../../../components/EpubReader";
+import ComicReader from "../../../components/ComicReader";
 import type { LibraryEntry } from "../libraryClient";
 import { formatLabel, progressText, readStatusOf, resolveReaderKind, STATUS_LABEL } from "../facets";
 
@@ -116,12 +119,17 @@ export default function ReaderPane({
 
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         {kind === "pdf" && <PdfViewer filePath={entry.path} fileName={entry.title} />}
-        {kind === "epub" && (
+        {kind === "book" && (
+          // key 跟路径走：换书时强制重建，否则上一本的章节、页码、滚动位置会漏过来
           <EpubReader
+            key={entry.path}
             filePath={entry.path}
             fileName={entry.title}
             onProgress={(p) => onReadProgress?.(entry, p)}
           />
+        )}
+        {kind === "comic" && (
+          <ComicReader key={entry.path} filePath={entry.path} fileName={entry.title} />
         )}
         {kind === "image" && <ImagePage entry={entry} />}
         {kind === "text" && <TextPage entry={entry} />}

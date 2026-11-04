@@ -31,17 +31,42 @@ export const STATUS_LABEL: Record<ReadStatus, string> = {
 };
 
 /** 右侧面板用哪个阅读器。返回 null 表示这个格式在应用内读不了，交给系统打开。 */
-export type ReaderKind = "pdf" | "epub" | "image" | "text" | null;
+export type ReaderKind = "pdf" | "book" | "comic" | "image" | "text" | null;
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "avif"]);
-const TEXT_EXT = new Set(["txt", "md", "markdown", "log", "json", "csv", "tsv", "yaml", "yml"]);
+
+/**
+ * 走同一个翻页阅读器的所有格式。
+ *
+ * 后端 `parse_ebook` 把它们统一解析成「章节数组 + HTML」，所以前端不必按格式
+ * 分支 —— 新增一种书只要后端能产出章节，这里加个扩展名就行。
+ * TXT 也在这一档：`<pre>` 那种等宽纯文本不是「读书」的形态，分章分页才对。
+ */
+const BOOK_EXT = new Set([
+  "epub",
+  "mobi",
+  "azw",
+  "azw3",
+  "prc",
+  "fb2",
+  "txt",
+  // 部分下载工具会把 epub 存成 .epub3
+  "epub3",
+]);
+
+/** 图片序列（漫画）。CBZ 是 zip，能解；CBR 是 rar，没有解码库，走外部打开。 */
+const COMIC_EXT = new Set(["cbz"]);
+
+/** 代码/结构化文本：这些用等宽字体原样显示比「排版成书」更合适 */
+const TEXT_EXT = new Set(["md", "markdown", "log", "json", "csv", "tsv", "yaml", "yml", "xml"]);
 
 export function resolveReaderKind(entry: Pick<LibraryEntry, "path" | "format">): ReaderKind {
   // 以扩展名为准而不是 format 字段：format 是扫描时算的快照，
   // 用户在 Finder 里把 .txt 改成 .epub 之后它会过期，而 path 永远是当前事实。
   const ext = extOf(entry.path);
   if (ext === "pdf") return "pdf";
-  if (ext === "epub") return "epub";
+  if (BOOK_EXT.has(ext)) return "book";
+  if (COMIC_EXT.has(ext)) return "comic";
   if (IMAGE_EXT.has(ext)) return "image";
   if (TEXT_EXT.has(ext)) return "text";
   return null;

@@ -1185,9 +1185,24 @@ fn extract_book_meta(path: &str) -> BookMeta {
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     match ext.as_str() {
-        "epub" | "azw3" => extract_epub_meta(path),
+        "epub" => extract_epub_meta(path),
+        // azw3 以前被错归到 epub 分支：它不是 zip，ZipArchive::new 必然失败，
+        // 表现是不会崩、但书名作者永远是空的（只能拿文件名）。
+        "mobi" | "azw" | "azw3" | "prc" => extract_mobi_meta(path),
         "pdf" => extract_pdf_meta(path),
         _ => BookMeta::default(),
+    }
+}
+
+/// MOBI 家族：只读 record 0 的 EXTH（书名 offset 也在这里），不解压正文。
+fn extract_mobi_meta(path: &str) -> BookMeta {
+    match cap_doc::mobi_read_meta(path) {
+        Some((title, author)) => BookMeta {
+            title: non_empty(title),
+            author: non_empty(author),
+            ..Default::default()
+        },
+        None => BookMeta::default(),
     }
 }
 
@@ -1411,7 +1426,11 @@ fn detect_library_kind(path: &str) -> Option<LibraryKind> {
         .to_string_lossy()
         .to_lowercase();
     match ext.as_str() {
-        "epub" | "mobi" | "azw" | "azw3" | "fb2" | "pdf" => Some(LibraryKind::Book),
+        // prc 是 MOBI 的旧扩展名，解析路径完全相同
+        "epub" | "mobi" | "azw" | "azw3" | "prc" | "fb2" | "pdf" => Some(LibraryKind::Book),
+        // TXT 小说也算书。扫描目录是用户自己挑的「书库」，混进 README 的概率
+        // 远低于漏收一本书的代价 —— 而且收错了在列表里删掉即可。
+        "txt" => Some(LibraryKind::Book),
         "cbr" | "cbz" => Some(LibraryKind::Comic),
         "mp3" | "flac" | "ogg" | "m4a" | "opus" => Some(LibraryKind::Music),
         "mp4" | "mkv" | "avi" | "mov" | "webm" => Some(LibraryKind::Movie),

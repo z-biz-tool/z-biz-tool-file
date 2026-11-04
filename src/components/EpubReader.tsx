@@ -1,5 +1,10 @@
 /**
- * EPUB 阅读器。
+ * 电子书阅读器（EPUB / MOBI / AZW / AZW3 / PRC / TXT / FB2 共用）。
+ *
+ * 格式差异全部在后端消化掉了：`parse_ebook` 按扩展名分派，统一吐出
+ * `{title, author, chapters:[{title, content(HTML)}]}`。所以这里的翻页引擎
+ * 不需要知道手上是哪种书 —— MOBI 的 HUFF 解压、TXT 的 GBK 嗅探、FB2 的
+ * XML 转换都在 Rust 侧完成。新增格式只要后端能产出章节数组，这里零改动。
  *
  * 形态对齐「正常阅读器」而不是「分章文本框」：
  * - **分页**：正文用 CSS 多列溢流铺开，一列就是一页，翻页靠整条 track 平移，
@@ -98,6 +103,8 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
   const [vp, setVp] = useState({ w: 0, h: 0 });
   const [instant, setInstant] = useState(false);
   const [scrub, setScrub] = useState<number | null>(null);
+  /** 滚动模式下已滚到本章的百分之几 —— 分页模式下这个值不参与计算 */
+  const [scrollRatio, setScrollRatio] = useState(0);
   const [immersive, setImmersive] = useState(false);
 
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -122,7 +129,7 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
     setTotal(1);
     pendingSpot.current = null;
 
-    invoke<EpubBook>("parse_epub", { path: filePath })
+    invoke<EpubBook>("parse_ebook", { path: filePath })
       .then((b) => {
         if (!alive) return;
         setBook(b);
@@ -220,7 +227,18 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
     if (settings.mode === "paged") {
       setInstant(true);
       setPage(ratioToPage(spot.ratio, total));
+      return;
     }
+    // 滚动模式：等两帧让新章节的排版落定（图片/字体一进来 scrollHeight 就变了），
+    // 再按比例滚过去，否则滚到的是半截高度算出来的位置
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const max = el.scrollHeight - el.clientHeight;
+        if (max > 0) el.scrollTo({ top: spot.ratio * max, behavior: "instant" });
+      });
+    });
   }, [total, chapter, settings.mode]);
 
   // 瞬时跳转只生效一帧：这一帧不播滑动动画，下一帧恢复
@@ -231,7 +249,8 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
   }, [instant]);
 
   // ── 进度上报 / 位置记忆 ─────────────────────────────────
-  const ratio = pageRatio(page, total);
+  // 滚动模式没有"页"，章内比例只能从滚动位置来；否则一路滚到底进度条都停在章首
+  const ratio = settings.mode === "paged" ? pageRatio(page, total) : scrollRatio;
   useEffect(() => {
     if (!book) return;
     const id = window.setTimeout(() => {
@@ -249,6 +268,7 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
       pendingSpot.current = { chapter: idx, ratio: r };
       setChapter(idx);
       setPage(0);
+      setScrollRatio(r);
       scrollRef.current?.scrollTo({ top: 0 });
     },
     [chapters.length],
@@ -274,6 +294,26 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
   const patch = useCallback((p: Partial<ReaderSettings>) => {
     setSettings((s) => ({ ...s, ...p }));
   }, []);
+
+  // 滚动模式：按滚动位置算章内比例。每帧最多更新一次 —— 正文几千行时，
+  // 每次 scroll 事件都 setState 会让滚动明显掉帧
+  const scrollRaf = useRef<number | null>(null);
+  const onContentScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (scrollRaf.current !== null) return;
+    scrollRaf.current = requestAnimationFrame(() => {
+      scrollRaf.current = null;
+      const max = el.scrollHeight - el.clientHeight;
+      setScrollRatio(max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0);
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (scrollRaf.current !== null) cancelAnimationFrame(scrollRaf.current);
+    },
+    [],
+  );
 
   const bumpFont = useCallback((dir: 1 | -1) => {
     setSettings((s) => ({ ...s, fontSize: stepFont(s.fontSize, dir) }));
@@ -611,7 +651,14 @@ export default function EpubReader({ filePath, fileName, onProgress }: EpubReade
               )}
             </div>
           ) : (
-            <div className="epub-scroll" ref={scrollRef} tabIndex={0} role="group" aria-label="正文">
+            <div
+              className="epub-scroll"
+              ref={scrollRef}
+              tabIndex={0}
+              role="group"
+              aria-label="正文"
+              onScroll={onContentScroll}
+            >
               <article
                 className="epub-flow"
                 style={{

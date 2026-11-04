@@ -154,6 +154,41 @@ pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
     cap_doc::parse_mobi(path)
 }
 
+/// 统一电子书入口：按扩展名分派到 epub / mobi / azw / azw3 / prc / txt / fb2。
+///
+/// 前端只调这一个。让每个调用点各记一份扩展名表，那份表早晚会和解析器长歪 ——
+/// 那时候表现是「命令成功、章节也有，就是内容不对」，极难定位。
+#[tauri::command]
+pub fn parse_ebook(path: &str) -> Result<EpubBook, String> {
+    path_guard::readable(path)?;
+    cap_doc::parse_ebook(path)
+}
+
+/// 漫画（CBZ）：把 zip 里的图片解到应用数据目录，返回按阅读顺序排好的路径。
+///
+/// 不返回 base64 —— 一部漫画几十页、单页几百 KB，内联进 IPC 会让消息涨到几十 MB。
+/// 落点必须是 `$APPLOCALDATA`：asset 协议的 scope 只放行 `$HOME` / `$APPLOCALDATA`，
+/// 写进 `std::env::temp_dir()`（macOS 下是 /var/folders）前端加载不出来。
+#[tauri::command]
+pub async fn extract_comic(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<String>, String> {
+    use tauri::Manager;
+    path_guard::readable(&path)?;
+
+    let root = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("定位应用数据目录失败: {}", e))?
+        .join("comics");
+    let root = root.to_string_lossy().to_string();
+
+    tauri::async_runtime::spawn_blocking(move || cap_doc::extract_comic(&path, &root))
+        .await
+        .map_err(|e| format!("解压任务中断: {}", e))?
+}
+
 #[tauri::command]
 pub fn get_epub_cover(path: &str) -> Result<String, String> {
     path_guard::readable(path)?;
