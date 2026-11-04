@@ -25,8 +25,22 @@
  *
  * （与 db 仓 tests/aiSettingsContract.test.ts 同一道门 ——
  * 2026-11-01 实测确认本仓此前送的就是 snake_case，全部字段被静默丢弃。）
+ *
+ * ## ⚠️ 这个 import 必须是 vitest，不能从 db 仓照抄 node:test
+ *
+ * 本文件是从 db 仓搬过来的，但两仓的测试框架**不同**：
+ * - db 仓：`node --experimental-strip-types --test tests/*.test.ts` ⇒ 用 `node:test`
+ * - 本仓：`vitest run`（见 package.json 与 vitest.config.ts）⇒ 必须用 `vitest`
+ *
+ * 2026-11-04 实测：搬过来时 import 仍是 `node:test`，vitest 认不出它的 `test()`，
+ * 直接报 "No test suite found in file" ⇒ **这 5 条断言从 11-01 起一次都没跑过**，
+ * 那道「防 serde 静默丢字段」的门一直是虚掩的。
+ * 改成 `from "vitest"` 后 5 条全过。
+ *
+ * 所以：从 db 仓同步这个文件时，务必把 import 改回 vitest，否则门禁会再次静默失效
+ * （失败形态是「文件级 No test suite found」，不是断言红 —— 很容易被当成噪音忽略）。
  */
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
