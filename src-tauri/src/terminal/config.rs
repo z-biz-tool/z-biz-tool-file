@@ -753,7 +753,9 @@ fn shared_ai_export_view(include_secrets: bool) -> Option<AiConfig> {
     }
     let api_key = if include_secrets && !key.trim().is_empty() {
         match crate::terminal::secret::master_key() {
-            Ok(mk) => crate::terminal::secret::seal_opt(&mk, &Some(key)).ok().flatten(),
+            Ok(mk) => crate::terminal::secret::seal_opt(&mk, &Some(key))
+                .ok()
+                .flatten(),
             // 拿不到 master.key 就**不带**密钥 —— 宁可让对方重填，
             // 也不能把明文写进导出文件。
             Err(_) => None,

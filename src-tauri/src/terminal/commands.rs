@@ -166,7 +166,9 @@ pub struct SftpListResult {
 
 /// 按当前设置构造主机密钥校验策略。`strict_host_key` 关闭时回退为自动接受。
 fn host_policy(app: &tauri::AppHandle, host: &str, port: u16) -> HostKeyPolicy {
-    let strict = crate::terminal::config::load_config().settings.strict_host_key;
+    let strict = crate::terminal::config::load_config()
+        .settings
+        .strict_host_key;
     HostKeyPolicy::new(host, port, strict, Some(app.clone()))
 }
 
@@ -176,7 +178,10 @@ pub async fn ssh_resolve_host_key(request_id: String, trusted: bool) -> Result<b
     if request_id.trim().is_empty() {
         return Err("request_id 不能为空".into());
     }
-    Ok(crate::terminal::hostkeys::resolve_request(&request_id, trusted))
+    Ok(crate::terminal::hostkeys::resolve_request(
+        &request_id,
+        trusted,
+    ))
 }
 
 /// 连接SSH服务器
