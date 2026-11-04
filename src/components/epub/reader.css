@@ -1,0 +1,464 @@
+/**
+ * EPUB 阅读器样式。
+ *
+ * 颜色全部落在 CSS 变量里，而不是 tsx 的 style 对象 —— 四个书页主题（纸白/米黄/
+ * 护眼/夜间）本质是同一套布局换一组变量；写成 style 对象要复制四遍布局，
+ * 而且会撞 tests/themeTokenColors 那条"不许写死亮色字面量"的门禁。
+ *
+ * 类名统一 `epub-` 前缀并挂在根节点下，避免和文件管理已有的 .epub-content 打架。
+ */
+
+.epub-reader {
+  --r-page: #ffffff;
+  --r-text: #2b2b2b;
+  --r-heading: #141414;
+  --r-muted: #8a8a8a;
+  --r-line: #e8e8e8;
+  --r-chrome: #fafafa;
+  --r-chrome-text: #595959;
+  --r-accent: #1677ff;
+  --r-hover: rgba(0, 0, 0, 0.04);
+  --r-active: rgba(22, 119, 255, 0.12);
+  --r-paper-edge: rgba(0, 0, 0, 0.05);
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--r-chrome);
+  color: var(--r-chrome-text);
+}
+
+.epub-reader[data-theme="sepia"] {
+  --r-page: #f6efdf;
+  --r-text: #473d2c;
+  --r-heading: #33291a;
+  --r-muted: #998c74;
+  --r-line: #e2d7c0;
+  --r-chrome: #efe6d3;
+  --r-chrome-text: #6b5f49;
+  --r-hover: rgba(71, 61, 44, 0.06);
+  --r-paper-edge: rgba(71, 61, 44, 0.06);
+}
+
+.epub-reader[data-theme="green"] {
+  --r-page: #d8e8d2;
+  --r-text: #2d3a2b;
+  --r-heading: #1f2a1e;
+  --r-muted: #6d7f69;
+  --r-line: #c2d5bc;
+  --r-chrome: #cddfc7;
+  --r-chrome-text: #4d5f4a;
+  --r-hover: rgba(45, 58, 43, 0.07);
+  --r-paper-edge: rgba(45, 58, 43, 0.07);
+}
+
+.epub-reader[data-theme="night"] {
+  --r-page: #1b1b1d;
+  --r-text: #bdbdbd;
+  --r-heading: #e6e6e6;
+  --r-muted: #767676;
+  --r-line: #2e2e30;
+  --r-chrome: #212123;
+  --r-chrome-text: #9a9a9a;
+  --r-accent: #5b9dff;
+  --r-hover: rgba(255, 255, 255, 0.06);
+  --r-active: rgba(91, 157, 255, 0.18);
+  --r-paper-edge: rgba(0, 0, 0, 0.4);
+}
+
+/* ───────── 工具条 ───────── */
+
+.epub-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--r-line);
+  flex-shrink: 0;
+  min-height: 38px;
+}
+
+.epub-bar__title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  line-height: 1.25;
+  padding: 0 8px;
+}
+
+.epub-bar__title strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--r-chrome-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epub-bar__title span {
+  display: block;
+  font-size: 10.5px;
+  color: var(--r-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epub-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+/* antd 按钮在深色书页里会显得太亮，统一压到 chrome 色系 */
+.epub-reader .epub-icon-btn.ant-btn {
+  color: var(--r-chrome-text);
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+}
+
+.epub-reader .epub-icon-btn.ant-btn:hover {
+  background: var(--r-hover) !important;
+  color: var(--r-chrome-text) !important;
+}
+
+.epub-reader .epub-icon-btn.ant-btn[disabled] {
+  color: var(--r-muted);
+  opacity: 0.45;
+}
+
+.epub-fontsize {
+  font-size: 11px;
+  color: var(--r-muted);
+  min-width: 26px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────── 主体 ───────── */
+
+.epub-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.epub-toc {
+  width: 208px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--r-line);
+  background: var(--r-chrome);
+  padding: 4px;
+}
+
+.epub-toc__head {
+  padding: 6px 8px 8px;
+  font-size: 11px;
+  color: var(--r-muted);
+  position: sticky;
+  top: -4px;
+  background: var(--r-chrome);
+  z-index: 1;
+}
+
+.epub-toc__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--r-chrome-text);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epub-toc__item:hover {
+  background: var(--r-hover);
+}
+
+.epub-toc__item--active {
+  background: var(--r-active);
+  color: var(--r-accent);
+  font-weight: 600;
+}
+
+.epub-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--r-page);
+  position: relative;
+}
+
+/* 分页视口：固定尺寸，超出即裁掉，翻页靠 track 位移 */
+.epub-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+
+/* 一页的取景框 */
+.epub-stage {
+  position: relative;
+  overflow: hidden;
+}
+
+.epub-track {
+  transition: transform 0.19s cubic-bezier(0.33, 0.9, 0.4, 1);
+  will-change: transform;
+}
+
+.epub-track--instant {
+  transition: none;
+}
+
+/* 多列溢流：高度锁死，内容往右边长出新列，一列就是一页 */
+.epub-flow {
+  column-fill: auto;
+  overflow: visible;
+  color: var(--r-text);
+  font-family: "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", Georgia, "Times New Roman", serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.epub-flow p {
+  margin: 0 0 0.82em;
+  text-align: justify;
+  text-justify: inter-ideograph;
+  orphans: 2;
+  widows: 2;
+}
+
+.epub-flow h1,
+.epub-flow h2,
+.epub-flow h3,
+.epub-flow h4,
+.epub-flow h5,
+.epub-flow h6 {
+  color: var(--r-heading);
+  line-height: 1.42;
+  margin: 1.1em 0 0.55em;
+  font-weight: 600;
+  break-after: avoid;
+}
+
+.epub-flow h1 { font-size: 1.5em; }
+.epub-flow h2 { font-size: 1.3em; }
+.epub-flow h3 { font-size: 1.12em; }
+
+.epub-flow img,
+.epub-flow svg,
+.epub-flow video {
+  max-width: 100%;
+  max-height: 88%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0.6em auto;
+  break-inside: avoid;
+}
+
+.epub-flow figure,
+.epub-flow blockquote,
+.epub-flow table,
+.epub-flow pre {
+  break-inside: avoid;
+}
+
+.epub-flow blockquote {
+  margin: 0.9em 1.4em;
+  padding-left: 0.9em;
+  border-left: 2px solid var(--r-line);
+  color: var(--r-text);
+  opacity: 0.92;
+}
+
+.epub-flow ul,
+.epub-flow ol {
+  margin: 0.7em 0;
+  padding-left: 1.6em;
+}
+
+.epub-flow li {
+  margin: 0.25em 0;
+}
+
+.epub-flow hr {
+  border: 0;
+  border-top: 1px solid var(--r-line);
+  margin: 1.2em 0;
+}
+
+.epub-flow a {
+  color: var(--r-accent);
+  text-decoration: none;
+}
+
+.epub-flow pre {
+  background: var(--r-hover);
+  padding: 0.7em 0.9em;
+  border-radius: 5px;
+  overflow-x: auto;
+  font-size: 0.85em;
+}
+
+.epub-flow table {
+  border-collapse: collapse;
+  max-width: 100%;
+  font-size: 0.92em;
+}
+
+.epub-flow td,
+.epub-flow th {
+  border: 1px solid var(--r-line);
+  padding: 0.3em 0.5em;
+}
+
+/* 章首标题：书里往往自己在正文再写一遍，这里只做轻提示，不喧宾夺主 */
+.epub-chapter-mark {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--r-muted);
+  text-transform: uppercase;
+  margin-bottom: 0.9em;
+  break-after: avoid;
+}
+
+/* 点击翻页热区：只盖住两侧留白，中间留给选中文字 */
+.epub-hit {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 11%;
+  z-index: 2;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  color: transparent;
+  transition: background 0.15s;
+}
+
+.epub-hit:hover {
+  background: var(--r-hover);
+}
+
+.epub-hit--l { left: 0; }
+.epub-hit--r { right: 0; }
+
+.epub-hit:disabled {
+  cursor: default;
+  background: transparent;
+}
+
+/* 滚动模式 */
+.epub-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px 0 40px;
+  scroll-behavior: smooth;
+}
+
+.epub-scroll__inner {
+  margin: 0 auto;
+  padding: 0 30px;
+  box-sizing: content-box;
+}
+
+/* ───────── 页脚 ───────── */
+
+.epub-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--r-line);
+  background: var(--r-chrome);
+  flex-shrink: 0;
+  min-height: 34px;
+}
+
+.epub-foot__label {
+  font-size: 11px;
+  color: var(--r-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.epub-foot .ant-slider {
+  margin: 0;
+  flex: 1;
+  min-width: 60px;
+}
+
+.epub-foot .ant-slider-rail {
+  background: var(--r-line);
+}
+
+/* 进度条上的悬停提示气泡跟随书页主题，不然夜间模式弹出一个白框 */
+.epub-reader .ant-tooltip-inner {
+  font-size: 11px;
+}
+
+/* 主题选择器里的纸样色块：不依赖当前主题，永远显示那个主题自己的纸色 */
+.epub-swatch {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+}
+
+.epub-swatch[data-swatch="paper"] { background: #ffffff; }
+.epub-swatch[data-swatch="sepia"] { background: #f6efdf; }
+.epub-swatch[data-swatch="green"] { background: #d8e8d2; }
+.epub-swatch[data-swatch="night"] { background: #1b1b1d; }
+
+/* 跟随应用的色块一半亮一半暗，直观表达"两套都跟" */
+.epub-swatch[data-swatch="auto"] {
+  background: linear-gradient(135deg, #ffffff 0 50%, #1b1b1d 50% 100%);
+}
+
+/* 沉浸阅读：直接把阅读器铺满整个窗口，盖住活动栏与标签条。
+   不用浏览器 Fullscreen API —— WKWebView 里 element.requestFullscreen 时常被拒，
+   点了没反应比没按钮更糟。 */
+.epub-reader--immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  box-shadow: 0 0 0 1px var(--r-paper-edge);
+}
+
+/* ───────── 空/错误 ───────── */
+
+.epub-fallback {
+  padding: 28px;
+  text-align: center;
+  color: var(--r-muted);
+}
+
+/* 极窄面板（图书馆右侧 46% 拆分）下目录自动收窄，别把正文挤成一条缝 */
+@media (max-width: 760px) {
+  .epub-toc {
+    width: 150px;
+  }
+  .epub-bar__title span {
+    display: none;
+  }
+}

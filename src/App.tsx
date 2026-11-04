@@ -28,6 +28,7 @@ import {
   CloudDownloadOutlined,
   UpOutlined,
   BookOutlined,
+  ReadOutlined,
   FormOutlined,
   ColumnHeightOutlined,
   RadarChartOutlined,
@@ -222,6 +223,7 @@ function ResizableHeaderCell({
 const RAIL_APPS: ActivityBarApp[] = [
   { key: "files", label: "文件管理", icon: <FolderOpenOutlined /> },
   { key: "terminal", label: "终端", icon: <CodeOutlined /> },
+  { key: "library", label: "图书馆", icon: <ReadOutlined /> },
 ];
 
 /**
@@ -233,6 +235,12 @@ const RAIL_APPS: ActivityBarApp[] = [
  * 代价是首次切过去有一次 chunk 下载（本地文件协议，几十毫秒）。
  */
 const TerminalApp = lazy(() => import("./apps/terminal/TerminalApp"));
+
+/**
+ * 图书馆板块同样按需加载：它是「叠在文件树上的一层书目视图」，
+ * 首屏在文件管理时完全用不到，没必要让每个用户都下载一遍书目界面。
+ */
+const LibraryApp = lazy(() => import("./apps/library/LibraryApp"));
 
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
@@ -338,6 +346,23 @@ function AppShellInner() {
   useEffect(() => {
     if (typeof window !== "undefined") localStorage.setItem("z-tool-active-app", activeApp);
   }, [activeApp]);
+
+  /**
+   * 图书集列表：文件管理右键的「加入图书集」子菜单要用。
+   *
+   * 跟着 activeApp 刷新而不是只在启动时取一次 —— 用户在图书馆里新建/删掉一个集
+   * 再切回文件管理，子菜单必须跟着变，否则点了「技术书」会报"未找到图书集"。
+   */
+  const [libraryCollections, setLibraryCollections] = useState<
+    Array<{ id: string; name: string; color: string | null }>
+  >([]);
+  useEffect(() => {
+    invoke<Array<{ id: string; name: string; color: string | null }>>("library_list_collections")
+      .then(setLibraryCollections)
+      .catch((e) => console.warn("[library] 图书集列表读取失败:", e));
+  }, [activeApp]);
+  // 新建集的输入值：modal.confirm 的内容是自己渲染的 Input，只能靠 ref 取出来
+  const newCollectionNameRef = useRef("");
   const [previewWidth, setPreviewWidth] = useState<number>(() => {
     if (typeof window === "undefined") return 420;
     const stored = Number(localStorage.getItem("z-tool-preview-width"));
@@ -1104,6 +1129,81 @@ function AppShellInner() {
   // 菜单里的键位提示走 hint()。它是注册表的派生值，声明在本 callback 之后，
   // 所以**不能**进下面的 deps（渲染期取值会撞 TDZ："Cannot access before initialization"）；
   // 提示内容只由注册表里的键位决定，而键位是编译期常量，不会出现"菜单显示的是旧键位"。
+  /**
+   * 把文件塞进某个图书集。
+   *
+   * 走的是 library_add_paths_to_collection，后端会在书上不存在时当场补一条记录 ——
+   * 所以用户不需要先「添加扫描目录、扫一遍」才能把一本散落的 PDF 收进馆。
+   */
+  const addPathsToCollection = useCallback(
+    async (paths: string[], collectionId: string, collectionName: string) => {
+      try {
+        const added = await invoke<number>("library_add_paths_to_collection", {
+          paths,
+          collectionId,
+        });
+        message.success(
+          added > 0 ? `已加入「${collectionName}」（新收录 ${added} 本）` : `已加入「${collectionName}」`,
+        );
+      } catch (e) {
+        message.error("加入图书集失败: " + String(e));
+      }
+    },
+    [message],
+  );
+
+  /** 右键「新建图书集」：建完立刻把这批文件放进去，不然用户还要再点一次 */
+  const createCollectionAndAdd = useCallback(
+    (paths: string[]) => {
+      newCollectionNameRef.current = "";
+      modal.confirm({
+        title: paths.length > 1 ? `新建图书集并加入这 ${paths.length} 个文件` : "新建图书集",
+        content: (
+          <Input
+            placeholder="例如：技术书、待读、某某全集"
+            maxLength={40}
+            autoFocus
+            onChange={(e) => {
+              newCollectionNameRef.current = e.target.value;
+            }}
+            onPressEnter={() => {
+              // 回车等同点确定：confirm 的按钮拿不到键盘事件，这里只是让它别没反应
+            }}
+          />
+        ),
+        okText: "创建并加入",
+        cancelText: "取消",
+        onOk: async () => {
+          const name = newCollectionNameRef.current.trim();
+          if (!name) {
+            message.warning("名称不能为空");
+            // 抛错让 confirm 不关闭，用户接着改
+            throw new Error("名称不能为空");
+          }
+          try {
+            const created = await invoke<{ id: string; name: string }>(
+              "library_create_collection",
+              { name },
+            );
+            await invoke("library_add_paths_to_collection", {
+              paths,
+              collectionId: created.id,
+            });
+            const list = await invoke<Array<{ id: string; name: string; color: string | null }>>(
+              "library_list_collections",
+            );
+            setLibraryCollections(list);
+            message.success(`已创建「${created.name}」并加入`);
+          } catch (e) {
+            message.error("创建失败: " + String(e));
+            throw e;
+          }
+        },
+      });
+    },
+    [message, modal],
+  );
+
   const singleContextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
     const lowerName = record.name.toLowerCase();
     const isDir = record.is_dir;
@@ -1161,6 +1261,26 @@ function AppShellInner() {
           setMediaLibraryOpen(true);
         },
       }] : []),
+      // 加入图书集：不按扩展名限制 —— 图书馆是书目视图，用户可能想把一份 .md 讲义、
+      // 一个 .cbz 漫画也归到某条线里。能不能在应用内读是另一回事（右侧面板会兜底提示）
+      {
+        key: "book-collection",
+        label: "加入图书集",
+        icon: <BookOutlined />,
+        children: [
+          ...libraryCollections.map((c) => ({
+            key: `coll:${c.id}`,
+            label: c.name,
+            onClick: () => void addPathsToCollection([record.path], c.id, c.name),
+          })),
+          ...(libraryCollections.length > 0 ? [{ type: "divider" as const }] : []),
+          {
+            key: "coll:new",
+            label: "新建图书集…",
+            onClick: () => createCollectionAndAdd([record.path]),
+          },
+        ],
+      },
       ...(isText && !isDir ? [{
         key: "diff", label: "与另一个文件对比", icon: <SwapOutlined />, onClick: () => { setDiffOpen(true); setSelectedFile(record); },
       }] : []),
@@ -1229,6 +1349,8 @@ function AppShellInner() {
     // 归档子菜单：判定表 + 四个动作 + "解压到当前文件夹"要用的落点
     archiveOpenExts, openArchiveBrowser, handleExtractToSibling, extractArchiveNow,
     handleTestArchive, currentPath,
+    // 加入图书集：子菜单直接列当前所有集，所以集列表变了要重建
+    libraryCollections, addPathsToCollection, createCollectionAndAdd,
   ]);
 
   // 多选右键菜单（基于 selectedRowKeys）
@@ -1268,6 +1390,30 @@ function AppShellInner() {
           );
           setArchiveCreateOpen(true);
         },
+      },
+      // 批量加入图书集：一次选十本书归到同一条线里，是整理书库最常用的动作
+      {
+        key: "batch-book-collection",
+        label: `加入图书集（${count} 项）`,
+        icon: <BookOutlined />,
+        children: [
+          ...libraryCollections.map((c) => ({
+            key: `coll:${c.id}`,
+            label: c.name,
+            onClick: () =>
+              void addPathsToCollection(
+                records.map((r) => r.path),
+                c.id,
+                c.name,
+              ),
+          })),
+          ...(libraryCollections.length > 0 ? [{ type: "divider" as const }] : []),
+          {
+            key: "coll:new",
+            label: "新建图书集…",
+            onClick: () => createCollectionAndAdd(records.map((r) => r.path)),
+          },
+        ],
       },
       ...(allPdf ? [{
         key: "batch-pdf-merge",
@@ -1419,7 +1565,7 @@ function AppShellInner() {
     ];
 
     return items;
-  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setHashFiles, setSftpOpen, setArchiveCreateSources, setArchiveCreateOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen]);
+  }, [handleCopy, handleCut, handleDeleteMany, message, modal, loadDirectory, currentPath, setSelectedFile, setBatchRenameOpen, setTagEditOpen, setHashCalcOpen, setHashFiles, setSftpOpen, setArchiveCreateSources, setArchiveCreateOpen, setPdfToolsPath, setPdfToolsOpen, setOcrOpen, libraryCollections, addPathsToCollection, createCollectionAndAdd]);
 
   // 兼容旧接口的 contextMenuItems:根据是否多选派发
   const contextMenuItems = useCallback((record: FileEntry): MenuProps["items"] => {
@@ -2651,6 +2797,27 @@ function AppShellInner() {
           }
         >
           <TerminalApp />
+        </Suspense>
+      ) : activeApp === "library" ? (
+        // 图书馆板块：同样是整块替换。它自己带归纳侧栏与阅读面板，
+        // 与文件管理的「路径 + 标签条」不是一回事，塞进同一个壳只会互相打架。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在打开图书馆…
+            </div>
+          }
+        >
+          <LibraryApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

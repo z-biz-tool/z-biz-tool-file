@@ -72,8 +72,9 @@ function textChild(src: string, close: number): boolean {
   // {cond ? "预览" : "源码"} 这种表达式里显示的就是文字，算有名字；
   // 但 {activeDots.map(...)} 这种纯代码不算 —— 先取出字符串字面量再挖掉表达式
   if (/["'`][^"'`]+["'`]/.test(inner)) return true;
-  // {a.name} 这种"就是一个表达式"渲染出来的也是文字
-  if (/\{\s*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*\}/.test(inner)) return true;
+  // {a.name} 这种"就是一个表达式"渲染出来的也是文字；{LABELS[i]} 这类
+  // 数组下标取值同理（EPUB 阅读器的行距档位按钮），别把有名字的按钮误判成纯图标
+  if (/\{\s*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[^\]]*\])*\s*\}/.test(inner)) return true;
   for (;;) {
     const before = inner;
     inner = inner.replace(/\{[^{}]*\}/g, " ");
@@ -133,8 +134,15 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 走了 5 个图标按钮（后退/前进/刷新/显示隐藏/快捷键，其中「上级」有文字不算），
  * 标签条右端重新落了 4 个（刷新/显示隐藏/快捷键/主题切换）；后退/前进本身就在
  * 下面的路径栏里有一份，没有搬第二份。净减 1，都带了 aria-label。
+ * 89 → 94：图书馆 app（src/apps/library）新增 5 个，全部带 aria-label ——
+ * ReaderPane 的「在 Finder 中显示 / 用默认应用打开 / 关闭阅读面板」3 个，
+ * 工具条的「刷新书目 / 刷新」2 个（「添加目录」带文字，不计入）。
+ * 94 → 101：EPUB 阅读器重做成真正的翻页阅读器那轮。新增 7 个纯图标按钮：
+ * 目录开关、排版设置、书页主题、切换分页/滚动、全屏，加上页脚的上一页/下一页
+ * （两侧点击热区是原生 <button> 且不带 icon，不计入）。七个都带 aria-label，
+ * 其中「切换分页/滚动」和「全屏」因为要跟随状态换文案，用的是条件式而非字面量。
  */
-const TOTAL_ICON_ONLY = 89;
+const TOTAL_ICON_ONLY = 101;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

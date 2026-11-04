@@ -155,6 +155,23 @@ pub fn run() {
             library::library_add_tag,
             library::library_update_read_progress,
             library::library_clear,
+            // 图书馆 app（2026-11-04）：图书集 + 归纳聚合 + 书架查询。
+            // 旧的一组 library_* 保持原样不动 —— 媒体库弹窗还在用，
+            // 新 app 走的是 library_query（结构化过滤）与 library_facets（侧栏计数）。
+            library::library_list_collections,
+            library::library_create_collection,
+            library::library_update_collection,
+            library::library_delete_collection,
+            library::library_add_paths_to_collection,
+            library::library_remove_from_collection,
+            library::library_remove_entry,
+            library::library_toggle_entry_favorite,
+            library::library_set_read_status,
+            library::library_set_read_progress,
+            library::library_update_entry_meta,
+            library::library_facets,
+            library::library_query,
+            library::library_enrich_metadata,
             updater::updater_current_version,
             updater::updater_check,
             updater::updater_download,
