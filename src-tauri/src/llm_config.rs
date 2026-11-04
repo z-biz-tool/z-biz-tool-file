@@ -33,9 +33,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use cap_llm_config::{
-    migrate_legacy_configs, shared_secret_store, LlmConfigFile, LlmSecret, StoreError,
-};
+use cap_llm_config::{migrate_legacy_configs, shared_secret_store, LlmConfigFile, StoreError};
 
 /// 本仓对外的 AI 配置形状（脱敏视图）。
 ///
