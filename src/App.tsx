@@ -48,6 +48,10 @@ import {
   VideoCameraOutlined,
   AudioOutlined,
   RocketOutlined,
+  StarOutlined,
+  InboxOutlined,
+  ToolOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -109,7 +113,6 @@ import {
   AppShell,
   shortcutHints,
   useKeyboardShortcuts,
-  CollapsiblePanel,
   useTheme,
 } from "./_shared";
 import {
@@ -118,6 +121,8 @@ import {
 } from "./_shared/ShortcutHints";
 import Omnibar from "./_shared/Omnibar";
 import { MediaGallery } from "./components/MediaGallery";
+import ActivityBar, { ActivityBarMore, type ActivityBarItem } from "./components/ActivityBar";
+import SidebarPanel from "./components/SidebarPanel";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import { parentOfPath } from "./utils/parentDir";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -236,7 +241,6 @@ function AppShellInner() {
   const [selectionAnchor, setSelectionAnchor] = useState<React.Key | null>(null);
   const [dualPanelOpen, setDualPanelOpen] = useState(false);
   const [autoWatch, setAutoWatch] = useState(true);
-  const [terminalVisible, setTerminalVisible] = useState(false);
   const [duplicateFinderOpen, setDuplicateFinderOpen] = useState(false);
   const [duplicateRoot, setDuplicateRoot] = useState<string | null>(null);
   const [hashCalcOpen, setHashCalcOpen] = useState(false);
@@ -279,6 +283,14 @@ function AppShellInner() {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("z-tool-sider-collapsed") === "1";
   });
+  /**
+   * 活动栏当前激活的入口。空字符串 = 面板区收起（只剩 48px 的图标栏）。
+   * 持久化到 localStorage：用户上次停在哪个面板，下次打开还在那儿。
+   */
+  const [railActive, setRailActive] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("z-tool-rail-active") ?? "";
+  });
   const [previewWidth, setPreviewWidth] = useState<number>(() => {
     if (typeof window === "undefined") return 420;
     const stored = Number(localStorage.getItem("z-tool-preview-width"));
@@ -318,6 +330,14 @@ function AppShellInner() {
       /* 容量满或隐私模式，忽略 */
     }
   }, [columnWidths]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("z-tool-rail-active", railActive);
+    } catch {
+      /* 容量满或隐私模式，忽略 */
+    }
+  }, [railActive]);
 
   /**
    * 调整指定列的列宽。由 ResizableHeaderCell 在 onMouseMove 时反复调用，
@@ -1571,7 +1591,6 @@ function AppShellInner() {
     archiveExplorer: archiveExplorerOpen,
     newFileTemplate: newFileTemplateOpen,
     shortcutHelp: shortcutHelpOpen,
-    terminal: terminalVisible,
     mediaLibrary: mediaLibraryOpen,
     quickActions: quickActionsOpen,
     tagEdit: tagEditOpen,
@@ -1719,7 +1738,6 @@ function AppShellInner() {
         archiveExplorer: () => { setArchiveExplorerOpen(false); setArchiveExplorerPath(null); },
         newFileTemplate: () => setNewFileTemplateOpen(false),
         shortcutHelp: () => setShortcutHelpOpen(false),
-        terminal: () => setTerminalVisible(false),
         mediaLibrary: () => setMediaLibraryOpen(false),
         quickActions: () => setQuickActionsOpen(false),
         tagEdit: () => setTagEditOpen(false),
@@ -1754,7 +1772,7 @@ function AppShellInner() {
     // 归档那组快捷键的依赖：漏了 selectedArchives，⌘⇧E 会拿首帧的空列表，
     // 于是永远弹"请先选中要解压的压缩包"
     handleCompress, handleExtractToSibling, selectedArchives, message,
-    newFileTemplateOpen, terminalVisible, shortcutHelpOpen,
+    newFileTemplateOpen, shortcutHelpOpen,
   ]);
   useKeyboardShortcuts(shortcutSpecs);
 
@@ -1766,26 +1784,116 @@ function AppShellInner() {
     shortcutHintMap,
   ]);
 
-  // 侧栏：搜索栏 + 收藏夹 + 暂存栈（文件树已移除，路径导航靠面包屑 + 中间列表 + 上级按钮 + 路径输入框）
-  const sidebar = (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <CollapsiblePanel title="搜索" defaultExpanded={true}>
-        <div style={{ maxHeight: 280, overflow: "auto" }}>
-          <SearchBar rootPath={rootPath} />
-        </div>
-      </CollapsiblePanel>
-      <CollapsiblePanel title="收藏夹" defaultExpanded={true}>
-        <div style={{ maxHeight: 180, overflow: "auto" }}>
-          <Bookmarks onNavigate={(path) => navigateTo(path)} />
-        </div>
-      </CollapsiblePanel>
-      <CollapsiblePanel title="暂存栈" defaultExpanded={true}>
-        <div style={{ maxHeight: 200, overflow: "auto" }}>
-          <DropStack currentPath={currentPath} onRefresh={() => loadDirectory(currentPath)} />
-        </div>
-      </CollapsiblePanel>
-    </div>
-  );
+  // ——— 活动栏（左侧窄图标栏）———
+  //
+  // 形态变化：从「280px 常驻宽侧栏」改成「48px 图标栏 + 按需展开的面板区」。
+  // 原来三块（搜索 / 收藏夹 / 暂存栈）常驻占着 280px，在 13 寸屏上比文件列表
+  // 本身还宽。现在没打开的面板不占任何横向空间。
+  //
+  // 入口分两组：
+  //   「浏览」组 —— 在本机文件系统里找东西（搜索 / 收藏 / 暂存）
+  //   「工具」组 —— 对文件做事（工具箱 / 下载 / 远程 / 回收站）
+  // 后续从别的仓合并进来的能力（终端、PDF、OCR…）也落在「工具」组，
+  // 每个能力在栏上只占一个图标，不必再往宽侧栏里塞一整块面板。
+  // 活动栏「浏览」组的三个入口会展开面板区，面板内容在下面的 railPanel 里渲染。
+  // 这里只声明「哪些 key 是面板型入口」，内容不重复写两份 ——
+  // 同一份 SearchBar 写两遍的话，改了一处忘了另一处，就是两个入口行为不一致。
+  const railItems: ActivityBarItem[] = [
+    {
+      key: "search",
+      label: "搜索",
+      icon: <SearchOutlined />,
+      group: "browse",
+    },
+    {
+      key: "bookmarks",
+      label: "收藏夹",
+      icon: <StarOutlined />,
+      group: "browse",
+    },
+    {
+      key: "dropstack",
+      label: "暂存栈",
+      icon: <InboxOutlined />,
+      group: "browse",
+    },
+    {
+      key: "terminal",
+      label: "终端",
+      icon: <CodeOutlined />,
+      group: "tools",
+    },
+    {
+      key: "tools",
+      label: "工具箱",
+      icon: <ToolOutlined />,
+      group: "tools",
+      onClick: () => setQuickActionsOpen(true),
+    },
+    {
+      key: "downloads",
+      label: "下载",
+      icon: <CloudDownloadOutlined />,
+      group: "tools",
+      onClick: () => setAria2Open(true),
+    },
+    {
+      key: "remote",
+      label: "远程",
+      icon: <GlobalOutlined />,
+      group: "tools",
+      onClick: () => setSftpOpen(true),
+    },
+    {
+      key: "trash",
+      label: "回收站",
+      icon: <DeleteOutlined />,
+      group: "tools",
+      onClick: () => setTrashOpen(true),
+    },
+  ];
+
+  // 当前展开的面板内容。railActive 为空时不渲染整个面板区。
+  const railPanel = (() => {
+    switch (railActive) {
+      case "search":
+        return (
+          <SidebarPanel title="搜索" icon={<SearchOutlined />} onClose={() => setRailActive("")}>
+            <div style={{ padding: 8 }}>
+              <SearchBar rootPath={rootPath} />
+            </div>
+          </SidebarPanel>
+        );
+      case "bookmarks":
+        return (
+          <SidebarPanel title="收藏夹" icon={<StarOutlined />} onClose={() => setRailActive("")}>
+            <Bookmarks onNavigate={(path) => navigateTo(path)} />
+          </SidebarPanel>
+        );
+      case "dropstack":
+        return (
+          <SidebarPanel title="暂存栈" icon={<InboxOutlined />} onClose={() => setRailActive("")}>
+            <DropStack currentPath={currentPath} onRefresh={() => loadDirectory(currentPath)} />
+          </SidebarPanel>
+        );
+      case "terminal":
+        return (
+          <SidebarPanel title="终端" icon={<CodeOutlined />} onClose={() => setRailActive("")}>
+            <div style={{ height: "100%", minHeight: 0 }}>
+              <BuiltInTerminal
+                currentPath={currentPath}
+                onPathChange={(path) => navigateTo(path)}
+                visible
+                embedded
+                onClose={() => setRailActive("")}
+              />
+            </div>
+          </SidebarPanel>
+        );
+      default:
+        return null;
+    }
+  })();
 
   // 顶栏额外内容：工具栏
   const headerExtra = (
@@ -1848,11 +1956,19 @@ function AppShellInner() {
     <AppShell
       title="z-biz-tool-file"
       icon={<FolderOpenOutlined style={{ fontSize: 18, color: "#1677ff" }} />}
-      sidebar={sidebar}
+      rail={
+        <ActivityBar
+          items={railItems}
+          activeKey={railActive}
+          onActiveChange={setRailActive}
+          footer={
+            <ActivityBarMore label="更多工具" onClick={() => setQuickActionsOpen(true)} />
+          }
+        />
+      }
+      railPanel={railPanel}
+      railPanelWidth={280}
       headerExtra={headerExtra}
-      siderWidth={280}
-      collapsedSider={siderCollapsed}
-      onToggleSider={() => setSiderCollapsed((v) => !v)}
     >
       <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
         {/* 多标签页 */}
@@ -2191,8 +2307,10 @@ function AppShellInner() {
             <Button
               size="small"
               icon={<CodeOutlined />}
-              onClick={() => setTerminalVisible(!terminalVisible)}
-              type={terminalVisible ? "primary" : "text"}
+              // 终端搬进活动栏面板后，这里不再是"开/关底部抽屉"，
+              // 而是"跳到活动栏的终端面板"——两处入口指向同一个面板。
+              onClick={() => setRailActive((v) => (v === "terminal" ? "" : "terminal"))}
+              type={railActive === "terminal" ? "primary" : "text"}
               aria-label="切换内置终端"
             />
           </Tooltip>
@@ -2436,14 +2554,6 @@ function AppShellInner() {
           )}
         </div>
         )}
-
-        {/* 内置终端 */}
-        <BuiltInTerminal
-          currentPath={currentPath}
-          onPathChange={(path) => navigateTo(path)}
-          visible={terminalVisible}
-          onClose={() => setTerminalVisible(false)}
-        />
       </div>
 
       {/* 重命名弹窗 */}

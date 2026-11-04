@@ -122,8 +122,11 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 同一个动作摆两个按钮，其中一个是灰的，正是这次要收掉的那种噪音。
  * 87 → 88：文件对比面板新增一个「统一视图 / 双栏视图」切换按钮（DiffViewer）。
  * 它只有图标（跟着 tooltip 也只有视觉提示），所以带了 aria-label="切换双栏视图"。
+ * 88 → 90：左侧改成活动栏（ActivityBar）后新增两个图标按钮 ——
+ * SidebarPanel 的「关闭侧栏」（aria-label="关闭侧栏"）与活动栏底部的「更多工具」
+ * （aria-label="更多工具"）。两个都是纯图标，都带了可及名称。
  */
-const TOTAL_ICON_ONLY = 88;
+const TOTAL_ICON_ONLY = 90;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

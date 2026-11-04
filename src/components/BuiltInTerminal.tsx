@@ -19,6 +19,14 @@ interface BuiltInTerminalProps {
   onPathChange: (path: string) => void;
   visible: boolean;
   onClose: () => void;
+  /**
+   * 嵌入模式：填满父容器（活动栏的面板区），不画自己的标题栏与关闭按钮。
+   *
+   * 为什么要有两种形态：终端原本是贴在窗口底部的抽屉，高度靠拖拽手柄调。
+   * 搬进活动栏面板后，容器高度由面板决定，再留一条自己的标题栏就是两层标题，
+   * 再留一个 ✕ 就是两个关闭入口（面板右上角已经有一个了）。
+   */
+  embedded?: boolean;
 }
 
 const MIN_HEIGHT = 120;
@@ -30,6 +38,7 @@ export default function BuiltInTerminal({
   onPathChange,
   visible,
   onClose,
+  embedded = false,
 }: BuiltInTerminalProps) {
   const { token } = theme.useToken();
   const [lines, setLines] = useState<TerminalLine[]>([]);
@@ -236,60 +245,66 @@ export default function BuiltInTerminal({
   return (
     <div
       style={{
-        height,
+        // 嵌入模式填满父容器；抽屉模式维持原来的固定高度 + 拖拽手柄
+        height: embedded ? "100%" : height,
         display: "flex",
         flexDirection: "column",
         backgroundColor: "#1e1e1e",
-        borderTop: `2px solid ${token.colorBorderSecondary}`,
+        borderTop: embedded ? "none" : `2px solid ${token.colorBorderSecondary}`,
         position: "relative",
         flexShrink: 0,
+        minHeight: 0,
       }}
     >
-      {/* Resize handle */}
-      <div
-        onMouseDown={handleDragStart}
-        style={{
-          position: "absolute",
-          top: -4,
-          left: 0,
-          right: 0,
-          height: 8,
-          cursor: "ns-resize",
-          zIndex: 10,
-        }}
-      />
-
-      {/* Header bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "2px 12px",
-          backgroundColor: "#2d2d2d",
-          borderBottom: "1px solid #3c3c3c",
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ color: "#cccccc", fontSize: 12, fontFamily: "monospace" }}>
-          TERMINAL
-        </span>
-        <button
-          onClick={onClose}
+      {/* Resize handle：抽屉模式才有，嵌入模式的高度由面板决定，没有手柄可拖 */}
+      {!embedded && (
+        <div
+          onMouseDown={handleDragStart}
           style={{
-            background: "none",
-            border: "none",
-            color: "#cccccc",
-            cursor: "pointer",
-            fontSize: 14,
-            lineHeight: 1,
-            padding: "0 4px",
+            position: "absolute",
+            top: -4,
+            left: 0,
+            right: 0,
+            height: 8,
+            cursor: "ns-resize",
+            zIndex: 10,
           }}
-          title="关闭终端"
+        />
+      )}
+
+      {/* Header bar：嵌入模式交给 SidebarPanel 画标题栏，这里不再重复一层 */}
+      {!embedded && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "2px 12px",
+            backgroundColor: "#2d2d2d",
+            borderBottom: "1px solid #3c3c3c",
+            flexShrink: 0,
+          }}
         >
-          ✕
-        </button>
-      </div>
+          <span style={{ color: "#cccccc", fontSize: 12, fontFamily: "monospace" }}>
+            TERMINAL
+          </span>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#cccccc",
+              cursor: "pointer",
+              fontSize: 14,
+              lineHeight: 1,
+              padding: "0 4px",
+            }}
+            title="关闭终端"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Output area */}
       <div
