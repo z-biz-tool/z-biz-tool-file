@@ -731,7 +731,10 @@ dependencies = [
 name = "cap-llm-config"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "cap-llm",
+ "data-encoding",
+ "getrandom 0.2.17",
  "keyring",
  "serde",
  "serde_json",

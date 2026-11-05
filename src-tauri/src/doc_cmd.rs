@@ -170,10 +170,7 @@ pub fn parse_ebook(path: &str) -> Result<EpubBook, String> {
 /// 落点必须是 `$APPLOCALDATA`：asset 协议的 scope 只放行 `$HOME` / `$APPLOCALDATA`，
 /// 写进 `std::env::temp_dir()`（macOS 下是 /var/folders）前端加载不出来。
 #[tauri::command]
-pub async fn extract_comic(
-    app: tauri::AppHandle,
-    path: String,
-) -> Result<Vec<String>, String> {
+pub async fn extract_comic(app: tauri::AppHandle, path: String) -> Result<Vec<String>, String> {
     use tauri::Manager;
     path_guard::readable(&path)?;
 

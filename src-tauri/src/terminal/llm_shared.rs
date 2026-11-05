@@ -6,14 +6,16 @@
 //!
 //! ```text
 //! 配置（非敏感）：~/.z-biz-tool/llm/config.json
-//! 密钥（敏感）：  OS 密钥库 service="z-biz-tool" / account="llm.apikey"
+//! 密钥（敏感）：  统一落点按平台分发 —— macOS 是自建 AES-256-GCM 加密文件，
+//!                 Windows / Linux 是 OS 密钥库（macOS 不用钥匙串的理由见
+//!                 cap-llm-config 的 encrypted_file 模块文档）。
 //! ```
 //!
 //! 本仓原来自己存 `~/.z-terminal/config.json` 的 `ai` 段，密钥用自建
 //! AES-256-GCM 加密后落盘。现在改为读写统一落点 —— 于是：
 //!
 //! - 在 note 配好的 DeepSeek，terminal 直接能用；
-//! - 密钥进 OS 密钥库，不再是「配置文件 + 同目录 master.key」这种
+//! - 密钥进统一落点的密钥库，不再是「配置文件 + 同目录 master.key」这种
 //!   只能防备份泄露的弱保护。
 //!
 //! ## 兼容期怎么办
@@ -78,7 +80,7 @@ pub fn read_shared_config() -> Result<AiConfigView, String> {
         });
     };
 
-    // 密钥在 OS 密钥库里，不在配置文件里 —— 「有没有」要问密钥库。
+    // 密钥在统一落点的密钥库里，不在配置文件里 —— 「有没有」要问密钥库。
     let has_api_key = shared_secret_store()
         .get()
         .map_err(err_msg)?

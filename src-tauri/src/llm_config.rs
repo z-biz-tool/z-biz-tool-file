@@ -8,10 +8,13 @@
 //!
 //! ```text
 //! 配置（非敏感）：~/.z-biz-tool/llm/config.json
-//! 密钥（敏感）：  OS 密钥库 service="z-biz-tool" / account="llm.apikey"
+//! 密钥（敏感）：  统一落点按平台分发 —— macOS 是自建 AES-256-GCM 加密文件
+//!                 （`secret.enc` + 同目录 `master.key`），Windows / Linux 是 OS 密钥库。
+//!                 macOS 不用钥匙串：钥匙串 ACL 绑代码签名，而本应用是 adhoc 签名
+//!                 （cdhash 每次重打包都变）⇒ 每次启动都弹授权框。
 //! ```
 //!
-//! 于是：在 terminal 配好的 DeepSeek，file 直接能用；密钥进 OS 密钥库，
+//! 于是：在 terminal 配好的 DeepSeek，file 直接能用；密钥进统一落点的密钥库，
 //! 不再有任何明文落盘。旧的 `llm.json` 由启动时的幂等迁移器搬进统一落点
 //! 并抹掉明文密钥（`cap_llm_config::migrate_legacy_configs` 已按本仓的
 //! 历史路径登记）。
@@ -131,7 +134,7 @@ pub fn read_shared_config() -> Result<AiConfigView, String> {
         });
     };
 
-    // 密钥在 OS 密钥库里，不在配置文件里 —— 「有没有」要问密钥库。
+    // 密钥在统一落点的密钥库里，不在配置文件里 —— 「有没有」要问密钥库。
     let has_api_key = shared_secret_store()
         .get()
         .map_err(err_msg)?
@@ -195,7 +198,7 @@ pub fn write_shared_config(draft: &AiConfigDraft) -> Result<(), String> {
 ///
 /// 本仓旧落点是明文 `llm.json`，`cap_llm_config::migrate_legacy_configs`
 /// 已按 `app_config_dir()/llm.json` 的三平台路径登记，迁移时会把明文
-/// 密钥搬进 OS 密钥库并**抹掉旧文件里的密钥字段**。
+/// 密钥搬进统一落点的密钥库并**抹掉旧文件里的密钥字段**。
 pub fn migrate_legacy() -> Result<Option<String>, String> {
     let report = migrate_legacy_configs().map_err(err_msg)?;
     Ok(if report.migrated { report.from } else { None })
@@ -217,7 +220,7 @@ pub fn get_ai_config() -> Result<AiConfigView, String> {
     read_shared_config()
 }
 
-/// 保存 AI 配置（密钥进 OS 密钥库，配置落统一目录）。
+/// 保存 AI 配置（密钥进统一落点的密钥库，配置落统一目录）。
 #[tauri::command]
 pub fn save_ai_config(config: AiConfigDraft) -> Result<(), String> {
     write_shared_config(&config)

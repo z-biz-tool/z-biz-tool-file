@@ -17,7 +17,7 @@
 //! ## 2026-11-01 改造：配置接入家族统一落点
 //!
 //! 配置不再从本仓 `llm.json` 读（那也退役了），改从统一落点
-//! `~/.z-biz-tool/llm/config.json` + OS 密钥库读 —— 在 terminal 配好的
+//! `~/.z-biz-tool/llm/config.json` + 统一落点的密钥库读 —— 在 terminal 配好的
 //! 服务商，这里直接能用。`call_llm` 不再接收 `LlmConfig` 参数，每次调用
 //! 自行取配置（见 `llm_config::read_shared_config_with_key`）。
 

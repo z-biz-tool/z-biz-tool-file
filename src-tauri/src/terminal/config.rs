@@ -611,7 +611,7 @@ pub async fn export_config(path: String, include_secrets: Option<bool>) -> Resul
 /// 读取 AI 配置（**脱敏视图**：apiKey 恒空，hasApiKey 表达是否已配置）
 ///
 /// 2026-11-01 起真源改为家族统一落点（`~/.z-biz-tool/llm/config.json` +
-/// OS 密钥库），见 `llm_shared.rs`。本仓原来自己存 `~/.z-terminal/config.json`
+/// 统一落点的密钥库），见 `llm_shared.rs`。本仓原来自己存 `~/.z-terminal/config.json`
 /// 的 `ai` 段，现在那份只作历史遗留。
 #[tauri::command]
 pub async fn term_get_ai_config() -> Result<serde_json::Value, String> {
@@ -619,7 +619,7 @@ pub async fn term_get_ai_config() -> Result<serde_json::Value, String> {
         .map_err(|e| format!("序列化失败: {}", e))
 }
 
-/// 保存 AI 配置（密钥进 OS 密钥库，配置落统一目录）。
+/// 保存 AI 配置（密钥进统一落点的密钥库，配置落统一目录）。
 ///
 /// 前端传来的 apiKey 为空 ⇒ **继承已保存的 key**（编辑其它字段时表单里
 /// 没有明文 key，留空是常态而不是「清除」）。
@@ -716,7 +716,7 @@ pub async fn get_config() -> Result<serde_json::Value, String> {
 
 /// 统一落点的 AI 配置脱敏视图。
 ///
-/// 真源在 `~/.z-biz-tool/llm/config.json` + OS 密钥库，见 `llm_shared.rs`。
+/// 真源在 `~/.z-biz-tool/llm/config.json` + 统一落点的密钥库，见 `llm_shared.rs`。
 /// 读不出来（还没迁移 / 密钥库不可用）时退成空视图 —— 不能让整个
 /// `get_config` 因此失败，那会让终端连服务器列表都读不到。
 fn shared_ai_view() -> serde_json::Value {
@@ -739,7 +739,7 @@ fn shared_ai_view() -> serde_json::Value {
 /// `include_secrets` 为真时**带上密钥**，但**以本仓密文形态**（`enc:v1:`）——
 /// 与服务器凭证的处理方式一致：导出的文件里不该有任何明文凭证。
 ///
-/// 为什么不用统一落点自己的密钥形态：统一落点的密钥在 OS 密钥库里，
+/// 为什么不用统一落点自己的密钥形态：统一落点的密钥在它自己的密钥库里，
 /// 导出文件若存明文，贴进工单就等于泄露；而存本仓密文后，
 /// 导入时本仓的 `open_secrets` 会用同一把 master.key 解开，
 /// 语义与服务器凭证完全一致。

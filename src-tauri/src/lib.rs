@@ -304,8 +304,23 @@ pub fn run() {
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
             cap_hub::receiver::seed_cold_start(app.handle(), &zbiz_pending);
+            // 钥匙串存量迁移（2026-11-05）：macOS 上 LLM 密钥的落点从
+            // OS 钥匙串换成了自建加密文件（cap-llm-config 的 macOS 后端）。
+            // 原因：钥匙串条目 ACL 绑「创建者的代码签名」，而本应用是 adhoc
+            // 签名（designated requirement = cdhash），**每次重新打包 cdhash 就变**
+            // ⇒ 每次启动都弹「wants to use your confidential information」。
+            //
+            // 这一步把旧钥匙串里的密钥搬进加密文件，然后删掉旧条目 ——
+            // 否则用户会遇到「配置还在、模型还在、但 AI 说没配密钥」。
+            // 幂等；失败不阻断启动（迁移失败只是密钥没搬，不影响其它功能）。
+            //
+            // ⚠️ 必须放在其它读密钥的迁移之前。
+            let keychain_report = cap_llm_config::migrate_keychain_secret();
+            if keychain_report.migrated {
+                eprintln!("{}", keychain_report);
+            }
             // 迁移一次历史 AI 配置到家族统一落点（幂等；失败不阻断启动）。
-            // 本仓旧落点是明文 llm.json，迁移器会把明文密钥搬进 OS 密钥库并抹掉旧文件里的密钥字段。
+            // 本仓旧落点是明文 llm.json，迁移器会把明文密钥搬进统一落点并抹掉旧文件里的密钥字段。
             match llm_config::migrate_legacy() {
                 Ok(Some(from)) => eprintln!("已把 {} 的 AI 配置迁移到家族统一位置", from),
                 Ok(None) => {}

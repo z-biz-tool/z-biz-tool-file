@@ -95,7 +95,7 @@ pub struct GenOverrides {
     pub max_tokens: Option<u32>,
 }
 
-/// 从全局配置 + 本次覆盖拼 cap-llm 配置。key 从 OS 密钥库解出，前端不经手。
+/// 从全局配置 + 本次覆盖拼 cap-llm 配置。key 从统一落点的密钥库解出，前端不经手。
 ///
 /// 2026-11-01 起真源是家族统一落点（`~/.z-biz-tool/llm/config.json` +
 /// 密钥库），见 `llm_shared.rs`。
