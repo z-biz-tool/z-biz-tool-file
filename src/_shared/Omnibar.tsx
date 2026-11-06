@@ -1,19 +1,31 @@
 /**
- * Omnibar - 智能地址栏，集成路径导航和搜索功能
- * 来源: Files v4 的 Omnibar 设计
+ * Omnibar —— 路径栏（面包屑 + 导航 + 路径编辑）。
+ *
+ * ## 2026-11-06 的大改：删掉「搜索」「命令」两个模式
+ *
+ * 原来右侧有个「路径 / 搜索 / 命令」三段切换，但其中两个是**假 UI**：
+ *
+ * - **搜索**：Input 只有 value/onChange，`searchQuery` 存下来之后没有任何人读它，
+ *   也没有 `onPressEnter`。占位符写着"Enter 搜索"，用户敲完回车什么都不发生 ——
+ *   看起来像卡死了。而本仓已经有一个真正的搜索（活动栏的搜索面板，走
+ *   `SearchBar` + 后端 `search_files`），这里再放一个半成品只会让人以为搜索坏了。
+ * - **命令**：`commandInput` 同样只存不用，全仓没有任何命令注册表/分发器。
+ *   它是个纯粹的装饰品。
+ *
+ * 两个半成品占了路径栏大约一半的宽度，把真正在用的面包屑挤窄了。
+ * 现在只保留「路径」这一件事 —— 这也是这个组件原本的职责（Files v4 的 Omnibar）。
+ *
+ * ## 搜索去哪儿了
+ *
+ * 活动栏第一个图标（放大镜）打开搜索面板。用 ⌘F 或 `/` 是**过滤当前目录**
+ * （快速过滤，不落盘），两者的区别见快捷键面板。
  */
-
 import { useState, useRef, useEffect } from "react";
-import { Input, Dropdown, Tooltip } from "antd";
-import { App as AntdApp } from "antd";
+import { Input, Tooltip, App as AntdApp } from "antd";
 import {
-  SearchOutlined,
-  SettingOutlined,
   HomeOutlined,
   ArrowLeftOutlined,
   ArrowUpOutlined,
-  HistoryOutlined,
-  MacCommandOutlined,
   CopyOutlined,
   FolderOpenOutlined,
 } from "@ant-design/icons";
@@ -33,6 +45,18 @@ interface OmnibarProps {
   history: string[];
 }
 
+/** 图标按钮的统一观感：无底色，hover 才浮出浅底。 */
+const iconBtnStyle: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "none",
+  background: "transparent",
+  color: "var(--ant-color-text-secondary)",
+  display: "inline-flex",
+  alignItems: "center",
+  transition: "background 0.15s, color 0.15s",
+};
+
 const Omnibar: FC<OmnibarProps> = ({
   currentPath,
   onNavigate,
@@ -47,51 +71,44 @@ const Omnibar: FC<OmnibarProps> = ({
   // 键位由 App 的注册表推导：这里写死 "⌥+←" 在 Windows/Linux 上指的是不存在的键
   const hint = useShortcutHint();
   const { message } = AntdApp.useApp();
-  const [mode, setMode] = useState<"navigation" | "search" | "command">("navigation");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [commandInput, setCommandInput] = useState("");
   const [pathEditing, setPathEditing] = useState(false);
-
   const inputRef = useRef<any>(null);
-  const commandRef = useRef<any>(null);
 
-  // 当切换模式时聚焦到相应输入框
-  useEffect(() => {
-    if (mode === "search" && inputRef.current) {
-      inputRef.current.focus();
-    } else if (mode === "command" && commandRef.current) {
-      commandRef.current.focus();
-    }
-  }, [mode]);
-
-  // 路径编辑模式切换
-  const togglePathEditing = () => {
-    setPathEditing(!pathEditing);
-  };
-
-  // 路径编辑时的"草稿"。原来 Input.onChange 直接 onNavigate(currentPath)：
-  // 敲一个字提交一次，URL 被瞬时切换到 "/x/y/z"，最后落到完全打错的路径。
-  // 草稿态只在按 Enter 或失焦时一次性提交 —— 输入框是"草稿"，提交是"动作"。
+  /**
+   * 路径编辑的"草稿"。
+   *
+   * 输入框是**草稿**，提交才是**动作**：原来 onNavigate 直接挂在 onChange 上，
+   * 敲一个字提交一次，URL 会被瞬移到 "/x/y/z"，最后落到完全打错的路径。
+   */
   const [pathDraft, setPathDraft] = useState(currentPath);
   useEffect(() => {
     setPathDraft(currentPath);
   }, [currentPath, pathEditing]);
 
-  // 路径输入提交
-  const handlePathSubmit = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      onNavigate(trimmed);
+  useEffect(() => {
+    if (pathEditing) {
+      inputRef.current?.focus?.();
+      inputRef.current?.select?.();
     }
+  }, [pathEditing]);
+
+  const commitPath = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== currentPath) onNavigate(trimmed);
     setPathEditing(false);
   };
 
   /**
-   * 复制当前目录的完整路径。Omnibar 自己处理：选中一个文件再去翻右键菜单
-   * 才能复制那条路径，但"我现在站在哪里"几乎同等常用 —— 单独一颗按钮省事。
-   * 用 AntdApp 的 message 而不是 navigator 弹原生通知 —— 桌面壳里原生通知
-   * 不吃主题、不跟站点走，看起来像 OS 弹窗。
+   * 取消编辑：把草稿退回当前路径。
+   *
+   * 这条以前没有 —— 按 Esc 会走全局那条"清空选择"，用户在路径框里敲错一半
+   * 想反悔时，选择被清掉了、路径框还开着，两个都不对。
    */
+  const cancelPathEditing = () => {
+    setPathDraft(currentPath);
+    setPathEditing(false);
+  };
+
   const handleCopyCurrentPath = async () => {
     try {
       await navigator.clipboard.writeText(currentPath);
@@ -101,10 +118,6 @@ const Omnibar: FC<OmnibarProps> = ({
     }
   };
 
-  /**
-   * 在 Finder 里打开当前目录。右键菜单的同名操作只在选中某项时出现，
-   * "我想直接去 Finder 看一眼当前目录"也得绕一遍菜单。
-   */
   const handleRevealCurrent = () => {
     if (!currentPath) return;
     invoke("reveal_in_finder", { path: currentPath }).catch((err) =>
@@ -112,378 +125,232 @@ const Omnibar: FC<OmnibarProps> = ({
     );
   };
 
-  // 快捷键处理
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+L - 编辑路径
-      if (e.ctrlKey && e.key === 'l') {
-        e.preventDefault();
-        setMode("navigation");
-        setPathEditing(true);
-      }
-      // Ctrl+F - 搜索
-      if (e.ctrlKey && e.key === 'f') {
-        e.preventDefault();
-        setMode("search");
-      }
-      // Ctrl+Shift+P - 命令面板
-      if (e.ctrlKey && e.shiftKey && e.key === 'p') {
-        e.preventDefault();
-        setMode("command");
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // 导航模式渲染
-  const renderNavigation = () => {
-    if (pathEditing) {
-      return (
+  if (pathEditing) {
+    return (
+      <div style={barStyle}>
         <Input
           value={pathDraft}
           onChange={(e) => setPathDraft(e.target.value)}
-          onPressEnter={() => handlePathSubmit(pathDraft)}
-          onBlur={() => handlePathSubmit(pathDraft)}
+          onPressEnter={() => commitPath(pathDraft)}
+          onBlur={() => commitPath(pathDraft)}
+          onKeyDown={(e) => {
+            // Esc 只取消"编辑"这一件事，不能漏到全局去清空选择
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              e.preventDefault();
+              cancelPathEditing();
+            }
+          }}
           ref={inputRef}
           size="small"
-          style={{
-            width: '100%',
-            fontWeight: 500,
-          }}
+          aria-label="路径"
+          placeholder="输入路径，Enter 跳转，Esc 取消"
+          style={{ width: "100%", fontWeight: 500 }}
         />
-      );
-    }
+      </div>
+    );
+  }
 
-    // 面包屑导航
-    const parts = currentPath.split("/").filter(Boolean);
-    const breadcrumbs = ["/", ...parts.map((_, i) => `/${parts.slice(0, i + 1).join('/')}`)];
+  // 面包屑：["/", "/Users", "/Users/zifang", ...]
+  const parts = currentPath.split("/").filter(Boolean);
+  const breadcrumbs = ["/", ...parts.map((_, i) => `/${parts.slice(0, i + 1).join("/")}`)];
 
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <Dropdown
-          menu={{
-            items: [
-              // onRootNavigate 是要收路径的：之前声明成 () => void 又直接被当无参调用，
-              // App 侧拿到 undefined → setRootPath(undefined)，首页这个芯片就再也点不回来了。
-              // 「根目录」这一项本来就是面包屑第一片（"/"），菜单里不再重复一遍。
-              { key: 'home', label: '首页', icon: <HomeOutlined />, onClick: () => onRootNavigate(rootPath) },
-            ],
-          }}
-        >
-          <div
-            onClick={() => onRootNavigate(rootPath)}
-            style={{ 
-              cursor: 'pointer', 
-              padding: '4px 8px', 
-              borderRadius: 6,
-              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+  return (
+    <div style={barStyle}>
+      {/* 导航三键：无底色图标按钮，hover 才浮出淺底 */}
+      <div style={{ display: "flex", gap: 2 }}>
+        <Tooltip title={`后退${hint("后退")}`} placement="bottom">
+          <button
+            aria-label="后退"
+            onClick={onBack}
+            disabled={historyIndex <= 0}
+            style={{
+              ...iconBtnStyle,
+              cursor: historyIndex <= 0 ? "not-allowed" : "pointer",
+              opacity: historyIndex <= 0 ? 0.35 : 1,
             }}
-            title="首页"
-            onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)'}
-            onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+            onMouseEnter={(e) => {
+              if (historyIndex > 0) {
+                e.currentTarget.style.background = "var(--ant-color-fill-tertiary)";
+                e.currentTarget.style.color = "var(--ant-color-text)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--ant-color-text-secondary)";
+            }}
           >
-            <HomeOutlined style={{ color: '#1677ff' }} />
-          </div>
-        </Dropdown>
+            <ArrowLeftOutlined />
+          </button>
+        </Tooltip>
 
-        {breadcrumbs.map((path, index) => {
-          const isLast = index === breadcrumbs.length - 1;
+        <Tooltip title={`前进${hint("前进")}`} placement="bottom">
+          <button
+            aria-label="前进"
+            onClick={onForward}
+            disabled={historyIndex >= history.length - 1}
+            style={{
+              ...iconBtnStyle,
+              cursor: historyIndex >= history.length - 1 ? "not-allowed" : "pointer",
+              opacity: historyIndex >= history.length - 1 ? 0.35 : 1,
+            }}
+            onMouseEnter={(e) => {
+              if (historyIndex < history.length - 1) {
+                e.currentTarget.style.background = "var(--ant-color-fill-tertiary)";
+                e.currentTarget.style.color = "var(--ant-color-text)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--ant-color-text-secondary)";
+            }}
+          >
+            <ArrowLeftOutlined rotate={180} />
+          </button>
+        </Tooltip>
+
+        <Tooltip title={`上级目录${hint("返回上级")}`} placement="bottom">
+          <button
+            aria-label="上级目录"
+            onClick={onUp}
+            style={{ ...iconBtnStyle, cursor: "pointer" }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--ant-color-fill-tertiary)";
+              e.currentTarget.style.color = "var(--ant-color-text)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--ant-color-text-secondary)";
+            }}
+          >
+            <ArrowUpOutlined />
+          </button>
+        </Tooltip>
+      </div>
+
+      {/* 面包屑。整条后面跟一块可点的空白 ——
+          原来只有末尾那个小小的 "/" 能点进编辑，命中区只有 8px 宽，
+          想手输路径得先瞄准它。现在"面包屑右边全是编辑区"。 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 2, flex: 1, minWidth: 0 }}>
+        <Tooltip title="回到首页（根目录）" placement="bottom">
+          <button
+            aria-label="首页"
+            onClick={() => onRootNavigate(rootPath)}
+            style={{ ...iconBtnStyle, padding: "4px 6px" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ant-color-fill-tertiary)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <HomeOutlined style={{ color: "var(--ant-color-primary)" }} />
+          </button>
+        </Tooltip>
+
+        {breadcrumbs.slice(1).map((path, i) => {
+          const isLast = i === breadcrumbs.length - 2;
+          const name = parts[i];
           return (
-            <div key={path} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 10 }}>•</span>
+            <div key={path} style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0 }}>
+              <span aria-hidden style={{ color: "var(--ant-color-text-quaternary)", fontSize: 11 }}>
+                /
+              </span>
               {isLast ? (
-                // 当前目录：加粗即可。原来是渐变文字（紫→蓝都试过），
-                // 在小字号下渐变会把字压得发虚，反而不如直接加重来得分明。
-                <span style={{ fontWeight: 600, color: "var(--ant-color-text)" }}>
-                  {parts[index - 1] || 'Home'}
+                // 当前目录只加粗、不做点击热区：点自己等于刷新，容易误触
+                <span
+                  style={{
+                    fontWeight: 600,
+                    color: "var(--ant-color-text)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    padding: "4px 4px",
+                  }}
+                  title={currentPath}
+                >
+                  {name}
                 </span>
               ) : (
-                <span
+                <button
                   onClick={() => onNavigate(path)}
                   style={{
-                    cursor: 'pointer',
-                    padding: '4px 8px',
-                    borderRadius: 6,
+                    ...iconBtnStyle,
+                    padding: "4px 6px",
                     color: "var(--ant-color-text)",
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    whiteSpace: "nowrap",
+                    maxWidth: 200,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    display: "block",
                   }}
-                  onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)'}
-                  onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ant-color-fill-tertiary)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
-                  {parts[index - 1]}
-                </span>
+                  {name}
+                </button>
               )}
             </div>
           );
         })}
 
-        <span
-          onClick={togglePathEditing}
-          style={{
-            cursor: 'text',
-            padding: '4px 8px',
-            borderRadius: 6,
-            opacity: 0.6,
-            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-          }}
+        {/* 空白区：点一下进路径编辑（命中区大，不用瞄准小图标） */}
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="编辑路径"
           title="点击编辑路径"
-          onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.opacity = '1'}
-          onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.opacity = '0.6'}
-        >
-          /
-        </span>
-        {/* 复制当前路径：在 Finder 中显示：两条捷径让"我现在站在哪"不必绕右键菜单 */}
-        <Tooltip title="复制当前路径">
-          <span
-            role="button"
-            tabIndex={0}
+          onClick={() => setPathEditing(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setPathEditing(true);
+            }
+          }}
+          style={{ flex: 1, minWidth: 24, height: 24, cursor: "text", borderRadius: 6 }}
+        />
+      </div>
+
+      <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+        <Tooltip title="复制当前路径" placement="bottom">
+          <button
             aria-label="复制当前路径"
             onClick={handleCopyCurrentPath}
-            style={{
-              cursor: 'pointer',
-              padding: '4px 6px',
-              borderRadius: 6,
-              opacity: 0.6,
-              display: 'inline-flex',
-              alignItems: 'center',
-              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.opacity = '1';
-              (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)';
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.opacity = '0.6';
-              (e.currentTarget as HTMLElement).style.background = 'transparent';
-            }}
+            style={{ ...iconBtnStyle, padding: "4px 6px" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ant-color-fill-tertiary)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <CopyOutlined style={{ fontSize: 13 }} />
-          </span>
+          </button>
         </Tooltip>
-        <Tooltip title="在 Finder 中显示当前目录">
-          <span
-            role="button"
-            tabIndex={0}
+        <Tooltip title="在 Finder 中显示当前目录" placement="bottom">
+          <button
             aria-label="在 Finder 中显示当前目录"
             onClick={handleRevealCurrent}
-            style={{
-              cursor: 'pointer',
-              padding: '4px 6px',
-              borderRadius: 6,
-              opacity: 0.6,
-              display: 'inline-flex',
-              alignItems: 'center',
-              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.opacity = '1';
-              (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.04)';
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.opacity = '0.6';
-              (e.currentTarget as HTMLElement).style.background = 'transparent';
-            }}
+            style={{ ...iconBtnStyle, padding: "4px 6px" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--ant-color-fill-tertiary)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <FolderOpenOutlined style={{ fontSize: 13 }} />
-          </span>
-        </Tooltip>
-      </div>
-    );
-  };
-
-  // 搜索模式渲染
-  const renderSearch = () => (
-    <Input
-      placeholder="搜索文件..."
-      value={searchQuery}
-      onChange={(e) => setSearchQuery(e.target.value)}
-      ref={inputRef}
-      prefix={<SearchOutlined />}
-      suffix={<span style={{ fontSize: 12, color: '#999' }}>Enter 搜索</span>}
-      size="small"
-      style={{ width: '100%' }}
-    />
-  );
-
-  // 命令面板模式渲染
-  const renderCommand = () => (
-    <Input
-      placeholder="输入命令 (如: newfolder, settings, refresh)..."
-      value={commandInput}
-      onChange={(e) => setCommandInput(e.target.value)}
-      ref={commandRef}
-      prefix={<SettingOutlined />}
-      size="small"
-      style={{ width: '100%' }}
-    />
-  );
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 14px',
-        // 原来是写死的亮白渐变 + 黑边黑阴影：深色主题下这条路径栏是一块刺眼的白条
-        background: 'var(--ant-color-bg-layout)',
-        borderRadius: 12,
-        border: '1px solid var(--ant-color-border-secondary)',
-        boxShadow: '0 2px 8px var(--ant-color-fill-secondary)',
-        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)';
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)';
-      }}
-    >
-      {/* 导航控制按钮
-          原来三个都是实心渐变块（紫的，后来改蓝的还是块），一排色块压在路径栏最前面，
-          视觉上比下面的文件列表还抢眼。文件管理器的前进/后退本来就是"顺手点一下"的
-          次级操作，改成无底色的图标按钮 + hover 才浮出底色，和下面那排普通按钮一致。 */}
-      <div style={{ display: 'flex', gap: 2 }}>
-        <button
-          aria-label="后退"
-          onClick={onBack}
-          disabled={historyIndex <= 0}
-          style={{
-            padding: '6px 10px',
-            borderRadius: 8,
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--ant-color-text-secondary)',
-            cursor: historyIndex <= 0 ? 'not-allowed' : 'pointer',
-            opacity: historyIndex <= 0 ? 0.35 : 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            transition: 'background 0.15s, color 0.15s',
-          }}
-          title={`后退${hint("后退")}`}
-          onMouseEnter={(e) => {
-            if (historyIndex > 0) {
-              e.currentTarget.style.background = 'var(--ant-color-fill-tertiary)';
-              e.currentTarget.style.color = 'var(--ant-color-text)';
-            }
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent';
-            e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
-          }}
-        >
-          <ArrowLeftOutlined />
-        </button>
-
-        <button
-          aria-label="前进"
-          onClick={onForward}
-          disabled={historyIndex >= history.length - 1}
-          style={{
-            padding: '6px 10px',
-            borderRadius: 8,
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--ant-color-text-secondary)',
-            cursor: historyIndex >= history.length - 1 ? 'not-allowed' : 'pointer',
-            opacity: historyIndex >= history.length - 1 ? 0.35 : 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            transition: 'background 0.15s, color 0.15s',
-          }}
-          title={`前进${hint("前进")}`}
-          onMouseEnter={(e) => {
-            if (historyIndex < history.length - 1) {
-              e.currentTarget.style.background = 'var(--ant-color-fill-tertiary)';
-              e.currentTarget.style.color = 'var(--ant-color-text)';
-            }
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent';
-            e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
-          }}
-        >
-          <ArrowLeftOutlined rotate={180} />
-        </button>
-
-        <button
-          aria-label="上级目录"
-          onClick={onUp}
-          style={{
-            padding: '6px 10px',
-            borderRadius: 8,
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--ant-color-text-secondary)',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            transition: 'background 0.15s, color 0.15s',
-          }}
-          title={`上级目录${hint("返回上级")}`}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'var(--ant-color-fill-tertiary)';
-            e.currentTarget.style.color = 'var(--ant-color-text)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent';
-            e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
-          }}
-        >
-          <ArrowUpOutlined />
-        </button>
-      </div>
-
-      {/* 模式切换：容器灰底 + 激活项白底，是 antd Segmented 的常规观感。
-          原来激活项是实心渐变块，跟左边的导航按钮叠在一起就是一条彩色条带。 */}
-      <div style={{ display: 'flex', gap: 2, background: 'var(--ant-color-fill-quaternary)', padding: 3, borderRadius: 8 }}>
-        {[
-          { key: 'navigation', icon: <HistoryOutlined />, label: '路径' },
-          { key: 'search', icon: <SearchOutlined />, label: '搜索' },
-          { key: 'command', icon: <MacCommandOutlined />, label: '命令' },
-        ].map((m) => (
-          <button
-            key={m.key}
-            aria-label={m.label}
-            onClick={() => setMode(m.key as any)}
-            style={{
-              padding: '5px 10px',
-              borderRadius: 6,
-              border: 'none',
-              background: mode === m.key ? 'var(--ant-color-bg-container)' : 'transparent',
-              color: mode === m.key ? 'var(--ant-color-primary)' : 'var(--ant-color-text-secondary)',
-              boxShadow: mode === m.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: mode === m.key ? 600 : 500,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              transition: 'all 0.15s',
-            }}
-            onMouseEnter={(e) => {
-              if (mode !== m.key) e.currentTarget.style.color = 'var(--ant-color-text)';
-            }}
-            onMouseLeave={(e) => {
-              if (mode !== m.key) e.currentTarget.style.color = 'var(--ant-color-text-secondary)';
-            }}
-          >
-            {m.icon}
-            <span>{m.label}</span>
           </button>
-        ))}
-      </div>
-
-      {/* 主输入区域 */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {mode === 'navigation' && renderNavigation()}
-        {mode === 'search' && renderSearch()}
-        {mode === 'command' && renderCommand()}
+        </Tooltip>
       </div>
     </div>
   );
+};
+
+/**
+ * 整条路径栏的容器。
+ *
+ * 背景用 `--ant-color-bg-layout` 而不是容器色：它要跟在它下面、同为内容区的
+ * 文件列表区分开一档。原来这里是写死的亮白渐变 + 黑边黑阴影，深色主题下
+ * 会变成一条刺眼的白带。
+ */
+const barStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 10px",
+  background: "var(--ant-color-bg-layout)",
+  borderRadius: 10,
+  border: "1px solid var(--ant-color-border-secondary)",
+  transition: "border-color 0.15s",
 };
 
 export default Omnibar;

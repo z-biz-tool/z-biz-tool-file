@@ -2,7 +2,7 @@
  * 结构性门禁：Omnibar 路径编辑必须走"草稿-提交"两段式，并提供复制/Reveal 两颗捷径按钮。
  *
  * 背景缺陷：
- *   1) Input.onChange 直接调 handlePathSubmit —— 敲一个字就提交一次，最后
+ *   1) Input.onChange 直接调 commitPath —— 敲一个字就提交一次，最后
  *      落到完全打错的路径。这是 UX 上最坏的"按错键跳到鬼地方"。
  *   2) "我现在站在哪里"的两个最常用操作（复制路径 / 在 Finder 里打开）原来
  *      只能通过选中一个文件 + 右键菜单才能用。
@@ -23,25 +23,38 @@ describe("Omnibar 路径编辑的提交时机", () => {
     // onChange 只更新草稿，不调用 onNavigate
     const onChange = OMNI.match(/onChange=\{\(e\) => setPathDraft\(e\.target\.value\)\}/);
     expect(onChange, "Input.onChange 应当只更新 pathDraft").not.toBeNull();
-    // onChange 里不能再调 onNavigate / handlePathSubmit
-    const bad = OMNI.match(/onChange=\{\(e\) => handlePathSubmit\(/);
+    // onChange 里不能再调 onNavigate / commitPath
+    const bad = OMNI.match(/onChange=\{\(e\) => commitPath\(/);
     expect(bad, "onChange 不许直接提交").toBeNull();
   });
 
   it("提交入口只剩 onPressEnter 与 onBlur，两者都基于 pathDraft", () => {
-    expect(OMNI).toMatch(/onPressEnter=\{\(\) => handlePathSubmit\(pathDraft\)\}/);
-    expect(OMNI).toMatch(/onBlur=\{\(\) => handlePathSubmit\(pathDraft\)\}/);
+    expect(OMNI).toMatch(/onPressEnter=\{\(\) => commitPath\(pathDraft\)\}/);
+    expect(OMNI).toMatch(/onBlur=\{\(\) => commitPath\(pathDraft\)\}/);
   });
 
   it("currentPath 变化（导航到别处）后草稿要同步，否则下次编辑显示旧路径", () => {
     expect(OMNI).toMatch(/useEffect\(\(\) =>\s*\{\s*setPathDraft\(currentPath\)/);
   });
 
-  it("handlePathSubmit 必须 trim，空串时拒绝提交", () => {
-    const fn = OMNI.match(/const handlePathSubmit\s*=[\s\S]*?setPathEditing\(false\);?\s*\}/);
-    expect(fn, "找不到 handlePathSubmit").not.toBeNull();
+  it("commitPath 必须 trim，空串时拒绝提交", () => {
+    const fn = OMNI.match(/const commitPath\s*=[\s\S]*?setPathEditing\(false\);?\s*\}/);
+    expect(fn, "找不到 commitPath").not.toBeNull();
     expect(fn![0]).toMatch(/value\.trim\(\)/);
-    expect(fn![0]).toMatch(/if\s*\(trimmed\)\s*\{/);
+    // 空串不提交：新实现把"空"和"没变"一起挡在 if 外面
+    expect(fn![0]).toMatch(/if\s*\(trimmed\b/);
+  });
+
+  it("Esc 必须取消编辑并把草稿退回当前路径，且不能漏到全局去清空选择", () => {
+    // 2026-11-07 补：原来没有这条 —— 在路径框里敲错一半按 Esc，
+    // 走的是全局那条"清空选择"，选择被清了、路径框还开着，两件事都不对。
+    const fn = OMNI.match(/const cancelPathEditing\s*=[\s\S]*?setPathEditing\(false\);?\s*\}/);
+    expect(fn, "找不到 cancelPathEditing").not.toBeNull();
+    expect(fn![0]).toMatch(/setPathDraft\(currentPath\)/);
+
+    // Esc 的处理必须 stopPropagation，否则全局清空选择也会跟着跑一遍
+    expect(OMNI).toMatch(/e\.key === "Escape"[\s\S]{0,200}?cancelPathEditing\(\)/);
+    expect(OMNI).toMatch(/e\.stopPropagation\(\)/);
   });
 });
 

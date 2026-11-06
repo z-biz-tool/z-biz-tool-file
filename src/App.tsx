@@ -1709,7 +1709,11 @@ function AppShellInner() {
             </span>
             <span
               style={{
-                color: selectedFile?.path === record.path ? "#1677ff" : "inherit",
+                // 用 token 而不是写死的 #1677ff：暗色主题下那个蓝会亮得发飘
+                color:
+                  selectedFile?.path === record.path
+                    ? "var(--ant-color-primary)"
+                    : "inherit",
                 fontWeight: selectedFile?.path === record.path ? 600 : 400,
               }}
             >
@@ -1721,7 +1725,7 @@ function AppShellInner() {
                   fontSize: 11,
                   padding: "0 6px",
                   borderRadius: 8,
-                  background: tagColor || "#1677ff",
+                  background: tagColor || "var(--ant-color-primary)",
                   color: "#fff",
                   fontWeight: 500,
                   flexShrink: 0,
@@ -1766,7 +1770,13 @@ function AppShellInner() {
   //   Shift + 点击：从上一次 anchor 到这一行，区间选择
   //   任何情况都把 selectedFile 更新到当前行（用于预览和单文件操作）
   const handleRowClick = useCallback((e: React.MouseEvent, record: FileEntry) => {
-    setSelectedFile(record);
+    // 先把"这一下点完之后哪些还是选中的"算出来，再一次性落状态。
+    // 原来是无条件 setSelectedFile(record) + 函数式更新 keys，于是
+    // **⌘+点击取消选中**之后，右侧预览区还显示着那个"刚被取消"的文件 ——
+    // 它在列表里已经不是选中态了，预览却赖着不走。
+    // 用 React.Key[] 而不是 string[]：selectedRowKeys 本身就是 Key[]（antd Table 的类型），
+    // 在这里收窄成 string[] 会在 toggle 分支上类型不兼容。
+    let nextKeys: React.Key[];
 
     if (e.shiftKey && selectionAnchor) {
       // 区间选择：anchor → current 之间的所有行
@@ -1774,25 +1784,35 @@ function AppShellInner() {
       const endIdx = filteredFileList.findIndex((f) => f.path === record.path);
       if (startIdx >= 0 && endIdx >= 0) {
         const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-        const range = filteredFileList.slice(from, to + 1).map((f) => f.path);
-        setSelectedRowKeys(range);
+        nextKeys = filteredFileList.slice(from, to + 1).map((f) => f.path);
       } else {
         // anchor 不在当前列表里（切过目录 / 搜索过滤掉了），退化到单选
-        setSelectedRowKeys([record.path]);
+        nextKeys = [record.path];
       }
     } else if (e.metaKey || e.ctrlKey) {
       // toggle
-      setSelectedRowKeys((prev) =>
-        prev.includes(record.path)
-          ? prev.filter((k) => k !== record.path)
-          : [...prev, record.path]
-      );
+      nextKeys = selectedRowKeys.includes(record.path)
+        ? selectedRowKeys.filter((k) => k !== record.path)
+        : [...selectedRowKeys, record.path];
+      // 注：record.path 是 string，Key 是 string | number，includes 对 string 是安全的
     } else {
       // 单选
-      setSelectedRowKeys([record.path]);
+      nextKeys = [record.path];
+    }
+
+    setSelectedRowKeys(nextKeys);
+
+    // 预览跟着"还有效的选中项"走：
+    // - 这一行还选着 → 就预览它；
+    // - 这一行刚被 ⌘+点击取消 → 退到剩余选中项里的第一项，一个都不剩才清空。
+    if (nextKeys.includes(record.path)) {
+      setSelectedFile(record);
+    } else {
+      const fallback = filteredFileList.find((f) => nextKeys.includes(f.path)) ?? null;
+      setSelectedFile(fallback);
     }
     setSelectionAnchor(record.path);
-  }, [filteredFileList, selectionAnchor]);
+  }, [filteredFileList, selectionAnchor, selectedRowKeys]);
 
   /**
    * 右键即选中（macOS 的习惯）。
@@ -1946,8 +1966,19 @@ function AppShellInner() {
     { key: "/", handler: focusQuickFilter, description: "过滤当前目录", group: "导航" },
     { key: "ArrowDown", handler: () => moveSelection(1), description: "选中下一项", group: "导航" },
     { key: "ArrowUp", handler: () => moveSelection(-1), description: "选中上一项", group: "导航" },
-    { key: "ArrowRight", handler: () => moveSelection(1), description: "网格视图向右选中", group: "导航" },
-    { key: "ArrowLeft", handler: () => moveSelection(-1), description: "网格视图向左选中", group: "导航" },
+    // 无修饰的 ← → **只在网格视图**注册。
+    //
+    // 原来这两条是无条件注册的，等于把方向键从浏览器手里抢走了（hook 默认
+    // preventDefault）。后果按视图分：
+    // - 表格/列表：本来 ← → 可以横向滚动长文件名，被抢走后变成"上下移动选中项"，
+    //   在一个纵向列表里横向键做纵向移动，反直觉且丢掉了滚动；
+    // - 分栏视图：那里的列本身横着排，← → 应该是"进出目录"，
+    //   现在却变成换选中项 —— 和用户按 ← 想退回上一列的预期完全相反。
+    // 网格视图是二维的，← → 换选中项才成立，所以只在那里绑。
+    ...(viewMode === "grid" ? [
+      { key: "ArrowRight", handler: () => moveSelection(1), description: "网格视图向右选中", group: "导航" },
+      { key: "ArrowLeft", handler: () => moveSelection(-1), description: "网格视图向左选中", group: "导航" },
+    ] : []),
     // 主题按钮的 tooltip 一直写着 "⌘ + ⇧ + L 切换主题"，但全站没有任何一处注册过它：
     // 按下去不会发生事。这里把承诺补上，tooltip 的键位继续由注册表推导（单一来源）。
     { key: "l", meta: true, shift: true, handler: toggleTheme, description: "切换主题", group: "视图" },
@@ -1998,6 +2029,9 @@ function AppShellInner() {
         // 没有弹窗可关时，Esc 退回"什么都没选"（多选最容易误留的状态）
         setSelectedRowKeys([]);
         setSelectionAnchor(null);
+        // 预览也要跟着退：只清 keys 不清 selectedFile 的话，列表里一个选中项
+        // 都没有了，右侧还挂着一个文件，和 ⌘+点击取消选中是同一个毛病。
+        setSelectedFile(null);
         return;
       }
       const close: Record<string, () => void> = {
@@ -2031,6 +2065,19 @@ function AppShellInner() {
     }, description: "关闭最上层弹窗", group: "通用" },
     // 26 条注册项都写了 description，却没有任何界面显示过它们；F1 是这个面板的入口，
     // 顶部工具栏的「?」按钮走的是同一个 state。
+    // Space = Quick Look。macOS 上这是「看一眼」的本能动作 —— 右键菜单里
+    // 一直有 Quick Look，但全站没有快捷键，用户按 Space 只会滚动列表。
+    //
+    // preventDefault 显式关掉：没有选中项、或选中的是目录时，Space 应该照常
+    // 滚动（否则在空目录里按空格，页面僵住不动，比不响应还糟）。
+    { key: " ", preventDefault: false, handler: (e: KeyboardEvent) => {
+      const f = selectedFile;
+      if (!f || f.is_dir) return;
+      e.preventDefault();
+      invoke("quick_look_preview", { path: f.path }).catch((err) =>
+        message.error("Quick Look 失败: " + err),
+      );
+    }, description: "Quick Look 快速预览", group: "导航" },
     { key: "F1", handler: () => setShortcutHelpOpen((v) => !v), description: "查看快捷键面板", group: "通用" },
   ]), [
     goBack, goForward, goUp, currentPath, loadDirectory, showHidden, setShowHidden,
@@ -2046,6 +2093,8 @@ function AppShellInner() {
     // 归档那组快捷键的依赖：漏了 selectedArchives，⌘⇧E 会拿首帧的空列表，
     // 于是永远弹"请先选中要解压的压缩包"
     handleCompress, handleExtractToSibling, selectedArchives, message,
+    // ← → 现在按视图条件注册，漏了 viewMode 就会永远停在首帧那个视图上
+    viewMode, moveSelection,
     newFileTemplateOpen, shortcutHelpOpen,
   ]);
   // 只在「文件管理」板块内生效：终端板块自己也注册了一套全局快捷键（分屏、搜索、
