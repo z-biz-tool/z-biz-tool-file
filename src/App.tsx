@@ -2155,8 +2155,8 @@ function AppShellInner() {
     // 更新中心放在这一层：既有 AppShell 里的两个入口（左下角 + 顶栏），
     // 也有兜底的手动下载面板，三者都读同一份 check() 结果。
     <UpdateCenterProvider onOpenManualDownload={() => setUpdaterOpen(true)}>
-    // 子组件（Omnibar / TabsBar / 预览区）通过 useShortcutHint() 取同一份注册表，
-    // 不再各自抄一份 mac 专属文案。这里不重排内部缩进，只为少 800 行噪音 diff。
+    {/* 子组件（Omnibar / TabsBar / 预览区）通过 useShortcutHint() 取同一份注册表，
+        不再各自抄一份 mac 专属文案。这里不重排内部缩进，只为少 800 行噪音 diff。 */}
     <ShortcutHintsProvider specs={shortcutSpecs}>
     <AppShell
       title="z-biz-tool-file"
