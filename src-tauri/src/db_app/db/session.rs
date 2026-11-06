@@ -1,0 +1,859 @@
+// T-031：查询会话与流式结果管理
+//
+// 简化实现：使用 std::sync::OnceLock 替代 once_cell，
+// 不做独立 actor，而是通过查询 ID 跟踪活跃作业。
+//
+// 核心功能：
+// 1. QuerySession 跟踪会话状态（connectionId, generation, schema, accessMode）
+// 2. 流式执行：通过 query_start + query_next 实现分批拉取
+// 3. 背压：每批最多 MAX_BATCH_ROWS 行，前端消费后才拉下一批
+// 4. T-043：事务状态机 idle → active → failed/committing → committed/rolledBack/unknown
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
+use tokio::sync::mpsc;
+
+/// T-031 常量配置
+pub const MAX_BATCH_ROWS: usize = 500;
+pub const MAX_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
+pub const MAX_QUEUE_BATCHES: usize = 2;
+
+/// 查询状态机
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryState {
+    Queued,
+    Running,
+    Streaming,
+    CancelRequested,
+    Succeeded,
+    Failed,
+    Cancelled,
+    Unknown,
+}
+
+impl QueryState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            QueryState::Queued => "queued",
+            QueryState::Running => "running",
+            QueryState::Streaming => "streaming",
+            QueryState::CancelRequested => "cancel_requested",
+            QueryState::Succeeded => "succeeded",
+            QueryState::Failed => "failed",
+            QueryState::Cancelled => "cancelled",
+            QueryState::Unknown => "unknown",
+        }
+    }
+}
+
+/// T-043：事务状态机
+/// idle → active → failed/committing → committed/rolledBack/unknown
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    Idle,
+    Active,
+    Failed,
+    Committing,
+    Committed,
+    RollingBack,
+    RolledBack,
+    Unknown,
+}
+
+impl TransactionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransactionState::Idle => "idle",
+            TransactionState::Active => "active",
+            TransactionState::Failed => "failed",
+            TransactionState::Committing => "committing",
+            TransactionState::Committed => "committed",
+            TransactionState::RollingBack => "rolling_back",
+            TransactionState::RolledBack => "rolled_back",
+            TransactionState::Unknown => "unknown",
+        }
+    }
+
+    /// 校验状态转换是否合法
+    pub fn can_transition(&self, to: &TransactionState) -> bool {
+        matches!(
+            (self, to),
+            (TransactionState::Idle, TransactionState::Active)
+                | (TransactionState::Active, TransactionState::Failed)
+                | (TransactionState::Active, TransactionState::Committing)
+                | (TransactionState::Active, TransactionState::RollingBack)
+                | (TransactionState::Committing, TransactionState::Committed)
+                | (TransactionState::Committing, TransactionState::Unknown)
+                | (TransactionState::RollingBack, TransactionState::RolledBack)
+                | (TransactionState::RollingBack, TransactionState::Unknown)
+                | (TransactionState::Failed, TransactionState::Idle)
+                | (TransactionState::RolledBack, TransactionState::Idle)
+                | (_, TransactionState::Unknown) // 任何状态都可以转到 unknown
+        )
+    }
+}
+
+/// 单个结果批次
+///
+/// 走 IPC 边界 ⇒ 必须可序列化。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QueryBatch {
+    pub seq: u32,
+    pub columns: Vec<crate::db_app::ColumnMeta>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub truncated: bool,
+    pub affected_rows: u64,
+}
+
+/// 查询作业信息
+#[derive(Debug, Clone)]
+pub struct QueryJobInternal {
+    pub query_id: String,
+    pub state: QueryState,
+    pub state_msg: String,
+    pub cancel_requested: bool,
+    pub start_time: Instant,
+    pub batch_tx: mpsc::Sender<QueryBatch>,
+    /// T-043：事务状态
+    pub transaction_state: TransactionState,
+    /// T-043：事务所属 generation（用于校验同一事务操作在同一 generation）
+    pub generation: u32,
+    /// T-046：是否检测到冲突（0 行影响 = 乐观并发冲突）
+    pub conflict_detected: bool,
+    /// T-046：最近一次写操作影响的行数
+    pub last_affected_rows: u64,
+}
+
+/// 活跃查询注册表（进程内单例）
+pub struct QueryRegistry {
+    inner: Mutex<HashMap<String, QueryJobInternal>>,
+}
+
+impl QueryRegistry {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 注册表最多留多少条作业。超了先清掉**已终结**的（成功/失败/取消/未知），
+    /// 还在跑的一条都不动 —— 否则每次查询都往里塞一条，进程跑久了会一直涨。
+    pub const MAX_JOBS: usize = 256;
+
+    pub fn insert(&self, job: QueryJobInternal) {
+        let mut guard = self.inner.lock().expect("registry lock");
+        guard.insert(job.query_id.clone(), job);
+        if guard.len() > Self::MAX_JOBS {
+            // 先挑出已终结的，再逐条 remove —— 清理走公开 API，不在锁里做二次加锁。
+            let stale: Vec<String> = guard
+                .iter()
+                .filter(|(_, j)| {
+                    matches!(
+                        j.state,
+                        QueryState::Succeeded
+                            | QueryState::Failed
+                            | QueryState::Cancelled
+                            | QueryState::Unknown
+                    )
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            drop(guard);
+            for k in stale {
+                self.remove(&k);
+            }
+        }
+    }
+
+    pub fn get_state(&self, query_id: &str) -> Option<(QueryState, String)> {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .get(query_id)
+            .map(|j| (j.state, j.state_msg.clone()))
+    }
+
+    pub fn mark_succeeded(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.state = QueryState::Succeeded;
+            job.state_msg = "查询完成".into();
+        }
+    }
+
+    pub fn mark_failed(&self, query_id: &str, msg: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.state = QueryState::Failed;
+            job.state_msg = msg.to_string();
+        }
+    }
+
+    pub fn mark_cancel_requested(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.cancel_requested = true;
+            job.state = QueryState::CancelRequested;
+        }
+    }
+
+    /// 查询被取消（取消请求已生效）⇒ 状态 `Cancelled`。
+    pub fn mark_cancelled(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.cancel_requested = true;
+            job.state = QueryState::Cancelled;
+            job.state_msg = "查询已取消".into();
+        }
+    }
+
+    /// 状态不可判定（连接没了 / 池被回收）⇒ 状态 `Unknown`。
+    ///
+    /// 与"取消失败"是两回事：`Unknown` 说的是**我们不知道这条查询怎么了**，
+    /// 界面上必须提示用户"这条连接可能还在跑，先隔离再重连"。
+    pub fn mark_unknown(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.state = QueryState::Unknown;
+            job.state_msg = "状态不可判定（连接已不可用）".into();
+        }
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .values()
+            .filter(|j| {
+                !matches!(
+                    j.state,
+                    QueryState::Succeeded
+                        | QueryState::Failed
+                        | QueryState::Cancelled
+                        | QueryState::Unknown
+                )
+            })
+            .count()
+    }
+
+    pub fn remove(&self, query_id: &str) {
+        self.inner.lock().expect("registry lock").remove(query_id);
+    }
+
+    /// 取出这条作业的批次通道发送端。
+    ///
+    /// 生产者（后台任务）**从作业这里借**通道，而不是自己另造一个：
+    /// 作业是通道的所有者，作业没了通道也就跟着没了（生命周期单一）。
+    pub fn batch_sender(&self, query_id: &str) -> Option<mpsc::Sender<QueryBatch>> {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .get(query_id)
+            .map(|j| j.batch_tx.clone())
+    }
+
+    /// 这一单跑了多久（毫秒）。查无此作业 ⇒ None。
+    pub fn elapsed_ms(&self, query_id: &str) -> Option<u128> {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .get(query_id)
+            .map(|j| j.start_time.elapsed().as_millis())
+    }
+
+    // T-043：获取事务状态
+    pub fn get_transaction_state(&self, query_id: &str) -> Option<TransactionState> {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .get(query_id)
+            .map(|j| j.transaction_state)
+    }
+
+    // T-043：BEGIN 事务 - idle → active
+    pub fn begin_transaction(&self, query_id: &str, generation: u32) -> Result<(), String> {
+        let mut guard = self.inner.lock().expect("registry lock");
+        let job = guard
+            .get_mut(query_id)
+            .ok_or_else(|| format!("查询 {} 不存在", query_id))?;
+        if job.generation != generation {
+            return Err(format!(
+                "generation 不匹配：期望 {}，实际 {}",
+                generation, job.generation
+            ));
+        }
+        if !job
+            .transaction_state
+            .can_transition(&TransactionState::Active)
+        {
+            return Err(format!(
+                "事务状态 {} 不允许 BEGIN",
+                job.transaction_state.as_str()
+            ));
+        }
+        job.transaction_state = TransactionState::Active;
+        Ok(())
+    }
+
+    // T-043：COMMIT 事务 - active → committing → committed
+    pub fn commit_transaction(&self, query_id: &str, generation: u32) -> Result<(), String> {
+        let mut guard = self.inner.lock().expect("registry lock");
+        let job = guard
+            .get_mut(query_id)
+            .ok_or_else(|| format!("查询 {} 不存在", query_id))?;
+        if job.generation != generation {
+            return Err(format!(
+                "generation 不匹配：期望 {}，实际 {}",
+                generation, job.generation
+            ));
+        }
+        if !job
+            .transaction_state
+            .can_transition(&TransactionState::Committing)
+        {
+            return Err(format!(
+                "事务状态 {} 不允许 COMMIT",
+                job.transaction_state.as_str()
+            ));
+        }
+        job.transaction_state = TransactionState::Committing;
+        Ok(())
+    }
+
+    // T-043：标记 COMMIT 完成 - committing → committed
+    pub fn mark_committed(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            if job.transaction_state == TransactionState::Committing {
+                job.transaction_state = TransactionState::Committed;
+            }
+        }
+    }
+
+    // T-043：ROLLBACK 事务 - active → rolling_back
+    pub fn rollback_transaction(&self, query_id: &str, generation: u32) -> Result<(), String> {
+        let mut guard = self.inner.lock().expect("registry lock");
+        let job = guard
+            .get_mut(query_id)
+            .ok_or_else(|| format!("查询 {} 不存在", query_id))?;
+        if job.generation != generation {
+            return Err(format!(
+                "generation 不匹配：期望 {}，实际 {}",
+                generation, job.generation
+            ));
+        }
+        if !job
+            .transaction_state
+            .can_transition(&TransactionState::RollingBack)
+        {
+            return Err(format!(
+                "事务状态 {} 不允许 ROLLBACK",
+                job.transaction_state.as_str()
+            ));
+        }
+        job.transaction_state = TransactionState::RollingBack;
+        Ok(())
+    }
+
+    // T-043：标记 ROLLBACK 完成 - rolling_back → rolled_back
+    pub fn mark_rolled_back(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            if job.transaction_state == TransactionState::RollingBack {
+                job.transaction_state = TransactionState::RolledBack;
+            }
+        }
+    }
+
+    // T-043：断线/异常 → unknown
+    pub fn mark_transaction_unknown(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.transaction_state = TransactionState::Unknown;
+        }
+    }
+
+    // T-043：重置事务状态到 idle
+    pub fn reset_transaction_to_idle(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            if matches!(
+                job.transaction_state,
+                TransactionState::Failed
+                    | TransactionState::RolledBack
+                    | TransactionState::Committed
+                    | TransactionState::Unknown
+            ) {
+                job.transaction_state = TransactionState::Idle;
+            }
+        }
+    }
+
+    // T-046：记录写操作影响行数并检测冲突（0 行影响 = 乐观并发冲突）
+    //
+    // 冲突标记按**最近一次**写操作判定（不是粘住的）：事务里第一条更新没命中
+    // 并不代表整笔事务有冲突 —— 后续语句命中了，这次更新就是"条件不满足"，
+    // 不是并发冲突。粘住会让界面一直报冲突，误导用户。
+    pub fn record_write_impact(&self, query_id: &str, affected_rows: u64) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.last_affected_rows = affected_rows;
+            job.conflict_detected =
+                affected_rows == 0 && job.transaction_state == TransactionState::Active;
+        }
+    }
+
+    // T-046：检查是否有冲突
+    pub fn has_conflict(&self, query_id: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .get(query_id)
+            .map(|j| j.conflict_detected)
+            .unwrap_or(false)
+    }
+
+    // T-043：标记 COMMIT 响应丢失（committing → unknown）
+    pub fn mark_commit_response_lost(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            if job.transaction_state == TransactionState::Committing {
+                job.transaction_state = TransactionState::Unknown;
+                job.state_msg = "COMMIT 响应丢失".into();
+            }
+        }
+    }
+
+    /// 事务里的一条语句失败 ⇒ 事务进入 `failed`（不是"还在跑"）。
+    ///
+    /// 为什么要单独记：事务里失败的那条语句之后，这个事务**能不能继续**是未知的
+    /// （有的驱动会直接把它 abort 掉）。界面必须能区分"事务失败"与"查询失败"。
+    pub fn mark_transaction_failed(&self, query_id: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            if job.transaction_state == TransactionState::Active {
+                job.transaction_state = TransactionState::Failed;
+                job.state_msg = "事务内语句失败".into();
+            }
+        }
+    }
+
+    /// 事务结束（提交或回滚完成）⇒ 作业状态置为 `Succeeded`（不再算"在途"）。
+    ///
+    /// 与 `mark_succeeded` 分开：那个说的是"一条查询跑完了"，
+    /// 这个说的是"一条**事务**结束了"，两者的 state_msg 不同。
+    pub fn mark_transaction_finished(&self, query_id: &str, msg: &str) {
+        if let Some(job) = self.inner.lock().expect("registry lock").get_mut(query_id) {
+            job.state = QueryState::Succeeded;
+            job.state_msg = msg.to_string();
+        }
+    }
+
+    // T-046：检查事务是否处于 unknown 状态（不能自动重试）
+    pub fn is_transaction_unknown(&self, query_id: &str) -> bool {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .get(query_id)
+            .map(|j| j.transaction_state == TransactionState::Unknown)
+            .unwrap_or(false)
+    }
+}
+
+// ================== T-031：流式查询（query_start / query_next） ==================
+
+/// 一条流式查询的共享状态：生产者写、消费者读。
+///
+/// 为什么要共享而不是各存各的：生产者是后台任务，消费者是命令，
+/// 两边必须对"流结束了吗 / 出错了吗"有**同一个**答案，
+/// 否则前端会拿到一批数据后永远等不到结束标记。
+#[derive(Debug)]
+pub struct StreamShared {
+    /// 生产者出错时的原因（消费者在读到结束标记时读它）
+    pub error: Option<String>,
+    /// 生产者已推完（且已把最后一批推进队列）
+    pub done: bool,
+    /// 已推送的行数
+    pub pushed_rows: u64,
+    /// 是否因为达到 max_rows 上限而提前收尾
+    pub truncated: bool,
+    /// 下一批的序号
+    pub next_seq: u32,
+    /// 流的状态
+    pub state: QueryState,
+    /// 列元信息（第一批到达后才有）
+    pub columns: Vec<crate::db_app::ColumnMeta>,
+}
+
+impl Default for StreamShared {
+    fn default() -> Self {
+        Self {
+            error: None,
+            done: false,
+            pushed_rows: 0,
+            truncated: false,
+            next_seq: 0,
+            state: QueryState::Queued,
+            columns: Vec::new(),
+        }
+    }
+}
+
+/// 消费者端：持有接收端与共享状态。
+#[derive(Clone)]
+pub struct StreamEntry {
+    pub stream_id: String,
+    /// 批次队列。`tokio::sync::Mutex` 而不是裸 Receiver：
+    /// 消费者要 `await recv()`，期间不能让别的 `query_next` 插进来。
+    pub rx: Arc<tokio::sync::Mutex<mpsc::Receiver<QueryBatch>>>,
+    pub shared: Arc<Mutex<StreamShared>>,
+    pub start_time: Instant,
+}
+
+/// 流式查询注册表（进程内单例）
+#[derive(Default)]
+pub struct StreamRegistry {
+    inner: tokio::sync::Mutex<HashMap<String, Arc<StreamEntry>>>,
+}
+
+impl StreamRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn insert(&self, entry: Arc<StreamEntry>) {
+        self.inner
+            .lock()
+            .await
+            .insert(entry.stream_id.clone(), entry);
+    }
+
+    pub async fn get(&self, stream_id: &str) -> Option<Arc<StreamEntry>> {
+        self.inner.lock().await.get(stream_id).cloned()
+    }
+
+    pub async fn remove(&self, stream_id: &str) -> Option<Arc<StreamEntry>> {
+        self.inner.lock().await.remove(stream_id)
+    }
+
+    pub async fn count(&self) -> usize {
+        self.inner.lock().await.len()
+    }
+}
+
+static STREAMS: OnceLock<StreamRegistry> = OnceLock::new();
+
+/// 全局流注册表。
+pub fn streams() -> &'static StreamRegistry {
+    STREAMS.get_or_init(StreamRegistry::new)
+}
+
+static REGISTRY: OnceLock<QueryRegistry> = OnceLock::new();
+
+pub fn registry() -> &'static QueryRegistry {
+    REGISTRY.get_or_init(QueryRegistry::new)
+}
+
+/// 全局计数器用于生成唯一 queryId
+static QUERY_SEQ: AtomicU64 = AtomicU64::new(0);
+
+pub fn next_query_id() -> String {
+    let seq = QUERY_SEQ.fetch_add(1, Ordering::SeqCst);
+    format!("q-{}-{}", chrono::Utc::now().timestamp_millis(), seq)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn query_state_str_roundtrip() {
+        assert_eq!(QueryState::Running.as_str(), "running");
+        assert_eq!(QueryState::Streaming.as_str(), "streaming");
+        assert_eq!(QueryState::Cancelled.as_str(), "cancelled");
+    }
+
+    #[test]
+    fn query_batch_defaults() {
+        let batch = QueryBatch {
+            seq: 0,
+            columns: vec![],
+            rows: vec![],
+            truncated: false,
+            affected_rows: 0,
+        };
+        assert!(!batch.truncated);
+        assert_eq!(batch.affected_rows, 0);
+    }
+
+    #[test]
+    fn query_registry_state_tracking() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "q1".into(),
+            state: QueryState::Queued,
+            state_msg: "queued".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Active,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+        assert_eq!(reg.get_state("q1").unwrap().0, QueryState::Queued);
+        reg.mark_succeeded("q1");
+        assert_eq!(reg.get_state("q1").unwrap().0, QueryState::Succeeded);
+    }
+
+    #[test]
+    fn next_query_id_unique() {
+        let id1 = next_query_id();
+        let id2 = next_query_id();
+        assert_ne!(id1, id2);
+        assert!(id1.starts_with("q-"));
+    }
+
+    #[test]
+    fn registry_remove_cleans_up() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "q2".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Active,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+        assert!(reg.get_state("q2").is_some());
+        reg.remove("q2");
+        assert!(reg.get_state("q2").is_none());
+    }
+
+    // T-043：事务状态机测试
+    #[test]
+    fn transaction_state_transitions() {
+        assert!(TransactionState::Idle.can_transition(&TransactionState::Active));
+        assert!(TransactionState::Active.can_transition(&TransactionState::Failed));
+        assert!(TransactionState::Active.can_transition(&TransactionState::Committing));
+        assert!(TransactionState::Active.can_transition(&TransactionState::RollingBack));
+        assert!(TransactionState::Committing.can_transition(&TransactionState::Committed));
+        assert!(TransactionState::Committing.can_transition(&TransactionState::Unknown));
+        assert!(TransactionState::RollingBack.can_transition(&TransactionState::RolledBack));
+        assert!(TransactionState::Failed.can_transition(&TransactionState::Idle));
+        assert!(TransactionState::RolledBack.can_transition(&TransactionState::Idle));
+
+        // 非法转换
+        assert!(!TransactionState::Idle.can_transition(&TransactionState::Committed));
+        assert!(!TransactionState::Active.can_transition(&TransactionState::Committed));
+        assert!(!TransactionState::Committed.can_transition(&TransactionState::Active));
+    }
+
+    #[test]
+    fn transaction_state_any_to_unknown() {
+        assert!(TransactionState::Idle.can_transition(&TransactionState::Unknown));
+        assert!(TransactionState::Active.can_transition(&TransactionState::Unknown));
+        assert!(TransactionState::Committed.can_transition(&TransactionState::Unknown));
+    }
+
+    #[test]
+    fn transaction_begin_commit_rollback_lifecycle() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "tx1".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Idle,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+
+        // BEGIN
+        assert!(reg.begin_transaction("tx1", 1).is_ok());
+        assert_eq!(
+            reg.get_transaction_state("tx1"),
+            Some(TransactionState::Active)
+        );
+
+        // COMMIT
+        assert!(reg.commit_transaction("tx1", 1).is_ok());
+        assert_eq!(
+            reg.get_transaction_state("tx1"),
+            Some(TransactionState::Committing)
+        );
+
+        // COMMIT 完成
+        reg.mark_committed("tx1");
+        assert_eq!(
+            reg.get_transaction_state("tx1"),
+            Some(TransactionState::Committed)
+        );
+
+        // 重置到 idle
+        reg.reset_transaction_to_idle("tx1");
+        assert_eq!(
+            reg.get_transaction_state("tx1"),
+            Some(TransactionState::Idle)
+        );
+    }
+
+    #[test]
+    fn transaction_generation_mismatch_rejected() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "tx2".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Active,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+        let err = reg.begin_transaction("tx2", 2);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("generation"));
+    }
+
+    #[test]
+    fn transaction_rollback_lifecycle() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "rb1".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Idle,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+
+        assert!(reg.begin_transaction("rb1", 1).is_ok());
+        assert!(reg.rollback_transaction("rb1", 1).is_ok());
+        assert_eq!(
+            reg.get_transaction_state("rb1"),
+            Some(TransactionState::RollingBack)
+        );
+        reg.mark_rolled_back("rb1");
+        assert_eq!(
+            reg.get_transaction_state("rb1"),
+            Some(TransactionState::RolledBack)
+        );
+        reg.reset_transaction_to_idle("rb1");
+        assert_eq!(
+            reg.get_transaction_state("rb1"),
+            Some(TransactionState::Idle)
+        );
+    }
+
+    #[test]
+    fn transaction_unknown_state() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "unk1".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Active,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+        reg.mark_transaction_unknown("unk1");
+        assert_eq!(
+            reg.get_transaction_state("unk1"),
+            Some(TransactionState::Unknown)
+        );
+    }
+
+    #[test]
+    fn conflict_detection_0_rows() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "conf1".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Active,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+
+        // Record 0 rows affected = conflict detected
+        reg.record_write_impact("conf1", 0);
+        assert!(reg.has_conflict("conf1"));
+    }
+
+    #[test]
+    fn no_conflict_when_rows_affected() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "noconf1".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Active,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+
+        // Record 5 rows affected = no conflict
+        reg.record_write_impact("noconf1", 5);
+        assert!(!reg.has_conflict("noconf1"));
+    }
+
+    #[test]
+    fn commit_response_lost_marks_unknown() {
+        let reg = QueryRegistry::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let job = QueryJobInternal {
+            query_id: "lost1".into(),
+            state: QueryState::Running,
+            state_msg: "running".into(),
+            cancel_requested: false,
+            start_time: Instant::now(),
+            batch_tx: tx,
+            transaction_state: TransactionState::Committing,
+            generation: 1,
+            conflict_detected: false,
+            last_affected_rows: 0,
+        };
+        reg.insert(job);
+
+        // Mark commit response lost
+        reg.mark_commit_response_lost("lost1");
+        assert!(reg.is_transaction_unknown("lost1"));
+        assert_eq!(
+            reg.get_transaction_state("lost1"),
+            Some(TransactionState::Unknown)
+        );
+    }
+}

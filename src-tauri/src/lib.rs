@@ -15,6 +15,16 @@ mod atomic_write;
 mod commands;
 mod conflict;
 mod convert;
+// 数据库能力（MySQL / PostgreSQL / SQLite / SQL Server + SQL 编辑器 + 报表 +
+// Agent + AI）：从 z-biz-tool-db 仓整体搬入，作为 file 的第四个板块。
+// 2026-11-06 起 db 独立 app 废弃，能力只维护这一份。
+// 整棵树挂在 crate::db_app::* 下，避免和本仓已有的 commands / ai / ... 撞名。
+//
+// 注意 #[path]：db 仓原先是独立 crate，模块根是 lib.rs。搬进来后目录名
+// 变成了 db_app（与 Rust 2018 的「目录名 = 模块名」规则对不上），
+// 所以要显式指到 db_app/lib.rs。
+#[path = "db_app/lib.rs"]
+pub mod db_app;
 // 文档类命令的薄封装层（守卫 + 线程调度）。
 // 解析/操作实现已下沉到 cap-doc（z-biz-tool-capability），
 // 原先的 pdf_ops / pdf_utils / pdf_compress / pdf_font / pdf_image /
@@ -185,6 +195,7 @@ pub fn run() {
             image_utils::get_image_info,
             image_utils::save_image_data,
             llm_config::get_ai_config,
+            llm_config::get_ai_config_status,
             llm_config::save_ai_config,
             llm_config::test_ai_config,
             llm_config::list_llm_presets,
@@ -300,6 +311,66 @@ pub fn run() {
             terminal::config::get_session_logs,
             terminal::config::read_session_log,
             terminal::config::delete_session_log,
+            // ───────────────────────── 数据库（从 z-biz-tool-db 仓搬入）──
+            // 2026-11-06：db 独立 app 废弃，能力并入本仓成为第四个板块。
+            //
+            // 命令名**全部保持 db 仓原样**，前端不用改一行：
+            // db 的命令（test_connection / execute_query / get_tables …）
+            // 与 file、terminal 的一批命令都不重名（已逐个比对过），
+            // 也不撞语义（file 的都是文件操作，terminal 的都带 ssh_/sftp_/term_ 前缀）。
+            //
+            // 唯一的重叠是 AI 配置那五个（get_ai_config / save_ai_config /
+            // test_ai_config / list_llm_presets / list_llm_models）——
+            // db 仓原先自带一份 llm_shared.rs 副本，合并时统一到本仓的
+            // llm_config，所以**不在下面这份清单里**，仍由上面的 file 那份提供。
+            //
+            // 这里写成展开的清单而不是自定义宏：`generate_handler!` 展开后
+            // 需要的是具体的函数路径，自定义宏在它内部不再展开。
+            db_app::test_connection,
+            db_app::execute_query,
+            db_app::explain_query,
+            db_app::get_tables,
+            db_app::metadata_list_v2,
+            db_app::get_table_structure,
+            db_app::execute_batch,
+            db_app::format_sql,
+            db_app::query_status_v2,
+            db_app::query_cancel_v2,
+            db_app::query_start,
+            db_app::query_next,
+            db_app::run_secret_migration,
+            db_app::check_connection_revision,
+            db_app::close_pool,
+            db_app::keyset_query,
+            db_app::export_connections,
+            db_app::import_connections,
+            db_app::save_connections,
+            db_app::load_connections,
+            db_app::save_query_history,
+            db_app::load_query_history,
+            db_app::clear_query_history,
+            db_app::save_query,
+            db_app::load_saved_queries,
+            db_app::delete_saved_query,
+            db_app::ai_sql::ai_sql_generate,
+            db_app::ai_explain_results,
+            db_app::ai_optimize_sql,
+            db_app::ai_explain_sql,
+            db_app::ai_diagnose_error,
+            db_app::csv_import_plan,
+            db_app::csv_import_execute,
+            db_app::report::source::report_dataset_validate,
+            db_app::report::source::report_dataset_sql,
+            db_app::report::source::report_dataset_execute,
+            db_app::report::source::report_describe_columns,
+            db_app::report::source::report_view_validate,
+            db_app::report::source::report_view_render,
+            db_app::report::ai::ai_report_draft,
+            db_app::report::ai::ai_report_pick_tables,
+            db_app::report::ai::ai_report_explain,
+            db_app::save_report,
+            db_app::load_reports,
+            db_app::delete_report,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
@@ -338,10 +409,24 @@ pub fn run() {
                 Ok(None) => {}
                 Err(e) => eprintln!("终端 AI 配置迁移未完成, 本次按现状继续运行: {}", e),
             }
+            // 数据库板块（2026-11-06 从 db 仓搬入）：拉起连接池回收看门狗。
+            // 原来这套逻辑在 db 仓自己的 run() 里；并入后 file 是唯一的 app，
+            // 启动钩子归这里统一管。看门狗每 60 秒扫一次，回收空闲超 5 分钟的池。
+            db_app::spawn_pool_lifecycle();
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // 应用退出 ⇒ 主动关掉所有数据库连接池，让数据库端看到干净的断开。
+            // 不关的话 TCP 连接要等服务端超时才回收（默认可以到几分钟）。
+            //
+            // 2026-11-06：这段原本住在 db 仓的 run() 里。db 独立 app 废弃后
+            // 由 file 的退出回调统一负责。
+            if let tauri::RunEvent::Exit = event {
+                db_app::shutdown_pool_registry();
+            }
+        });
 }
 
 /// 取走队列里的深链（家族统一命令名）。

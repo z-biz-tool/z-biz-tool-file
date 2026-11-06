@@ -1,0 +1,199 @@
+// 报表语义层的 IPC 封装。命令注册在 src-tauri/src/lib.rs 的 generate_handler!。
+//
+// Tauri v2 会把 Rust 侧的 snake_case 形参名映射成 camelCase 的 payload 键，
+// 所以只有多词参数（max_repairs → maxRepairs）需要转写；结构体字段仍按
+// serde 原样（snake_case）传递。
+
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  CatalogTable,
+  ColumnInfo,
+  DatasetPayload,
+  DatasetSpec,
+  DraftResult,
+  PickResult,
+  PriorDraft,
+  PriorReport,
+  ReportBrief,
+  SavedReport,
+  SqlDraft,
+  SqlPreview,
+  TableCandidate,
+  ValidationReport,
+  ViewPayload,
+  ViewSpec,
+} from "./types";
+
+/** 后端 DBConfig：报表链路与 execute_query 用同一份凭据契约 */
+export interface BackendConfig {
+  id: string;
+  name: string;
+  db_type: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database: string;
+}
+
+/**
+ * AI 配置的**前端形状已退役**。
+ *
+ * 原先这里有 `AIConfig { base_url, api_key, model }`，由前端塞进每个
+ * `ai_*` 命令的参数里 —— 明文密钥因此在 Rust → IPC → JS 内存 → 表单 DOM
+ * 全链路可见。现在配置统一落在
+ * `~/.z-biz-tool/llm/config.json`（非敏感）+ OS 密钥库（密钥），
+ * 后端发请求时自己取，前端只负责「有没有」这一个布尔。
+ */
+
+export interface TableSummary {
+  name: string;
+  schema: string | null;
+  row_estimate: number | null;
+  size_bytes: number | null;
+}
+
+/** 数据集 id → (源别名 → 列清单)，回填后可跳过探列直接校验 */
+export type SchemaStore = Record<string, Record<string, string[]>>;
+
+/** 自然语言 → 一整张报表的规格。
+ *  prior 是上一版设计：追问式改稿时把工作台上当前的 spec 带回去，后端会在提示词里
+ *  请模型在它基础上改，改出来的设计过的还是同一套本机校验（旧稿里的编造字段照样会被拦下）。
+ *  feedback 是上一稿被本机挡下的原因（DraftReject.error）：点「让 AI 照这条错误改」时，
+ *  前端会把那个 error 和被挡下的 draft 一起带回来，缺任何一半模型都是在凭空重画。
+ *  被拒时后端 reject 的是 DraftReject 对象而不是纯文本，见 types.ts。 */
+export const aiReportDraft = (
+  question: string,
+  catalog: CatalogTable[],
+  maxRepairs?: number,
+  prior?: PriorReport | null,
+  feedback?: string | null
+): Promise<DraftResult> =>
+  invoke<DraftResult>("ai_report_draft", {
+    question,
+    catalog,
+    maxRepairs,
+    prior: prior ?? null,
+    feedback: feedback ?? null,
+  });
+
+/** 自然语言 → 这次要用哪几张表（跨库）。候选是"本机各连接里的表名"，不含列清单：
+ *  读列清单要一张一张问库，几百张表全问一遍太贵，而挑表靠的就是表名和它属于哪个库。
+ *  后端逐字对着候选清单核对，编出来的表名/连接、同名歧义一次列全；挑中之后的
+ *  连接名与方言由本机回填。feedback / priorAnswer 与起草那条腿同构：被挡下时
+ *  错误原文要连同那份答案一起回喂，模型是单发的。 */
+export const aiReportPickTables = (
+  question: string,
+  candidates: TableCandidate[],
+  maxRepairs?: number,
+  feedback?: string | null,
+  priorAnswer?: string | null
+): Promise<PickResult> =>
+  invoke<PickResult>("ai_report_pick_tables", {
+    question,
+    candidates,
+    maxRepairs,
+    feedback: feedback ?? null,
+    priorAnswer: priorAnswer ?? null,
+  });
+
+/** 自然语言 → 一条 SQL。表与列由本机目录限定，编出来的字段会被后端打回。 *  prior 是上一稿：追问式改稿时带上，后端会在提示词里请模型在旧稿上改，
+ *  改出来的稿子过的还是同一套本机校验（旧稿里的编造字段照样会被拦下）。
+ *  feedback 是上一稿被本机挡下的原因（SqlReject.error）：点「让 AI 照这条错误改」时，
+ *  前端把那个 error 和被挡下的 sql 一起带回来当 prior，缺任何一半都是在凭空重写。
+ *  被拒时后端 reject 的是 SqlReject 对象而不是纯文本，见 types.ts。 */
+export const aiSqlGenerate = (
+  question: string,
+  catalog: CatalogTable[],
+  maxRepairs?: number,
+  prior?: PriorDraft | null,
+  feedback?: string | null
+): Promise<SqlDraft> =>
+  invoke<SqlDraft>("ai_sql_generate", {
+    question,
+    catalog,
+    maxRepairs,
+    prior: prior ?? null,
+    feedback: feedback ?? null,
+  });
+
+/** 把这张报表"讲清是怎么算出来的"：只交结构（各库下推的 SQL、算子链、取数上限、没取到数的集），
+ *  行数据留在本机。后端没材料时直接拒，不会白问一次模型。 */
+export const aiReportExplain = (brief: ReportBrief): Promise<string> =>
+  invoke<string>("ai_report_explain", { brief });
+
+export const reportDatasetValidate = (
+  spec: DatasetSpec,
+  configs: BackendConfig[],
+  schemas?: Record<string, string[]>
+): Promise<ValidationReport> =>
+  invoke<ValidationReport>("report_dataset_validate", { spec, configs, schemas });
+
+export const reportDatasetSql = (
+  spec: DatasetSpec,
+  configs: BackendConfig[]
+): Promise<SqlPreview[]> => invoke<SqlPreview[]>("report_dataset_sql", { spec, configs });
+
+export const reportDatasetExecute = (
+  spec: DatasetSpec,
+  configs: BackendConfig[],
+  schemas?: Record<string, string[]>
+): Promise<DatasetPayload> =>
+  invoke<DatasetPayload>("report_dataset_execute", { spec, configs, schemas });
+
+export const reportViewValidate = (
+  view: ViewSpec,
+  datasets: DatasetSpec[],
+  configs: BackendConfig[],
+  schemas?: SchemaStore
+): Promise<ValidationReport> =>
+  invoke<ValidationReport>("report_view_validate", { view, datasets, configs, schemas });
+
+export const reportViewRender = (
+  view: ViewSpec,
+  datasets: DatasetSpec[],
+  configs: BackendConfig[],
+  schemas?: SchemaStore
+): Promise<ViewPayload> =>
+  invoke<ViewPayload>("report_view_render", { view, datasets, configs, schemas });
+
+export const reportDescribeColumns = (
+  config: BackendConfig,
+  schema: string,
+  table: string
+): Promise<ColumnInfo[]> => invoke<ColumnInfo[]>("report_describe_columns", { config, schema, table });
+
+/** 探查结果 → 目录字段：columns 只放名字（本机校验比对的口径），类型另放一处 */
+export const catalogColumns = (cols: ColumnInfo[]) => ({
+  columns: cols.map((c) => c.name),
+  column_types: cols.reduce(
+    (m, c) => {
+      if (c.data_type) m[c.name] = c.data_type;
+      return m;
+    },
+    {} as Record<string, string>
+  ),
+});
+
+/** 给人看的列摘要，与提示词里的口径一致：有类型带类型，没类型只给名字 */
+export const columnSummary = (t: CatalogTable) =>
+  t.columns
+    .map((c) => {
+      const ty = t.column_types?.[c];
+      return ty ? `${c} ${ty}` : c;
+    })
+    .join(", ");
+
+export const listTables = (config: BackendConfig): Promise<TableSummary[]> =>
+  invoke<TableSummary[]>("get_tables", { config });
+
+// ================== 报表簿 ==================
+// 存的是 spec 而不是结果：结果依赖库里当下的数据，spec 才是明天还能重跑的东西。
+
+export const saveReport = (item: SavedReport): Promise<void> =>
+  invoke<void>("save_report", { item });
+
+/** 后端按 updated_at 倒序返回，刚改过的排在最前 */
+export const loadReports = (): Promise<SavedReport[]> => invoke<SavedReport[]>("load_reports");
+
+export const deleteReport = (id: string): Promise<void> => invoke<void>("delete_report", { id });

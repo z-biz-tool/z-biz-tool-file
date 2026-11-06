@@ -15,6 +15,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
@@ -28,6 +34,9 @@
     "antd": "^6.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-syntax-highlighter": "^15.6.6",
+    "recharts": "^3.10.1",
+    "sql-formatter": "^12.2.4",
     "z-biz-tool-shared": "^0.1.18",
     "zustand": "^5.0.0"
   },
@@ -35,6 +44,7 @@
     "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^4.3.0",
     "prettier": "^3.3.0",
     "typescript": "^5.6.0",

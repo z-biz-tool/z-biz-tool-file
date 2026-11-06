@@ -1,0 +1,4194 @@
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
+import SqlEditor from "./components/SqlEditor";
+import ErrorBoundary from "./components/ErrorBoundary";
+// 2026-11-06 并入 file：主题走 file 的全局 ThemeProvider，不再自带一套。
+// UpdaterGate 也一并去掉 —— file 有统一的更新中心（UpdateCenterProvider），
+// 两个更新器会各弹一次、还各读各的版本号。
+import { useTheme } from "../../_shared/ThemeContext";
+import {
+  Layout,
+  Menu,
+  Button,
+  Space,
+  Tabs,
+  Card,
+  Table,
+  Input,
+  InputNumber,
+  Select,
+  Form,
+  Modal,
+  message,
+  Tooltip,
+  Tag,
+  Empty,
+  Switch,
+  Typography,
+  Alert,
+  Spin,
+  Badge,
+  Segmented,
+} from "antd";
+import type { SQLNamespace } from "@codemirror/lang-sql";
+import { buildGrant, isLikelyWriteSql, PendingApproval } from "./ipc/approval";
+import type { ApprovalGrant } from "./ipc/approval";
+import {
+  buildRowUpdates,
+  parseChangeKey,
+  parseSingleTableSource,
+  type BuiltStatement,
+} from "./ipc/changeCommit";
+import { classifyError, errorDescription } from "./ipc/errors";
+import { splitStatementTexts } from "./ipc/sqlStatements";
+import {
+  CSV_IMPORT_LIMIT,
+  CSV_SAMPLE_LIMIT,
+  defaultTableName,
+  describeImport,
+} from "./ipc/csvImport";
+import type { CsvImportPlan, CsvImportResult } from "./ipc/csvImport";
+
+interface ExportedConnection {
+  name: string;
+  db_type: string;
+  host: string;
+  port: number;
+  username: string;
+  database: string;
+}
+import {
+  DatabaseOutlined,
+  PlusOutlined,
+  PlayCircleOutlined,
+  FormatPainterOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  SaveOutlined,
+  SyncOutlined,
+  TableOutlined,
+  HistoryOutlined,
+  SettingOutlined,
+  DownloadOutlined,
+  UploadOutlined,
+  StarOutlined,
+  StarFilled,
+  ApiOutlined,
+  RobotOutlined,
+  CodeOutlined,
+  BugOutlined,
+  BulbOutlined,
+  SnippetsOutlined,
+  SearchOutlined,
+  DashboardOutlined,
+  CheckCircleOutlined,
+  ThunderboltOutlined,
+  WarningOutlined,
+} from "@ant-design/icons";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { startDeepLinkReceiver, ZBIZ_TAKE_PENDING } from "z-biz-tool-shared/protocol";
+import { resolveDbDeepLink, type HandoffItem } from "./_shared/deepLink";
+// 使用本地 Agent 组件（临时方案，待共享库修复后迁移到 z-biz-tool-shared）
+import { useAgentStore } from "./agent/AgentManager";
+// 报表看板带着 recharts、Agent 面板带着语法高亮：两者都只在各自视图打开时才用得到，
+// 静态打进来会让首屏多解析大半个体积
+const ReportWorkbench = lazy(() =>
+  import("./report/ReportWorkbench").then((m) => ({ default: m.ReportWorkbench })),
+);
+const AgentPanel = lazy(() => import("./agent/AgentPanel"));
+import { csvDoc, downloadCsv, stampName } from "./report/csv";
+import { aiSqlGenerate, catalogColumns, listTables, reportDescribeColumns } from "./report/api";
+import { aiDiagnoseError, aiExplainResults, aiExplainSql, aiOptimizeSql } from "./ipc/ai";
+import {
+  DbAiSettingsPanel,
+  loadAiConfigView,
+  type DbAiConfigView,
+} from "./components/AiSettingsPanelAdapter";
+import type { BackendConfig, TableSummary } from "./report/api";
+import type { CatalogTable, ChainOutcome, SqlDraft, SqlReject } from "./report/types";
+import type { AgentAskContext, AgentIntent, AgentResponse } from "./agent/types";
+
+// 渐变色主题常量
+const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
+const cardBgGradient =
+  "linear-gradient(135deg, rgba(102,126,234,0.04) 0%, rgba(118,75,162,0.04) 100%)";
+
+const { Header, Sider, Content } = Layout;
+const { TextArea } = Input;
+const { Text } = Typography;
+
+// Rust 风格可空类型
+type Option<T> = T | null;
+
+/** 本机挡下这条 SQL 之后，回喂给模型所需的工单：拒因 + 被挡下的那一条 + 当时那句需求。
+ *  缺 SQL 那一半就等于让模型对着"orders.net_amount 不存在"凭空猜自己刚写了什么。 */
+type SqlFix = { question: string; error: string; sql: string };
+
+/** Tauri v2 会把 Rust 侧的 `Err(SqlReject)` 原样抛成对象，`String(e)` 只会得到
+ *  [object Object]；但前置门槛那类仍是纯文本，两种形状都得能拆开。 */
+const asSqlReject = (e: unknown): SqlReject => {
+  if (e && typeof e === "object" && typeof (e as SqlReject).error === "string") return e as SqlReject;
+  return { error: String(e), sql: null };
+};
+
+/** 从本机拒因里挑出"不认得的表"。句式来自 ai_sql.rs 的 check_sql
+ *  （`SQL 里的表 A、B 不在本次目录里`，多个名字用、相连，与 ai_sql.rs 的同名测试一起改）。
+ *  句式变了这里只会抽不到名字、少一句提示——不会拿别的文字去认表，所以不做模糊兜底。 */
+const unknownTablesOfVerdict = (verdict: string): string[] => {
+  const m = /SQL 里的表 (.+?) 不在本次目录里/.exec(verdict);
+  if (!m) return [];
+  return m[1]
+    .split("、")
+    .map((s) => s.trim())
+    .filter(Boolean);
+};
+
+// 类型定义
+interface DBConnection {
+  id: string;
+  name: string;
+  type: "mysql" | "postgresql" | "sqlite" | "sqlserver";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database: string;
+  /**
+   * T-025：TLS 档位。
+   * - verify_full（默认）：验 CA + 验主机名
+   * - prefer：加密但**不校验证书**（降级，只适合本地开发）
+   * - disable：明文（仅本地隔离）
+   */
+  tlsMode?: TlsMode;
+  /** T-025：企业私有 CA 的证书文件路径（Pem）。内置根证书集是 Mozilla 公共 CA。 */
+  tlsCaPath?: string;
+  /**
+   * T-014：凭据状态。后端取值："" = 从未存过密码；"ok" = 明文已还原；
+   * "missing" = 取不回来了（进程重启 / 密钥丢失），**必须重新输入密码**。
+   */
+  credentialState?: string;
+  /** T-014：取不回密码的原因，后端给的中文说明，直接展示给用户。 */
+  credentialNote?: string;
+}
+
+/** T-025：TLS 档位。取值与后端 `TlsMode` 的 serde 形式逐字一致。 */
+type TlsMode = "verify_full" | "prefer" | "disable";
+
+/** TLS 档位的说明文案。界面上必须说清"prefer 不校验证书"，否则用户以为它更安全。 */
+const TLS_MODE_OPTIONS: { value: TlsMode; label: string; hint: string }[] = [
+  {
+    value: "verify_full",
+    label: "校验证书（推荐）",
+    hint: "验证 CA 与主机名。私有 CA 需在下方填写证书文件路径。",
+  },
+  {
+    value: "prefer",
+    label: "加密但不校验证书",
+    hint: "⚠ 安全降级：连接仍加密，但不验证服务器身份。仅限本地开发。",
+  },
+  {
+    value: "disable",
+    label: "不使用 TLS（明文）",
+    hint: "⚠ 密码与数据明文传输。仅限本机隔离环境。",
+  },
+];
+
+// 后端 v2 列元数据（DB-01 / T-001）：前端不再用 Object.keys 推导列名
+interface ColumnMeta {
+  ordinal: number;
+  name: string;
+  native_type: string;
+  logical_type: string;
+  nullable: boolean;
+}
+
+// 后端 v2 结果模型：单元格为 tagged { __kind, value }
+interface TaggedCell {
+  __kind:
+    | "null"
+    | "integer"
+    | "float"
+    | "decimal"
+    | "text"
+    | "binary"
+    | "date"
+    | "time"
+    | "datetime"
+    | "timestamp"
+    | "uuid"
+    | "json"
+    | "unsupported"
+    | "decode_error";
+  value: any;
+}
+
+interface QueryResultV2 {
+  id: string;
+  columns: string[];
+  column_meta?: ColumnMeta[];
+  rows: Array<TaggedCell[]>;
+  affected_rows: number;
+  execution_time_ms: number;
+  is_query: boolean;
+  /** T-031：界面只送前 N 行时，后端把总行数和"确实截断了"一起带回来 */
+  truncated?: boolean;
+  total_rows?: number;
+  timings?: {
+    connect_ms: number;
+    queue_ms: number;
+    execute_ms: number;
+    fetch_ms: number;
+    total_ms: number;
+  };
+}
+
+/** 单元格的展示文本（DB-02 / T-003） */
+function cellDisplay(cell: TaggedCell | null | undefined): string {
+  if (!cell || cell.__kind === "null") return "NULL";
+  switch (cell.__kind) {
+    case "binary":
+      return `二进制 ${(cell.value || "").length ?? 0}B`;
+    case "decode_error":
+      return `⚠ ${cell.value}`;
+    case "unsupported":
+      return `？${cell.value}`;
+    default:
+      return cell.value === null || cell.value === undefined ? "∅" : String(cell.value);
+  }
+}
+
+interface ColumnInfo {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  is_primary: boolean;
+  /** Rust 的 `Option<String>` 在 JSON 里是 `null` —— 别把 Rust 类型抄进 TS。 */
+  default_value: string | null;
+}
+
+interface TableInfo {
+  name: string;
+  schema: Option<string>;
+  row_estimate: Option<number>;
+  size_bytes: Option<number>;
+}
+
+interface QueryHistoryItem {
+  id: string;
+  sql: string;
+  connection_id: string;
+  connection_name: string;
+  timestamp: number;
+  execution_time_ms: number;
+  success: boolean;
+  error: Option<string>;
+}
+
+interface SavedQuery {
+  id: string;
+  name: string;
+  sql: string;
+  /** Rust 的 `Option<String>` 在 JSON 里是 `null` —— 别把 Rust 类型抄进 TS。 */
+  description: string | null;
+  tags: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+/** 流式启动结果（后端 db::session::QueryBatch / QueryStreamStart） */
+interface QueryBatchV2 {
+  seq: number;
+  columns: ColumnMeta[];
+  rows: TaggedCell[][];
+  truncated: boolean;
+  affected_rows: number;
+}
+
+interface QueryStreamStartV2 {
+  stream_id: string;
+  columns: ColumnMeta[];
+  first_batch: QueryBatchV2;
+  state: string;
+  pushed_rows: number;
+  truncated: boolean;
+}
+
+function App() {
+  // 主题走 file 的全局主题（src/_shared/ThemeContext.tsx）。
+  // 2026-11-06 并入 file：原来 db 是独立 app，自己维护 darkMode 状态并自带
+  // ConfigProvider。并入后全站只有一套主题，切主题的按钮也已经在 file 的
+  // 顶栏里 —— 这里再存一份状态就会出现「两个开关、两个状态」。
+  // 所以改成直接读全局的 mode，切换也调全局的 toggle。
+  const { mode: themeMode, toggle: toggleTheme } = useTheme();
+  const darkMode = themeMode === "dark";
+  const [connections, setConnections] = useState<DBConnection[]>([]);
+  const [selectedConnection, setSelectedConnection] = useState<DBConnection | null>(null);
+  const [sqlCode, setSqlCode] = useState("SELECT * FROM users WHERE id = 1");
+  const [queryResults, setQueryResults] = useState<TaggedCell[][]>([]);
+  // T-031：界面行数上限。0 = 不限。后端是在把整批行取回之后才截断的，
+  // 这一闸挡的是 IPC 与表格 DOM（几十万行会把界面压死），库侧该加的还是 LIMIT。
+  const [rowCap, setRowCap] = useState<number>(5000);
+  const [resultMeta, setResultMeta] = useState<{ total: number; shown: number } | null>(null);
+  // T-001 + T-002：以后端 column_meta 为准，零行结果仍有列定义
+  const [queryColumnsMeta, setQueryColumnsMeta] = useState<ColumnMeta[]>([]);
+  // T-044: 网格编辑状态
+  const [editingCell, setEditingCell] = useState<{ rowIndex: number; colIndex: number } | null>(
+    null
+  );
+  const [editValue, setEditValue] = useState<string>("");
+  const [changeSet, setChangeSet] = useState<Map<string, TaggedCell>>(new Map());
+  // 网格变更要写回库，得先知道「这一屏是哪张表查出来的」。后端没有游标可读，
+  // 所以在执行成功时把来源记下来，切连接/切标签/换语句就作废（见 commitChangeSet）。
+  const [resultSource, setResultSource] = useState<{
+    table: string;
+    sql: string;
+    connectionId: string;
+    tabId: string;
+  } | null>(null);
+  const [commitPlan, setCommitPlan] = useState<BuiltStatement[] | null>(null);
+  const [commitRejected, setCommitRejected] = useState<{ rowIndex: number; reason: string }[]>([]);
+  const [commitBusy, setCommitBusy] = useState(false);
+  // T-044: 记录变更数量用于UI显示
+  // T-006：可写访问模式开关；S0 默认 false，写入命令将被后端拒绝
+  const [writeAccessEnabled, setWriteAccessEnabled] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
+  const [editingConnection, setEditingConnection] = useState<DBConnection | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importPreview, setImportPreview] = useState<ExportedConnection[]>([]);
+  const [importError, setImportError] = useState<string>("");
+  const [form] = Form.useForm();
+
+  // 多标签页
+  const [tabs, setTabs] = useState<{ id: string; title: string; sql: string }[]>([
+    { id: "tab-1", title: "查询 1", sql: "SELECT * FROM users WHERE id = 1" },
+  ]);
+  const [activeTabId, setActiveTabId] = useState("tab-1");
+
+  // 表结构
+  const [tables, setTables] = useState<TableInfo[]>([]);
+  const [columns, setColumns] = useState<ColumnInfo[]>([]);
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+
+  // 查询历史 —— T-017 接通后端持久化
+  const [history, setHistory] = useState<QueryHistoryItem[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await invoke<QueryHistoryItem[]>("load_query_history");
+        if (!cancelled) {
+          setHistory(Array.isArray(list) ? list : []);
+          setHistoryLoaded(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          msgApi.warning(`历史加载失败：${e}（应用不会保存空历史覆盖损坏文件）`);
+          setHistoryLoaded(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 历史变更后去抖持久化（500ms）
+  useEffect(() => {
+    if (!historyLoaded) return;
+    const t = setTimeout(() => {
+      invoke("save_query_history", { history }).catch((e) => msgApi.error(`保存历史失败：${e}`));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [history, historyLoaded]);
+
+  // 保存的查询 —— T-017 接通后端持久化
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await invoke<SavedQuery[]>("load_saved_queries");
+        if (!cancelled) {
+          setSavedQueries(Array.isArray(list) ? list : []);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          msgApi.warning(`收藏加载失败：${e}`);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 新增/修改/删除仍走原 handleSave/handleDelete 调用 save_query/delete_saved_query，
+  // 这里不再做整体快照保存（避免与单条命令竞态）。
+  const [showSaveQueryModal, setShowSaveQueryModal] = useState(false);
+  const [editingSavedQuery, setEditingSavedQuery] = useState<SavedQuery | null>(null);
+
+  // T-036: 导出结果为 CSV
+  // ── 网格变更写回库 ────────────────────────────────────────────────
+  // 认表 → 取这张表的主键 → 按行拼 UPDATE → 让人逐条过一遍 → 一条一条执行。
+  // 任何一环不成立就停下并把原因讲清楚：这里宁可一格都不写，也不能发一条没有 WHERE 的
+  // UPDATE，更不能把 changeSet 清空来假装提交成功。
+  const dialectOf = (t: DBConnection["type"]) =>
+    t === "postgresql" ? "postgres" : t === "mysql" ? "mysql" : t === "sqlserver" ? "sqlserver" : "sqlite";
+
+  const planCommit = async (): Promise<BuiltStatement[] | null> => {
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return null;
+    }
+    if (!resultSource) {
+      msgApi.warning({
+        content: "这一屏认不出单一源表（只有不带 JOIN／子查询／聚合的整表 SELECT 才能在网格里改回库）",
+        duration: 6,
+      });
+      return null;
+    }
+    if (
+      resultSource.connectionId !== selectedConnection.id ||
+      (resultSource.tabId && resultSource.tabId !== activeTabId)
+    ) {
+      msgApi.warning({ content: "连接或标签已切换，这一屏的来源作废了，请重新查询", duration: 6 });
+      return null;
+    }
+
+    const [schemaPart, tablePart] = resultSource.table.includes(".")
+      ? resultSource.table.split(/\.(.+)/)
+      : [null, resultSource.table];
+    let tableCols: ColumnInfo[];
+    try {
+      tableCols = await invoke<ColumnInfo[]>("get_table_structure", {
+        tableName: tablePart,
+        config: toBackendConfig(selectedConnection),
+        schema: schemaPart,
+      });
+    } catch (e: any) {
+      msgApi.error(`读 ${resultSource.table} 的结构失败：${e}`);
+      return null;
+    }
+
+    const pkInfos = tableCols.filter((c) => c.is_primary);
+    if (!pkInfos.length) {
+      msgApi.warning({
+        content: `${resultSource.table} 没有主键，网格改不动 —— 没有能唯一定位一行的列，写回去只能靠猜`,
+        duration: 7,
+      });
+      return null;
+    }
+    // 主键必须在结果里，否则 WHERE 无从取值
+    const nameOf = (n: string) => n.split(".").pop()!.toLowerCase();
+    const pkOrdinals = pkInfos.map((pk) => {
+      const meta = queryColumnsMeta.find(
+        (m) => m.name.toLowerCase() === pk.name.toLowerCase() || nameOf(m.name) === nameOf(pk.name)
+      );
+      return meta ? { ordinal: meta.ordinal, name: pk.name, logical_type: meta.logical_type } : null;
+    });
+    const missingPk = pkInfos.filter((_, i) => !pkOrdinals[i]).map((c) => c.name);
+    if (missingPk.length) {
+      msgApi.warning({
+        content: `结果里没有主键列 ${missingPk.join("、")}，SELECT 带上它们才能在网格里改回库`,
+        duration: 7,
+      });
+      return null;
+    }
+
+    const changes: { rowIndex: number; ordinal: number; value: string }[] = [];
+    for (const [key, cell] of changeSet) {
+      const parsed = parseChangeKey(key);
+      if (!parsed) continue;
+      changes.push({ ...parsed, value: cell.value == null ? "" : String(cell.value) });
+    }
+
+    const { statements, rejected } = buildRowUpdates({
+      table: resultSource.table,
+      dialect: dialectOf(selectedConnection.type),
+      columns: queryColumnsMeta,
+      pks: pkOrdinals as { ordinal: number; name: string; logical_type?: string }[],
+      rows: queryResults,
+      changes,
+    });
+    setCommitRejected(
+      rejected.map((r) => ({
+        rowIndex: r.change.rowIndex,
+        reason: r.reason,
+      }))
+    );
+    if (!statements.length) {
+      setCommitPlan([]);
+      msgApi.warning({
+        content: rejected.length
+          ? `这 ${rejected.length} 项都定位不到行：${rejected[0].reason}`
+          : "没有可提交的变更",
+        duration: 7,
+      });
+      return null;
+    }
+    setCommitPlan(statements);
+    return statements;
+  };
+
+  const runCommit = async () => {
+    if (!commitPlan?.length || !selectedConnection || !resultSource) return;
+    setCommitBusy(true);
+    const env = (selectedConnection as any).environment ?? "unknown";
+    const okKeys = new Set<string>();
+    const failures: string[] = [];
+    for (const st of commitPlan) {
+      // 审批摘要按语句文本比对，所以这里给的就是马上要执行的那一条，逐条过闸不留可重放的grant
+      const grant = buildGrant({
+        sql: st.sql,
+        environment: env,
+        issuedAt: Math.floor(Date.now() / 1000),
+        ttlSec: 120,
+      });
+      try {
+        const r = await invoke<QueryResultV2>("execute_query", {
+          sql: st.sql,
+          config: toBackendConfig(selectedConnection),
+          // Tauri v2 的命令参数按 **camelCase** 收（宏把 Rust 的 snake_case 转过去，
+          // 运行时只查 camelCase 的 key）—— 传 snake_case 会被**静默丢掉**（Option ⇒ None），
+          // 之前就是因此让 accessMode 恒为空 ⇒ mode 恒为 "readOnly" ⇒ 写操作全被只读门禁挡掉。
+          // 钉子：src-tauri/tests/tauriArgNaming.rs（真跑 IPC 通道）+ tests/ipcContract.test.ts
+          accessMode: "writable",
+          approval: grant,
+          expectedGeneration: null,
+          maxRows: null,
+        });
+        if (Number(r?.affected_rows ?? 0) === 0) {
+          failures.push(`第 ${st.rowIndexes[0] + 1} 行：0 行受影响，这行可能已被别人改走或删掉`);
+          continue;
+        }
+        st.keys.forEach((k) => okKeys.add(k));
+      } catch (e: any) {
+        const err = classifyError(String(e?.message ?? e));
+        failures.push(`第 ${st.rowIndexes[0] + 1} 行：${errorDescription(err)}`);
+      }
+    }
+
+    if (okKeys.size) {
+      // 落库成功的值钉进结果，绿标才从"待提交"变成"已提交"
+      setQueryResults((prev) => {
+        const next = prev.map((row) => row.slice());
+        for (const key of okKeys) {
+          const cell = changeSet.get(key);
+          const parsed = parseChangeKey(key);
+          if (!cell || !parsed) continue;
+          if (next[parsed.rowIndex]) next[parsed.rowIndex][parsed.ordinal] = cell;
+        }
+        return next;
+      });
+      setChangeSet((prev) => {
+        const next = new Map(prev);
+        okKeys.forEach((k) => next.delete(k));
+        return next;
+      });
+    }
+    setCommitBusy(false);
+    setCommitPlan(null);
+    if (failures.length) {
+      msgApi.error({
+        content: `提交 ${okKeys.size} 项成功，${failures.length} 项失败：${failures.slice(0, 3).join("；")}${
+          failures.length > 3 ? ` 等 ${failures.length} 项` : ""
+        }（失败的那些仍留在待提交区）`,
+        duration: 9,
+      });
+    } else if (okKeys.size) {
+      msgApi.success(`已提交 ${okKeys.size} 项变更`);
+    }
+  };
+
+  // ── 全局快捷键 ────────────────────────────────────────────────────
+  // 用 SQL 客户端的手上频率全在「运行 / 格式化 / 换标签 / 保存」上，而这里原先一个都没绑
+  // （整个应用唯一的按键是单元格编辑框里的 Esc）。动作放进 ref，监听只注册一次，
+  // 免得每改一次状态就摘装一次全局 keydown。
+  const hotkeyRef = useRef<{
+    run: () => void;
+    format: () => void;
+    exportResults: () => void;
+    saveQuery: () => void;
+    newTab: () => void;
+    switchTabIndex: (i: number) => void;
+  }>({
+    run: () => {},
+    format: () => {},
+    exportResults: () => {},
+    saveQuery: () => {},
+    newTab: () => {},
+    switchTabIndex: () => {},
+  });
+
+  useEffect(() => {
+    hotkeyRef.current = {
+      run: () => void executeQuery(),
+      format: () => void formatSQL(),
+      exportResults: () => handleExportResults(),
+      saveQuery: () => setShowSaveQueryModal(true),
+      newTab: () => addTab(),
+      switchTabIndex: (i) => {
+        const t = tabs[i];
+        if (t) switchTab(t.id);
+      },
+    };
+  });
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      // 运行和保存要在打字的时候也生效 —— 编辑器正是敲完按键的地方
+      if (k === "enter") {
+        e.preventDefault();
+        hotkeyRef.current.run();
+        return;
+      }
+      if (k === "s") {
+        e.preventDefault();
+        hotkeyRef.current.saveQuery();
+        return;
+      }
+      const el = e.target as HTMLElement | null;
+      const typing =
+        !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      if (typing) return;
+      if (k === "e") {
+        e.preventDefault();
+        hotkeyRef.current.exportResults();
+      } else if (k === "f" && e.shiftKey) {
+        e.preventDefault();
+        hotkeyRef.current.format();
+      } else if (k === "t") {
+        e.preventDefault();
+        hotkeyRef.current.newTab();
+      } else if (/^[1-9]$/.test(k)) {
+        e.preventDefault();
+        hotkeyRef.current.switchTabIndex(Number(k) - 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ── 工作区落盘 ────────────────────────────────────────────────────
+  // 连接本来就有 save_connections 兜着，但 SQL 草稿、标签、行数上限重启全丢 ——
+  // 写入门禁（writeAccessEnabled）刻意不在内：那一闸每次启动都该回到关着。
+  const UI_PREFS_KEY = "z-biz-tool-db-ui-prefs";
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(UI_PREFS_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        tabs?: { id: string; title: string; sql: string }[];
+        activeTabId?: string;
+        rowCap?: number;
+      };
+      if (saved.tabs?.length) {
+        setTabs(saved.tabs);
+        const active = saved.tabs.find((t) => t.id === saved.activeTabId) ?? saved.tabs[0];
+        setActiveTabId(active.id);
+        setSqlCode(active.sql);
+      }
+      if (typeof saved.rowCap === "number") setRowCap(saved.rowCap);
+    } catch (e) {
+      // 读不出来就用默认值，别把启动卡在一屏空白上；但要留下原因
+      console.warn("[db] 上次的标签/草稿没读出来，本次用默认工作区:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          UI_PREFS_KEY,
+          JSON.stringify({
+            tabs: tabs.map((t) => (t.id === activeTabId ? { ...t, sql: sqlCode } : t)),
+            activeTabId,
+            rowCap,
+          })
+        );
+      } catch (e) {
+        /* 存不下不影响干活，但用户下次启动会丢标签，得在控制台留痕 */
+        console.warn("[db] 标签/草稿没写进本地存储（本次会话内仍可用）:", e);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [tabs, activeTabId, sqlCode, rowCap]);
+
+  // 编辑器补全用的 schema：只在左侧选中了表且字段结构真取回来时才给，
+  // 取不到就留 undefined —— 编一份假的出来，补全会开始建议库里不存在的列。
+  const editorSchema = useMemo<SQLNamespace | undefined>(() => {
+    if (!selectedTable || !columns.length) return undefined;
+    return { [selectedTable.toLowerCase()]: columns.map((c) => c.name.toLowerCase()) };
+  }, [selectedTable, columns]);
+
+  const handleExportResults = () => {
+    if (queryResults.length === 0) {
+      msgApi.warning("没有查询结果可导出");
+      return;
+    }
+    try {
+      // 列标题是 React 元素（名字 + 类型标签），以前直接 join 出去的就是 "[object Object]"
+      const headers = queryColumnsMeta.map((m) => m.name);
+      // 转义与公式防护在 report/csv.ts 里只有一份，看板导出走的是同一条
+      const rows = queryResults.map((row) =>
+        row.map((cell) => {
+          if (cell.__kind === "null") return "NULL";
+          if (cell.__kind === "binary") return "[BINARY]";
+          return String(cell.value ?? "");
+        })
+      );
+      downloadCsv(stampName("query_results"), csvDoc(headers, rows));
+      // 截断过就必须说清导的是"画出来的那一段"，不是整批结果——
+      // 否则用户拿这份 CSV 去对账，少的行没人认领
+      msgApi.success(
+        resultMeta
+          ? `已导出 ${queryResults.length} 行到 CSV（界面按上限只取回了 ${resultMeta.shown} 行${
+              resultMeta.total ? `，这次结果共 ${resultMeta.total} 行` : "，后面的行没取"
+            }）`
+          : `已导出 ${queryResults.length} 行到 CSV`
+      );
+    } catch (e: any) {
+      msgApi.error(`导出失败: ${e}`);
+    }
+  };
+
+  // AI 配置。
+  //
+  // 现在前端**不持有**配置内容，只持有两样东西：
+  // - `aiView`：脱敏视图（apiKey 恒空串，hasApiKey 表达有无）
+  // - `aiReady`：能不能发请求，**由后端判**
+  //
+  // 旧实现把 `{ baseUrl, apiKey, model }` 整份留在 React state 里，
+  // 并把 apiKey 塞进每个 `ai_*` 命令的载荷 ⇒ 明文密钥常驻 JS 内存。
+  const [aiView, setAiView] = useState<DbAiConfigView | null>(null);
+  const [aiReady, setAiReady] = useState(false);
+  // 没配好时的一句人话，**由后端给**。前端不再自己编「先配置 AI 服务地址、
+  // 密钥与模型」这种话 —— 它和后端真正缺的那一项可能对不上（用户明明填了
+  // 密钥、只是模型名空着，却被告知要填密钥）。
+  const [aiReason, setAiReason] = useState("");
+  const [showAiConfigModal, setShowAiConfigModal] = useState(false);
+
+  // 工作模式：SQL 查询 / AI 报表工作台
+  const [mode, setMode] = useState<"sql" | "report">("sql");
+  // 报表工作台去过一次就留着：以前 mode 一换回 SQL 查询，整块被条件渲染拆掉，
+  // 刚挑好的表、起草的草稿、规格 JSON 全跟着没了，用户只能从头再来。
+  // 也不是一开始就挂——没去过就别白刷一遍各连接的表清单。
+  const [reportSeen, setReportSeen] = useState(false);
+  // 从 SQL 那条腿撞进跨库死路时，那句需求要跟着人一起过去（seq 变一次算一次交接）
+  const [reportSeed, setReportSeed] = useState<
+    { q: string; seq: number; run?: boolean; done?: (o: ChainOutcome) => void } | null
+  >(null);
+  const reportSeedSeq = useRef(0);
+
+  // T-045 写入审批状态
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [pendingGrant, setPendingGrant] = useState<ApprovalGrant | null>(null);
+  const approvalPendingRef = useRef<((g: ApprovalGrant | null) => void) | null>(null);
+
+  /**
+   * 弹审批窗，等用户点头。
+   *
+   * `subject` 是**要被摘要绑定的那段文本**（SQL 全文，或 CSV 导入的
+   * 「表 + 行数」规范串）—— 审批摘要就是对它算的，所以它必须与后端
+   * 将要执行/写入的东西**逐字一致**。
+   * `display` 只是给人看的说明，不参与摘要。
+   */
+  const requestApproval = (
+    subject: string,
+    environment: string,
+    display?: { title: string; detail: string }
+  ): Promise<ApprovalGrant | null> =>
+    new Promise((resolve) => {
+      const ttlSec = 60;
+      const pending: PendingApproval = {
+        sql: subject,
+        environment,
+        issuedAt: Math.floor(Date.now() / 1000),
+        ttlSec,
+        display,
+      };
+      setPendingApproval(pending);
+      setPendingGrant(null);
+      approvalPendingRef.current = resolve;
+    });
+
+  // AI 功能状态
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<string>("");
+  const [showAiResultModal, setShowAiResultModal] = useState(false);
+  const [aiActiveTab, setAiActiveTab] = useState<string>("generate");
+  const [aiNaturalLanguage, setAiNaturalLanguage] = useState("");
+  const [aiSqlForOptimize, setAiSqlForOptimize] = useState("");
+  const [aiSqlForExplain, setAiSqlForExplain] = useState("");
+  const [aiErrorMessage, setAiErrorMessage] = useState("");
+  const [aiSqlForError, setAiSqlForError] = useState("");
+  // 生成 SQL 这条链的产出：SQL 之外还要把"依据哪几张表、被打回几次"露出来
+  const [aiGenTables, setAiGenTables] = useState<string[]>([]);
+  const [aiDraft, setAiDraft] = useState<SqlDraft | null>(null);
+  // 生成 SQL 这条链的失败现场：标题按"卡在哪一步"分开写，正文是拒因原文（多行按行铺开）。
+  // fix 有值 = 本机挡下了一稿并把它带了回来，错误卡上才有「让 AI 照这条错误改」可点。
+  const [aiDraftError, setAiDraftError] = useState<
+    { title: string; detail: string; fix?: SqlFix } | null
+  >(null);
+  // 四条解说链路的失败原因，显示在弹窗里而不是只闪一句 toast
+  const [aiTextError, setAiTextError] = useState("");
+  // 挡下的一稿点名的表如果其实在别的连接里，这一腿怎么改都补不上——一条 SQL 只能进一个库。
+  // 这种时候该给用户的是另一条腿的入口，不是"再改一轮"。missing 是问遍了也没找到的那些，
+  // failed 是没问到的那些连接（问不到就不能断言"别的库里也没有"）。
+  const [crossDb, setCrossDb] = useState<{
+    found: { table: string; connection: string }[];
+    missing: string[];
+    failed: string[];
+  } | null>(null);
+
+  const [msgApi, msgContext] = message.useMessage();
+  const [modal, modalContext] = Modal.useModal();
+
+  // 执行查询
+  // T-009：invoke 前快照 connectionId+activeTabId，响应后比对当前状态
+  // T-045：writable + isLikelyWriteSql 时弹审批 Modal 收集 grant
+  const executeQuery = async () => {
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return;
+    }
+    const requestConnId = selectedConnection.id;
+    const requestTabId = activeTabId;
+    const wantWrite = writeAccessEnabled;
+    const likelyWrite = isLikelyWriteSql(sqlCode);
+    let grant: ApprovalGrant | null | undefined = undefined;
+    if (wantWrite && likelyWrite) {
+      // 弹 Modal 等用户确认；环境暂取 selectedConnection.environment ?? "unknown"
+      grant = await requestApproval(sqlCode, (selectedConnection as any).environment ?? "unknown");
+      if (!grant) {
+        // 用户取消
+        msgApi.info("写入操作已取消");
+        return;
+      }
+    }
+    try {
+      const result = await invoke<QueryResultV2>("execute_query", {
+        sql: sqlCode,
+        config: toBackendConfig(selectedConnection),
+        // camelCase —— 见上面那处 invoke 的注释（Tauri v2 只认 camelCase 的 key，
+        // snake_case 会被静默丢掉 ⇒ accessMode 恒空 ⇒ mode 恒为 "readOnly"）。
+        accessMode: wantWrite ? "writable" : "readOnly",
+        approval: grant ?? null,
+        expectedGeneration: null,
+        maxRows: rowCap > 0 ? rowCap : null,
+      });
+
+      // 异步校验：标签或连接已切走 → 丢弃结果
+      if (requestConnId !== selectedConnection?.id || requestTabId !== activeTabId) {
+        msgApi.warning("连接或标签已切换，结果已丢弃（DB-11 防竞态）");
+        return;
+      }
+
+      // 同步覆写列源：以后端 column_meta 为准；零行也有列（A01）
+      // 换了一屏结果，上一屏的待提交变更就失去了行身份，不能悄悄带过来
+      if (changeSet.size > 0) {
+        msgApi.warning({
+          content: `上一屏还有 ${changeSet.size} 项未提交的网格变更，已随这次查询丢弃`,
+          duration: 5,
+        });
+        setChangeSet(new Map());
+      }
+      setEditingCell(null);
+      const src = result.is_query ? parseSingleTableSource(sqlCode) : null;
+      setResultSource(
+        src ? { table: src.table, sql: sqlCode, connectionId: requestConnId, tabId: requestTabId } : null
+      );
+      setQueryColumnsMeta(result.column_meta ?? []);
+      setQueryResults(result.rows || []);
+      const shown = result.rows?.length || 0;
+      setResultMeta(result.truncated ? { total: Number(result.total_rows || 0), shown } : null);
+
+      // 执行记录落进 Agent 会话，但标成 system：那是刚发生过的事，不是用户打的一句话
+      useAgentStore.getState().addMessage({
+        id: `${Date.now().toString(36)}-run`,
+        role: "system",
+        // sqlite 走流式时总数没数过（total_rows = 0），这时只能说"后面还有"，
+        // 编一个总数出来就是拿界面的数当库里的数
+        content: result.truncated
+          ? `已执行一条语句，结果超过 ${result.rows?.length || 0} 行，界面按上限只取回前 ${
+              result.rows?.length || 0
+            } 行（后面的没取），耗时 ${result.execution_time_ms || 0}ms`
+          : `已执行一条语句，返回 ${result.rows?.length || 0} 行，耗时 ${
+              result.execution_time_ms || 0
+            }ms`,
+        timestamp: Date.now(),
+      });
+
+      // 添加历史
+      const newItem: QueryHistoryItem = {
+        id: Date.now().toString(),
+        sql: sqlCode,
+        connection_id: selectedConnection?.id || "",
+        connection_name: selectedConnection?.name || "",
+        timestamp: Math.floor(Date.now() / 1000),
+        execution_time_ms: result.execution_time_ms || 0,
+        success: true,
+        error: null,
+      };
+      setHistory((prev) => [newItem, ...prev].slice(0, 100));
+      const timing = `总耗时 ${result.execution_time_ms}ms${
+        result.timings && result.timings.total_ms > 0
+          ? `（连接 ${result.timings.connect_ms}ms / 执行 ${result.timings.execute_ms}ms）`
+          : ""
+      }`;
+      // 截断不能只报绿：这一屏看不到剩下的行，用户以为手里就是全量
+      if (result.truncated) {
+        msgApi.warning({
+          content: `查询执行成功，但结果不止 ${shown} 行，界面按上限只画前 ${shown} 行（后面的没取）——${timing}。要全量请调高上限或在语句里自己收口`,
+          duration: 6,
+        });
+      } else {
+        msgApi.success({ content: `查询执行成功，${timing}`, duration: 3 });
+      }
+    } catch (e: any) {
+      if (requestConnId !== selectedConnection?.id || requestTabId !== activeTabId) {
+        return;
+      }
+      msgApi.error({
+        content: `${errorDescription(classifyError(String(e)))}`,
+        duration: 5,
+      });
+      const err = classifyError(String(e));
+      // 报错原文只闪在 toast 里，五秒就没了；连着当时那条语句一起落进会话，
+      // 才能一键交给模型诊断，不用用户凭记忆手抄（T-075）。
+      // sqlCode 取的是这次请求闭包里的那份：中途改编辑器也不会记错现场。
+      useAgentStore.getState().addMessage({
+        id: `${Date.now().toString(36)}-fail`,
+        role: "system",
+        content: "这条语句执行失败了",
+        sql: sqlCode,
+        error: String(e),
+        timestamp: Date.now(),
+      });
+      const newItem: QueryHistoryItem = {
+        id: Date.now().toString(),
+        sql: sqlCode,
+        connection_id: selectedConnection?.id || "",
+        connection_name: selectedConnection?.name || "",
+        timestamp: Math.floor(Date.now() / 1000),
+        execution_time_ms: 0,
+        success: false,
+        error: err.code,
+      };
+      setHistory((prev) => [newItem, ...prev].slice(0, 100));
+    }
+  };
+
+  // T-010 + T-034 格式化：后端已升级为词法感知格式化（保留字符串字面量与注释）
+  const formatSQL = async () => {
+    try {
+      const formatted = await invoke<string>("format_sql", { sql: sqlCode });
+      setSqlCode(formatted);
+    } catch (e: any) {
+      msgApi.error(`格式化失败: ${e}`);
+    }
+  };
+
+  // 复制
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(
+      () => msgApi.success("已复制"),
+      () => msgApi.error("复制失败")
+    );
+  };
+
+  // ── 执行计划（EXPLAIN）─────────────────────────────────────────────
+  //
+  // 后端一直有 explain_query，界面上从没有入口 —— 一条 SQL 慢下来时，
+  // 用户没有第二条腿可走（只能猜）。后端会拒 EXPLAIN ANALYZE（那会真执行 SQL），
+  // 所以这里传的是**不带 EXPLAIN 前缀**的原始语句。
+  const explainQuery = async () => {
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return;
+    }
+    try {
+      const result = await invoke<QueryResultV2>("explain_query", {
+        sql: sqlCode,
+        config: toBackendConfig(selectedConnection),
+      });
+      setQueryColumnsMeta(result.column_meta ?? []);
+      setQueryResults(result.rows || []);
+      setResultSource(null);
+      setResultMeta(
+        result.truncated
+          ? { total: Number(result.total_rows || 0), shown: result.rows?.length || 0 }
+          : null
+      );
+      msgApi.success(
+        `已取执行计划（${result.rows?.length || 0} 行）—— 这是执行计划，不是查询结果`
+      );
+    } catch (e: any) {
+      msgApi.error(`取执行计划失败：${errorDescription(classifyError(String(e)))}`);
+    }
+  };
+
+  // ── 批量执行（只读）───────────────────────────────────────────────
+  //
+  // 后端**拒绝**多语句单次执行（那是审批/只读门禁的防绕过设计），
+  // 所以「批量」= 前端把编辑器拆成一条条，逐条交给 execute_batch。
+  // 口径：批量只做只读 —— 一条 grant 只对一个 sql_digest，
+  // 一个审批覆盖多条语句在语义上就是错的（⇒ 写语句请用「执行」逐条来）。
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchResults, setBatchResults] = useState<
+    { sql: string; ok: boolean; message: string }[] | null
+  >(null);
+  const [showBatchModal, setShowBatchModal] = useState(false);
+
+  const runBatch = async () => {
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return;
+    }
+    const statements = splitStatementTexts(sqlCode);
+    if (statements.length === 0) {
+      msgApi.warning("编辑器里没有可执行的语句");
+      return;
+    }
+    if (statements.length === 1) {
+      msgApi.info("只有一条语句，直接用「执行」即可");
+      return;
+    }
+    // 先自己把写语句挑出来 —— 让用户在**动手之前**就知道哪条不行，
+    // 而不是跑到第 3 条才报一句 READONLY_BLOCKED。
+    const writes = statements
+      .map((s, i) => ({ s, i }))
+      .filter((x) => isLikelyWriteSql(x.s));
+    if (writes.length > 0) {
+      msgApi.warning({
+        content: `第 ${writes.map((w) => w.i + 1).join("、")} 条是写语句，批量执行只做只读。写操作请用「执行」逐条来（每条各自审批）`,
+        duration: 6,
+      });
+      return;
+    }
+    setBatchRunning(true);
+    setBatchResults(null);
+    try {
+      const results = await invoke<QueryResultV2[]>("execute_batch", {
+        queries: statements,
+        config: toBackendConfig(selectedConnection),
+        // camelCase（Tauri v2 只认 camelCase 的 key）
+        accessMode: "readOnly",
+        approval: null,
+      });
+      setBatchResults(
+        results.map((r, i) => ({
+          sql: statements[i] ?? "",
+          ok: true,
+          message: `${r.rows?.length ?? 0} 行`,
+        }))
+      );
+      setShowBatchModal(true);
+      msgApi.success(`批量执行完成：${results.length} 条语句`);
+    } catch (e: any) {
+      msgApi.error(`批量执行失败：${errorDescription(classifyError(String(e)))}`);
+    } finally {
+      setBatchRunning(false);
+    }
+  };
+
+  // ── 流式执行 ─────────────────────────────────────────────────────
+  //
+  // 后端把结果分批推过来（不一次性把十万行塞进内存），
+  // 界面上给出**进度**与**取消**两个动作 ——
+  // 没有取消的流式查询，用户只能等它把库读完。
+  const [streamRunning, setStreamRunning] = useState(false);
+  const [streamInfo, setStreamInfo] = useState<{
+    streamId: string;
+    rows: number;
+    batches: number;
+  } | null>(null);
+
+  const runStreaming = async () => {
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return;
+    }
+    const requestConnId = selectedConnection.id;
+    const requestTabId = activeTabId;
+    const wantWrite = writeAccessEnabled;
+    const likelyWrite = isLikelyWriteSql(sqlCode);
+    let grant: ApprovalGrant | null | undefined = undefined;
+    if (wantWrite && likelyWrite) {
+      grant = await requestApproval(sqlCode, (selectedConnection as any).environment ?? "unknown");
+      if (!grant) {
+        msgApi.info("写入操作已取消");
+        return;
+      }
+    }
+    setStreamRunning(true);
+    setStreamInfo(null);
+    try {
+      const start = await invoke<QueryStreamStartV2>("query_start", {
+        config: toBackendConfig(selectedConnection),
+        sql: sqlCode,
+        accessMode: wantWrite ? "writable" : "readOnly",
+        approval: grant ?? null,
+        expectedGeneration: null,
+        maxRows: rowCap > 0 ? rowCap : null,
+      });
+      const allRows: any[][] = [];
+      let batches = 0;
+      const columns = start.columns ?? [];
+      let push = (b: { rows?: any[][]; truncated?: boolean }) => {
+        if (b.rows?.length) allRows.push(...b.rows);
+        batches += 1;
+      };
+      push(start.first_batch);
+      let truncated = Boolean(start.first_batch?.truncated);
+      // 一批一批取；取完为止
+      for (;;) {
+        const b = await invoke<QueryBatchV2 | null>("query_next", { streamId: start.stream_id });
+        if (!b) break;
+        push(b);
+        truncated = truncated || Boolean(b.truncated);
+        setStreamInfo({ streamId: start.stream_id, rows: allRows.length, batches });
+      }
+      if (requestConnId !== selectedConnection?.id || requestTabId !== activeTabId) {
+        msgApi.warning("连接或标签已切换，结果已丢弃");
+        return;
+      }
+      setQueryColumnsMeta(columns as any);
+      setQueryResults(allRows);
+      setResultSource(null);
+      setResultMeta(
+        truncated ? { total: Number(allRows.length), shown: allRows.length } : null
+      );
+      setStreamInfo({ streamId: start.stream_id, rows: allRows.length, batches });
+      msgApi.success(
+        `流式完成：${allRows.length} 行 / ${batches} 批${truncated ? "（已达行数上限，后面还有）" : ""}`
+      );
+    } catch (e: any) {
+      msgApi.error(`流式执行失败：${errorDescription(classifyError(String(e)))}`);
+    } finally {
+      setStreamRunning(false);
+    }
+  };
+
+  // 取消正在跑的流
+  const cancelStream = async () => {
+    const sid = streamInfo?.streamId;
+    if (!sid) return;
+    try {
+      const resp = await invoke<{ state: string; message: string }>("query_cancel_v2", {
+        queryId: sid,
+      });
+      // 后端回的是 V2Envelope 信封
+      const inner = (resp as any)?.data ?? resp;
+      if (inner?.state === "accepted" || inner?.state === "Accepted") {
+        msgApi.info("已请求取消，等待查询停下");
+      } else if (inner?.state === "not_found" || inner?.state === "NotFound") {
+        msgApi.info("这一单已经跑完了，没什么可取消的");
+      } else {
+        msgApi.info(inner?.message ?? "取消请求已发出");
+      }
+    } catch (e: any) {
+      msgApi.error(`取消失败：${errorDescription(classifyError(String(e)))}`);
+    }
+  };
+
+  // ── 查当前这一单的状态 ───────────────────────────────────────────
+  const [queryStatus, setQueryStatus] = useState<string>("");
+  const showQueryStatus = async () => {
+    const sid = streamInfo?.streamId;
+    if (!sid) {
+      msgApi.info("还没有可查的查询");
+      return;
+    }
+    try {
+      const resp = await invoke<any>("query_status_v2", { queryId: sid });
+      const inner = resp?.data ?? resp;
+      const text = `${inner?.state ?? "?"}：${inner?.message ?? ""}`;
+      setQueryStatus(text);
+      msgApi.info(text);
+    } catch (e: any) {
+      msgApi.error(`查状态失败：${errorDescription(classifyError(String(e)))}`);
+    }
+  };
+
+  // ── CSV 导入 ─────────────────────────────────────────────────────
+  //
+  // 流程：选文件 → 看计划（编码 + 置信度 + 列名 + 样本行 + **真正会写多少行**）
+  //      → 改表名（改了要重新出计划）→ 写入审批 → 导入。
+  //
+  // 为什么要有「写入审批」这一步：导入是写操作，而后端 csv_import_execute
+  // **只认带审批的请求**（access_mode=writable + 摘要绑「表 + 行数」）。
+  // 不走审批 ⇒ 后端直接拒 —— 界面不会拿到一个"看起来成功、其实没写"的结果。
+  const [csvPlan, setCsvPlan] = useState<CsvImportPlan | null>(null);
+  const [csvPath, setCsvPath] = useState("");
+  const [csvImporting, setCsvImporting] = useState(false);
+
+  /** 出计划：canonical 由后端算，前端不自己拼 */
+  const loadCsvPlan = async (path: string, table: string) => {
+    const plan = await invoke<CsvImportPlan>("csv_import_plan", {
+      filePath: path,
+      delimiter: null,
+      sampleLimit: CSV_SAMPLE_LIMIT,
+      importLimit: CSV_IMPORT_LIMIT,
+      tableName: table,
+    });
+    setCsvPlan(plan);
+    setCsvPath(path);
+  };
+
+  const pickCsvAndPreview = async () => {
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return;
+    }
+    if (!writeAccessEnabled) {
+      msgApi.warning("当前是只读模式，导入需要先把右上角的「只读」切到「可写」");
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "CSV", extensions: ["csv", "tsv", "txt"] }],
+      });
+      if (typeof picked !== "string") return;
+      await loadCsvPlan(picked, defaultTableName(picked));
+    } catch (e: any) {
+      msgApi.error(`读 CSV 失败：${errorDescription(classifyError(String(e)))}`);
+    }
+  };
+
+  /** 改目标表名 ⇒ 必须重新出计划（canonical 绑的是表名 + 行数） */
+  const renameCsvTarget = async (table: string) => {
+    if (!csvPath) return;
+    try {
+      await loadCsvPlan(csvPath, table);
+    } catch (e: any) {
+      msgApi.error(`改表名后重新出计划失败：${errorDescription(classifyError(String(e)))}`);
+    }
+  };
+
+  const doCsvImport = async () => {
+    if (!csvPlan || !selectedConnection) return;
+    setCsvImporting(true);
+    try {
+      // ① 先审批：摘要绑「表 + 真正会写入的行数」
+      const grant = await requestApproval(
+        csvPlan.canonical,
+        (selectedConnection as any).environment ?? "unknown",
+        {
+          title: "确认 CSV 导入",
+          detail: describeImport(csvPlan),
+        }
+      );
+      if (!grant) {
+        msgApi.info("导入已取消");
+        return;
+      }
+      // ② 再导入
+      const res = await invoke<CsvImportResult>("csv_import_execute", {
+        config: toBackendConfig(selectedConnection),
+        filePath: csvPath,
+        // 表名取**计划里的**那份，不是界面上的草稿 ——
+        // 摘要绑的就是它，两者必须一字不差。
+        tableName: csvPlan.table_name,
+        delimiter: null,
+        limit: csvPlan.import_limit,
+        // 门禁三项打包成一个结构（嵌套字段走 serde ⇒ snake_case）
+        gate: {
+          access_mode: "writable",
+          approval: grant,
+          expected_rows: csvPlan.import_rows,
+        },
+      });
+      if (res?.success) {
+        msgApi.success(
+          `已导入 ${res.rows_imported} 行${res.rows_failed ? `，失败 ${res.rows_failed} 行` : ""}`
+        );
+        setCsvPlan(null);
+        setCsvPath("");
+      } else {
+        msgApi.error(
+          `导入失败：${(res?.errors ?? []).slice(0, 3).join("；") || "后端没给出原因"}`
+        );
+      }
+    } catch (e: any) {
+      msgApi.error(`导入失败：${errorDescription(classifyError(String(e)))}`);
+    } finally {
+      setCsvImporting(false);
+    }
+  };
+
+  // ── 清空查询历史 ─────────────────────────────────────────────────
+  const clearHistory = () => {
+    if (history.length === 0) return;
+    return modal.confirm({
+      title: `清空 ${history.length} 条查询历史？`,
+      content: "本机落盘的查询历史会一起删掉，删了不能恢复；常用查询与编辑器草稿不受影响。",
+      okText: "清空历史",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await invoke("clear_query_history");
+        } catch (e: any) {
+          msgApi.error(`清空历史失败：${e}`);
+          throw e;
+        }
+        setHistory([]);
+        msgApi.success("已清空查询历史");
+      },
+    });
+  };
+
+  // 转换为后端 DBConfig（Rust 侧字段为 db_type）
+  const toBackendConfig = (c: DBConnection) => ({
+    id: c.id,
+    name: c.name,
+    db_type: c.type,
+    host: c.host,
+    port: Number(c.port) || 0,
+    username: c.username,
+    password: c.password,
+    database: c.database,
+    // T-025：TLS 档位与私有 CA 路径一起透传。缺省交给后端落最安全的一档。
+    tls_mode: c.tlsMode ?? null,
+    tls_ca_path: c.tlsCaPath ?? null,
+  });
+
+  // 报表工作台要一次拿到所有连接的凭据（跨库 join 的每个源各自定位连接）。
+  // 必须 memo：workbench 以 configs 为依赖去拉表清单，每次渲染换引用就会狂刷库。
+  const backendConfigs = useMemo(() => connections.map((c) => toBackendConfig(c)), [connections]);
+
+  // 连接配置落盘。调用方必须等它成功再宣布"已保存"，否则界面在骗人。
+  const persistConnections = async (list: DBConnection[]) => {
+    await invoke("save_connections", { connections: list.map(toBackendConfig) });
+  };
+
+  // 启动时加载落盘的连接配置
+  useEffect(() => {
+    invoke<any[]>("load_connections")
+      .then((list) =>
+        setConnections(
+          (list || []).map((c: any) => ({
+            id: c.id ?? String(Date.now()),
+            name: c.name ?? "",
+            type: c.db_type ?? c.type ?? "",
+            host: c.host ?? "",
+            port: Number(c.port) || 0,
+            username: c.username ?? "",
+            password: c.password ?? "",
+            database: c.database ?? "",
+            // T-025：TLS 档位与私有 CA 路径从后端读回
+            tlsMode: c.tls_mode ?? undefined,
+            tlsCaPath: c.tls_ca_path ?? undefined,
+            // T-014：凭据状态（missing = 密码取不回来了，要提示用户重输）
+            credentialState: c.credential_state ?? undefined,
+            credentialNote: c.credential_note ?? undefined,
+          }))
+        )
+      )
+      .catch((e) => {
+        /* 读不出配置不能假装"还没有连接"：用户会以为保存的连接丢了 */
+        msgApi.warning(`读取连接配置失败：${e}（已保存的配置可能还在磁盘上，可以重开应用重试）`);
+      });
+  }, []);
+
+  // 加载 AI 配置（脱敏视图）+ 就绪状态。
+  //
+  // 两个都读，读不读得到**都不假装「配好了」**：读失败就当未配置，
+  // 让用户去设置窗口看看到底缺什么，而不是等点 AI 时报一句「未配置」。
+  const refreshAiState = useCallback(async () => {
+    try {
+      const view = await loadAiConfigView();
+      setAiView(view);
+    } catch (e) {
+      console.warn("[db] AI 配置没读出来，本次按未配置启动:", e);
+      setAiView(null);
+    }
+    try {
+      const status = await invoke<{ configured: boolean; reason: string }>(
+        "get_ai_config_status"
+      );
+      setAiReady(status?.configured === true);
+      setAiReason(status?.configured === true ? "" : status?.reason || "");
+    } catch (e) {
+      console.warn("[db] AI 就绪状态没读出来:", e);
+      setAiReady(false);
+      setAiReason("");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAiState();
+  }, [refreshAiState]);
+
+  // 一次问数用的表目录。列清单读不到的表要丢掉：没有列清单，后端的列校验对那张表形同虚设。
+  // 「生成 SQL」按钮与 Agent 对话共用这一份，两边给模型的字段必须一模一样。
+  const buildAiCatalog = useCallback(
+    async (
+      names: string[],
+      cfg: BackendConfig
+    ): Promise<{ catalog: CatalogTable[]; failed: string[] }> => {
+      const built = await Promise.all(
+        names.map(async (name) => {
+          const schema = tables.find((t) => t.name === name)?.schema || "";
+          try {
+            const cols = await reportDescribeColumns(cfg, schema, name);
+            const entry: CatalogTable = {
+              connection_id: cfg.id,
+              connection_name: cfg.name,
+              database_type: cfg.db_type,
+              schema,
+              table: name,
+              ...catalogColumns(cols),
+            };
+            return { entry, failed: "" };
+          } catch (e: any) {
+            return { entry: null, failed: `${name}：${e}` };
+          }
+        })
+      );
+      return {
+        catalog: built.map((b) => b.entry).filter((t): t is CatalogTable => t !== null),
+        failed: built.map((b) => b.failed).filter(Boolean),
+      };
+    },
+    [tables]
+  );
+
+  // 多轮改稿：追问（"再按月拆开""把金额换成税前的"）得把上一稿带回去，
+  // 否则模型每轮都在从零重写，用户只能自己动手改。上一稿只在同一份表目录下可复用——
+  // 换了连接或换了表，旧稿引用的字段可能根本不在本次目录里，带着只会误导。
+  const aiPriorRef = useRef<{ key: string; question: string; sql: string } | null>(null);
+  const catalogKey = (catalog: CatalogTable[]) =>
+    catalog.map((t) => `${t.connection_id}/${t.schema}/${t.table}`).sort().join(",");
+
+  const generateSql = async (question: string, catalog: CatalogTable[], fix?: SqlFix) => {
+    const key = catalogKey(catalog);
+    const last = aiPriorRef.current;
+    // 照错误改时，底稿就是被本机挡下的那一条（连同拒因一起回喂）；
+    // 普通生成才走"上一稿"那套：同一句需求再点一次 = 重来一次，不该把上一稿喂回去让它"改"自己
+    const prior = fix
+      ? { question: fix.question, sql: fix.sql }
+      : last && last.key === key && last.question !== question
+        ? { question: last.question, sql: last.sql }
+        : null;
+    const draft = await aiSqlGenerate(
+      question,
+      catalog,
+      undefined,
+      prior,
+      fix?.error ?? null
+    );
+    // 只成功之后才把这一稿记成新的上一稿：这一轮失败时，旧稿仍是可用的底稿
+    aiPriorRef.current = { key, question, sql: draft.sql };
+    return {
+      draft,
+      builtOn: prior && !fix ? prior.question : null,
+      // 上一稿还在、却因为范围变了没被用上，得说清楚不是"接着改"
+      droppedPrior: !!last && !prior && last.key !== key,
+      fixed: !!fix,
+    };
+  };
+
+  // AI 生成 SQL：自然语言 → 一条过了本机校验的 SQL（后端只看得见我们给的表与列）
+  // fix 来自错误卡上那一键：把拒因和被挡下的那条 SQL 一起交回去，改完仍过同一套校验
+  const handleAiGenerateSql = async (fix?: SqlFix) => {
+    const question = aiNaturalLanguage.trim();
+    if (!question) {
+      msgApi.warning("请输入自然语言描述");
+      return;
+    }
+    if (!selectedConnection) {
+      msgApi.warning("请先连接数据库");
+      return;
+    }
+    if (!aiReady) {
+      msgApi.warning(aiReason || "先配置 AI 服务地址、密钥与模型");
+      setShowAiConfigModal(true);
+      return;
+    }
+    // 没显式选表就退回左侧当前选中的那张：至少是用户自己点的表
+    const wanted = aiGenTables.length ? aiGenTables : selectedTable ? [selectedTable] : [];
+    if (!wanted.length) {
+      msgApi.warning("先勾选这次要用的表，模型没有列清单就只能编字段");
+      return;
+    }
+    const cfg = toBackendConfig(selectedConnection);
+    setAiLoading(true);
+    setAiDraft(null);
+    setAiDraftError(null);
+    try {
+      const { catalog, failed } = await buildAiCatalog(wanted, cfg);
+      if (!catalog.length) {
+        setAiDraftError({
+          title: "列清单没读到，这一稿根本没发给模型",
+          detail: `没能读到任何表的列清单：\n${failed.join("\n")}`,
+        });
+        msgApi.error("生成失败：列清单读不出来");
+        return;
+      }
+      if (failed.length) msgApi.warning(`这些表读不到列清单，本次没带上：${failed.join("；")}`);
+      const { draft, builtOn, droppedPrior, fixed } = await generateSql(question, catalog, fix);
+      setAiDraft(draft);
+      setSqlCode(draft.sql);
+      msgApi.success(
+        [
+          fixed
+            ? "照本机拒因在被拒的那条 SQL 上改"
+            : builtOn
+              ? `在上一稿（${builtOn}）基础上改`
+              : droppedPrior
+                ? "本次表目录和上一稿不同，这一稿是从零写的"
+                : "",
+          draft.repairs > 0
+            ? `已生成，本机校验打回 ${draft.repairs} 次后通过`
+            : "已生成并通过本机校验",
+        ]
+          .filter(Boolean)
+          .join("；")
+      );
+    } catch (e: any) {
+      // 后端把本机校验的拒因原样带回来，别只留一句"失败"。
+      // 拒因里点到哪一列、哪张表，只有连同被挡下的那条 SQL 一起回喂才改得动——
+      // 模型是单发的，下一轮根本看不见自己刚写的那条。
+      const rej = asSqlReject(e);
+      const gone = rej.sql?.trim();
+      const next: SqlFix | undefined = gone ? { question, error: rej.error, sql: gone } : undefined;
+      const hint = next
+        ? "\n\n（可以点右上角「让 AI 照这条错误改」：把上面这条错误单和被挡下的那条 SQL 一起交回去）"
+        : "";
+      setAiDraftError({
+        title: "本机拒绝了这一稿",
+        detail: `${rej.error}${hint}`,
+        fix: next,
+      });
+      msgApi.error(next ? "没过本机校验，可以照这条错误改" : "生成失败");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  /** 拒因点名的表到底躺在哪个连接里。只在"真有不认得的表 + 确实存在别的连接"时才多这一趟；
+   *  只认已经读到表清单的连接，问不到就说问不到。SQL 助手的错误卡与 Agent 气泡共用这一份。 */
+  const findTablesElsewhere = async (
+    names: string[]
+  ): Promise<{
+    found: { table: string; connection: string }[];
+    missing: string[];
+    failed: string[];
+  } | null> => {
+    const others = connections.filter((c) => c.id !== selectedConnection?.id);
+    if (!names.length || !others.length) return null;
+    const found: { table: string; connection: string }[] = [];
+    const failed: string[] = [];
+    const hit = new Set(names.map((n) => n.toLowerCase()));
+    for (const c of others) {
+      let list: TableSummary[] = [];
+      try {
+        list = await listTables(toBackendConfig(c));
+      } catch {
+        failed.push(c.name);
+        continue;
+      }
+      for (const t of list) {
+        const qualified = t.schema ? `${t.schema}.${t.name}` : t.name;
+        for (const n of names) {
+          if (!hit.has(n.toLowerCase())) continue;
+          if (
+            t.name.toLowerCase() === n.toLowerCase() ||
+            qualified.toLowerCase() === n.toLowerCase()
+          ) {
+            hit.delete(n.toLowerCase());
+            found.push({ table: n, connection: c.name || c.database || c.id });
+          }
+        }
+      }
+    }
+    // 一张都没点到、也没哪个连接问失败——那就是"哪儿都没有"，模型编的，改稿那条腿才对症
+    if (!found.length && !failed.length) return null;
+    const missing = names.filter((n) => !found.some((f) => f.table === n));
+    return { found, missing, failed };
+  };
+
+  // 错误卡立起来之后，去别的连接问一遍表清单：只在真撞上"表不认得"且确实有别的连接时才多
+  // 这一趟，平时不开这个口。清单是异步回来的，用户可能在这段时间里又生成了一稿或关了卡片，
+  // 所以要拿序号认回最新那一轮，别让上一轮的结论挂在新卡片上。
+  const crossDbSeq = useRef(0);
+  useEffect(() => {
+    if (!aiDraftError) {
+      crossDbSeq.current += 1;
+      setCrossDb(null);
+      return;
+    }
+    const names = unknownTablesOfVerdict(aiDraftError.detail);
+    if (!names.length) {
+      crossDbSeq.current += 1;
+      setCrossDb(null);
+      return;
+    }
+    const seq = ++crossDbSeq.current;
+    void findTablesElsewhere(names).then((res) => {
+      // 清单是异步回来的，这段时间里可能又生成了一稿或关了卡片：只认最新那一轮
+      if (crossDbSeq.current === seq) setCrossDb(res);
+    });
+  }, [aiDraftError, connections, selectedConnection]);
+
+  // 四条解说链路（优化/解释/诊断/结果）只回文字，不动数据：
+  // 会改库的那两条另有本机校验与审批门禁。
+  const runAiText = async (call: () => Promise<string>) => {
+    if (!aiReady) {
+      msgApi.warning(aiReason || "先配置 AI 服务地址、密钥与模型");
+      setShowAiConfigModal(true);
+      return;
+    }
+    setAiLoading(true);
+    setAiTextError("");
+    setAiResult("");
+    try {
+      setAiResult(await call());
+      msgApi.success("AI 已作答");
+    } catch (e: any) {
+      // 后端把 HTTP 状态码与响应原文一起带回来，别只留一句"服务错误"
+      setAiTextError(String(e));
+      msgApi.error("AI 没答上来");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // 索引建议得看得懂表：左侧选中了哪张表，就把它的真实字段结构一起给模型
+  const schemaForAi = async (): Promise<ColumnInfo[]> => {
+    if (!selectedConnection || !selectedTable) return [];
+    if (columns.length) return columns;
+    try {
+      const cols = await invoke<ColumnInfo[]>("get_table_structure", {
+        tableName: selectedTable,
+        config: toBackendConfig(selectedConnection),
+        schema: null,
+      });
+      setColumns(cols);
+      return cols;
+    } catch (e: any) {
+      msgApi.warning(`读 ${selectedTable} 的字段结构失败：${e}`);
+      return [];
+    }
+  };
+
+  const handleAiOptimizeSql = async () => {
+    if (!aiSqlForOptimize.trim()) {
+      msgApi.warning("请输入要优化的 SQL");
+      return;
+    }
+    const schema = await schemaForAi();
+    if (!schema.length) msgApi.warning("没带表结构，索引建议只能是泛泛而谈");
+    await runAiText(() => aiOptimizeSql(aiSqlForOptimize, schema));
+  };
+
+  const handleAiExplainSql = async () => {
+    if (!aiSqlForExplain.trim()) {
+      msgApi.warning("请输入要解释的 SQL");
+      return;
+    }
+    await runAiText(() => aiExplainSql(aiSqlForExplain));
+  };
+
+  const handleAiDiagnoseError = async () => {
+    if (!aiErrorMessage.trim() || !aiSqlForError.trim()) {
+      msgApi.warning("请输入错误信息和 SQL");
+      return;
+    }
+    await runAiText(() => aiDiagnoseError(aiErrorMessage, aiSqlForError));
+  };
+
+  const handleAiExplainResults = async () => {
+    if (queryResults.length === 0) {
+      msgApi.warning("请先执行查询");
+      return;
+    }
+    // T-049：只喂前 100 行样例，不把整张结果表交给模型
+    const sample = queryResults.slice(0, 100);
+    await runAiText(() => aiExplainResults(sqlCode, sample));
+  };
+
+  // 对话这一轮能用到哪些表：和「生成 SQL」页同一条回退规则，两边不能各说各话
+  const agentTables = aiGenTables.length ? aiGenTables : selectedTable ? [selectedTable] : [];
+  const agentHint = !selectedConnection
+    ? "未连接数据库：先在左侧连上，模型只能查已连上的那个库"
+    : `已连 ${selectedConnection.name}（${selectedConnection.type}）· 本轮可选表：${
+        agentTables.join("、") || "未选"
+      }`;
+
+  // Agent 对话的真实实现（T-073）：面板只交过来意图、那句话和最小上下文，连接、表目录、
+  // 编辑器当前 SQL 这些只有这里拿得到。两条链路都不碰库：
+  // query 出的 SQL 要用户自己点填进编辑器再运行，diagnose 只回文字。
+  const agentAsk = async (
+    intent: AgentIntent,
+    text: string,
+    ctx?: AgentAskContext
+  ): Promise<AgentResponse> => {
+    if (!aiReady) {
+      setShowAiConfigModal(true);
+      return {
+        success: false,
+        content: "",
+        error: `${aiReason || "先配置 AI 服务地址、密钥与模型"}（配置窗口已打开）`,
+      };
+    }
+    if (intent === "report") {
+      // 出图这条链跑在报表工作台那边，结果要由它自己回话：
+      // 气泡不能替它宣布成功——挑表、起草、取数每一步都可能被本机挡下
+      const outcome = await new Promise<string>((resolve) => {
+        let settled = false;
+        const fin = (o: string) => {
+          if (settled) return;
+          settled = true;
+          resolve(o);
+        };
+        // 不换走模式：问数的人要留在对话框里看这一轮的结果，工作台挂在背后跑
+        goReport(text, true, fin, false);
+        // 三个模型往返加一次取数，慢的时候真能过半分钟；等不到就说等不到
+        setTimeout(() => fin("还没跑完"), 40000);
+      });
+      return {
+        success: true,
+        content:
+          outcome === "已出图"
+            ? "已按这句需求出图：跨库挑表 → 起草 → 过本机校验 → 取数渲染。切到顶栏「AI 报表」就是这张板，上面还能点「让 AI 讲清这张图」问口径。"
+            : outcome === "出了但有缺口"
+              ? "图出来了，但不是所有数据集都取到了数：哪几张集没数、因此少画了哪些组件，看板上都列着，" +
+                "那张卡上能直接「再取一次数」重跑整张报表。别把这张板当全量读。"
+              : "这次没出图：" + outcome + "。进度、原因和重试入口都在 AI 报表页。",
+      };
+    }
+    if (!selectedConnection) {
+      return { success: false, content: "", error: "先在左侧连上数据库：模型只能查已连上的那个库" };
+    }
+    try {
+      if (intent === "diagnose") {
+        // 手打的报错按编辑器当前那段诊断；从失败现场点进来的用当时那条语句——
+        // 报错之后用户又改了稿子，拿新内容去问旧报错只会问出不相干的答案
+        const target = (ctx?.sql ?? sqlCode).trim();
+        if (!target) {
+          return {
+            success: false,
+            content: "",
+            error: "没有可诊断的 SQL：编辑器当前那段和报错那条都是空的",
+          };
+        }
+        const answer = await aiDiagnoseError(text, target);
+        const note =
+          ctx?.sql && ctx.sql.trim() !== sqlCode.trim()
+            ? "（问的是报错时那条语句，编辑器现在的内容没参与）\n"
+            : "";
+        return { success: true, content: note + answer };
+      }
+      if (!agentTables.length) {
+        return {
+          success: false,
+          content: "",
+          // 勾表的控件在同一个弹窗的另一页（还有左侧的库表树）：只说"先勾选"等于让人自己找
+          error: "还没勾这次要用的表：模型没有列清单就只能编字段。勾表在这一弹窗的「生成 SQL」页，" +
+            "也可以直接在左侧点库表树里选一张。",
+          action: "pickTables",
+        };
+      }
+      const { catalog, failed } = await buildAiCatalog(agentTables, toBackendConfig(selectedConnection));
+      if (!catalog.length) {
+        return {
+          success: false,
+          content: "",
+          error: `这一稿根本没发给模型：列清单一张都没读到\n${failed.join("\n")}`,
+        };
+      }
+      const { draft, builtOn, droppedPrior, fixed } = await generateSql(text, catalog, ctx?.fix);
+      const lines = [
+        fixed
+          ? "照本机拒因在被挡下的那条 SQL 上改，没从零重写。"
+          : builtOn
+            ? `在上一稿（当时需求：${builtOn}）基础上改，没从零重写。`
+            : droppedPrior
+              ? "本次表目录和上一稿不同，这一稿是从零写的。"
+              : "",
+        `只用 ${catalog.length} 张表的真实字段生成，引用了 ${
+          draft.tables.join("、") || "（没引用目录里的表）"
+        }，方言 ${draft.dialect}。`,
+        draft.repairs > 0 ? `本机校验打回 ${draft.repairs} 次后才通过。` : "一次就过了本机校验。",
+      ].filter(Boolean);
+      if (failed.length) lines.push(`读不到列清单、这次没带上：${failed.join("；")}`);
+      if (draft.warnings.length) lines.push(`提示：${draft.warnings.join("；")}`);
+      // 不直接盖编辑器：面板留了「填进编辑器」，什么时候落由用户定
+      return { success: true, content: lines.join("\n"), sql: draft.sql };
+    } catch (e: any) {
+      // 后端把 HTTP 状态码与本机校验的拒因原样带回来，别只留一句"失败"。
+      // 被拒时抛的是 SqlReject 对象，直接 String() 会打成 [object Object]。
+      const rej = asSqlReject(e);
+      // 有被挡下的那条才给改稿单：模型没给出 SQL 时（请求没发出去、回复里没 SQL）
+      // 两半缺一半，那一键只会让模型凭空重画
+      const gone = rej.sql?.trim();
+      // "这张表其实在别的连接里"这一条 SQL 腿改不动：本腿只把当前连接的表交给模型。
+      // 认得出真身就把另一条腿的入口给出来，认不出就只留拒因（不编出口）。
+      const cross = await findTablesElsewhere(unknownTablesOfVerdict(rej.error));
+      // 那句"其实它在别的连接里"由面板按 cross 单独画：错误原文要保持原样，
+      // 「诊断这条报错」把整段话喂回模型会连自己加的提示一起诊断
+      return {
+        success: false,
+        content: "",
+        error: gone ? `${rej.error}\n被挡下的那条是：\n${gone}` : rej.error,
+        fix: gone ? { question: text, error: rej.error, sql: gone } : undefined,
+        cross: cross?.found.length
+          ? {
+              question: text,
+              tables: cross.found.map((f) => f.table),
+              connections: [...new Set(cross.found.map((f) => f.connection))],
+            }
+          : undefined,
+      };
+    }
+  };
+
+  // 只登记一次转发函数：agentAsk 每次渲染都是新闭包（要读当前编辑器内容），
+  // 直接登记会让 store 跟着每次按键换引用。
+  const agentAskRef = useRef(agentAsk);
+  agentAskRef.current = agentAsk;
+  const askAgent = useCallback(
+    (intent: AgentIntent, text: string, ctx?: AgentAskContext) =>
+      agentAskRef.current(intent, text, ctx),
+    []
+  );
+  useEffect(() => {
+    useAgentStore.getState().setHandler(askAgent);
+    return () => useAgentStore.getState().setHandler(null);
+  }, [askAgent]);
+
+  /** 把用户送到报表工作台，并把他刚那句需求带过去：
+   *  一条 SQL 只能进一个库，跨库要在那边按各库取数、本机内存 join。 */
+  /** 把人送到报表工作台（switchMode=false 就只把工作台挂在背后，人留在对话框里），
+   *  run=true 时那一轮跑完由 done 回话——气泡不能替链子宣布成功。 */
+  const goReport = (
+    q?: string,
+    run = false,
+    done?: (o: ChainOutcome) => void,
+    switchMode = true
+  ) => {
+    setReportSeen(true);
+    if (switchMode) setMode("report");
+    const body = (q || "").trim();
+    if (body) setReportSeed({ q: body, seq: ++reportSeedSeq.current, run, done });
+  };
+
+  // 打开 AI 助手：三条 SQL 输入默认用编辑器当前内容，手抄一遍没有意义
+  const openAiAssistant = () => {
+    const cur = sqlCode.trim();
+    if (cur) {
+      setAiSqlForOptimize((v) => v || cur);
+      setAiSqlForExplain((v) => v || cur);
+      setAiSqlForError((v) => v || cur);
+    }
+    setShowAiResultModal(true);
+  };
+
+  // 复制
+
+  // 连接数据库（真实连接 + 加载表列表）
+  const connectDB = async (connection: DBConnection) => {
+    const cfg = toBackendConfig(connection);
+    try {
+      await invoke("test_connection", { config: cfg });
+    } catch (e: any) {
+      msgApi.error(`连接失败: ${e}`);
+      return;
+    }
+    setSelectedConnection(connection);
+    setIsConnected(true);
+    setTables([]);
+    setSelectedTable(null);
+    setColumns([]);
+    msgApi.success(`已连接到 ${connection.name}`);
+
+    // Agent 不再存一份"上下文"副本：它那一轮问数直接读这里的 selectedConnection
+    // 与勾选表，两份状态迟早会对不上（T-073）。
+    try {
+      const list = await invoke<TableInfo[]>("get_tables", { config: cfg });
+      setTables(list);
+    } catch (e: any) {
+      msgApi.warning(`获取表列表失败: ${e}`);
+    }
+  };
+
+  // 家族深链（zbiz://db/connect?conn=<id>）：box 等产品递过来的连接请求。
+  //
+  // 机制（冷启动补取 + zbiz-open 监听 + 不静默吞掉）在共享层 startDeepLinkReceiver，
+  // 本仓只提供语义：resolveDbDeepLink 决定「要连哪个连接」。
+  //
+  // 时序坑：连接列表是异步从后端读的（见上面的 load_connections effect）。
+  // 深链在冷启动时到达，列表很可能还没就绪 —— 直接查会得到「找不到这个连接」。
+  // 所以先记下待连接的标识，等列表就绪后再落地（下面那个 effect）。
+  const [pendingDeepLinkConn, setPendingDeepLinkConn] = useState<{
+    id: string | null;
+    name: string | null;
+  } | null>(null);
+
+  // 连接列表就绪后落地待连接的深链。
+  useEffect(() => {
+    if (!pendingDeepLinkConn) return;
+    // 列表还没加载出来（空数组）时先等等 —— 但空列表也可能就是「一个连接都没存」，
+    // 那要靠下面的兜底提示告诉用户，而不是无限等下去。
+    if (connections.length === 0) return;
+
+    const target = pendingDeepLinkConn.id
+      ? connections.find((c) => c.id === pendingDeepLinkConn.id)
+      : connections.find((c) => c.name === pendingDeepLinkConn.name);
+
+    setPendingDeepLinkConn(null);
+
+    if (!target) {
+      const asked = pendingDeepLinkConn.id ?? pendingDeepLinkConn.name ?? "";
+      msgApi.warning(`找不到要连接的数据库：${asked}`);
+      return;
+    }
+    void connectDB(target);
+  }, [connections, pendingDeepLinkConn]);
+
+  useEffect(() => {
+    const stop = startDeepLinkReceiver({
+      productId: "db",
+      invoke: () => invoke<HandoffItem[]>(ZBIZ_TAKE_PENDING),
+      listen: (event, handler) => listen(event, handler),
+      translate: (item) => {
+        const out = resolveDbDeepLink(item);
+        if (!out.connectionId && !out.connectionName) {
+          return { ok: false, problem: out.problem ?? "深链里没有要连接的连接" };
+        }
+        return {
+          ok: true,
+          effect: { id: out.connectionId, name: out.connectionName },
+        };
+      },
+      onProblem: (msg) => {
+        console.warn("[db] 深链:", msg);
+        msgApi.warning(msg);
+      },
+      onEffect: (effect) => {
+        setPendingDeepLinkConn({
+          id: (effect.id as string | null) ?? null,
+          name: (effect.name as string | null) ?? null,
+        });
+      },
+    });
+    return stop;
+  }, []);
+
+  // 刷新表列表
+  const refreshTables = async () => {
+    if (!selectedConnection) return;
+    try {
+      const list = await invoke<TableInfo[]>("get_tables", {
+        config: toBackendConfig(selectedConnection),
+      });
+      setTables(list);
+      msgApi.success(`已刷新，共 ${list.length} 张表`);
+    } catch (e: any) {
+      msgApi.error(`刷新失败: ${e}`);
+    }
+  };
+
+  // 选中表并加载字段结构
+  const selectTable = async (tableName: string, schemaName?: string) => {
+    setSelectedTable(tableName);
+    if (!selectedConnection) return;
+    try {
+      const cols = await invoke<ColumnInfo[]>("get_table_structure", {
+        tableName,
+        config: toBackendConfig(selectedConnection),
+        schema: schemaName ?? null,
+      });
+      setColumns(cols);
+    } catch (e: any) {
+      setColumns([]);
+      msgApi.warning(`获取表结构失败: ${e}`);
+    }
+  };
+
+  // 断开连接
+  // T-011：**真的告诉后端关掉这条连接的连接池**。
+  // 改之前这里只清了前端状态，后端的池还活着 —— 数据库端的会话不释放，
+  // 用户以为断开了其实没有；改了密码之后旧凭据的池也还在被复用。
+  const disconnectDB = async () => {
+    const conn = selectedConnection;
+    setIsConnected(false);
+    setSelectedConnection(null);
+    setQueryResults([]);
+    /* 表树和字段属于刚才那条连接，断开后不能继续挂着冒充当前上下文 */
+    setTables([]);
+    setSelectedTable(null);
+    setColumns([]);
+    if (conn) {
+      try {
+        const report = await invoke<any>("close_pool", {
+          connectionId: conn.id,
+          revision: 0,
+        });
+        msgApi.info(`已断开连接（关闭 ${report?.closed_pools ?? 0} 个连接池）`);
+        return;
+      } catch (e: any) {
+        msgApi.warning(`断开连接时释放后端连接池失败: ${e}`);
+      }
+    }
+    msgApi.info("已断开连接");
+  };
+
+  // 保存连接：先落盘，成功才更新界面并报成功；落盘失败时弹窗不关，用户不会以为已经存住
+  const saveConnection = async (values: any) => {
+    const next = editingConnection
+      ? connections.map((c) => (c.id === editingConnection.id ? { ...c, ...values } : c))
+      : [...connections, { id: Date.now().toString(), ...values } as DBConnection];
+    try {
+      await persistConnections(next);
+    } catch (e: any) {
+      msgApi.error(`保存连接配置失败：${e}（这次修改没有生效）`);
+      return;
+    }
+    setConnections(next);
+    msgApi.success(editingConnection ? "连接已更新" : "连接已创建");
+    setShowConnectionModal(false);
+    setEditingConnection(null);
+    form.resetFields();
+  };
+
+  // 编辑连接
+  const editConnection = (connection: DBConnection) => {
+    setEditingConnection(connection);
+    form.setFieldsValue(connection);
+    setShowConnectionModal(true);
+  };
+
+  // 删除连接：确认框写清删的是哪条、会断开什么；先落盘成功再从界面移除
+  const deleteConnection = (id: string) => {
+    const target = connections.find((c) => c.id === id);
+    if (!target) return;
+    const isCurrent = selectedConnection?.id === id;
+    const pending = isCurrent ? changeSet.size : 0;
+    const label = target.name || target.database || target.id;
+    return modal.confirm({
+      title: `删除连接「${label}」？`,
+      content: (
+        <div>
+          <p>
+            {target.type} · {target.host || "本地文件"}
+            {target.database ? ` · ${target.database}` : ""}
+          </p>
+          <p>
+            只删除本机保存的连接配置{isCurrent ? "，并先断开当前连接" : ""}；数据库里的数据不受影响。
+          </p>
+          {pending > 0 && (
+            <p style={{ color: "#ff4d4f" }}>
+              当前结果里还有 {pending} 项未提交的网格变更，删除连接会一起丢弃。
+            </p>
+          )}
+        </div>
+      ),
+      okText: "删除连接",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        const next = connections.filter((c) => c.id !== id);
+        try {
+          await persistConnections(next);
+        } catch (e: any) {
+          msgApi.error(`删除连接失败：${e}（本机配置没有改动）`);
+          throw e;
+        }
+        setConnections(next);
+        if (isCurrent) {
+          setIsConnected(false);
+          setSelectedConnection(null);
+          setQueryResults([]);
+          setChangeSet(new Map());
+          setTables([]);
+          setSelectedTable(null);
+          setColumns([]);
+          try {
+            await invoke("close_pool", { connectionId: id, revision: 0 });
+          } catch (e) {
+            /* 配置已删；池没关掉只是后端的会话晚一点释放，不阻塞删除，但要看得到 */
+            console.warn("[db] 删除连接后关闭后端连接池失败:", e);
+          }
+        }
+        msgApi.success(`连接「${label}」已删除`);
+      },
+    });
+  };
+
+  // 导出连接
+  const handleExport = () => {
+    try {
+      const data = {
+        version: 1,
+        exported_at: Date.now() / 1000,
+        connections: connections.map((c) => ({
+          name: c.name,
+          db_type: c.type,
+          host: c.host,
+          port: c.port,
+          username: c.username,
+          database: c.database,
+        })),
+      };
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `connections-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      msgApi.success("连接已导出");
+    } catch (e: any) {
+      msgApi.error("导出失败: " + e);
+    }
+  };
+
+  // T-037：导入连接配置
+  const handleImportFile = async () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setImportError("");
+      setImportPreview([]);
+      try {
+        const text = await file.text();
+        const list = await invoke<ExportedConnection[]>("import_connections", {
+          json: text,
+          options: { limit: 100, max_bytes: 256 * 1024, check_driver: true },
+        });
+        setImportPreview(list);
+        setShowImportModal(true);
+      } catch (e: any) {
+        setImportError(String(e));
+        setShowImportModal(true);
+      }
+    };
+    input.click();
+  };
+
+  const confirmImport = async () => {
+    if (importPreview.length === 0) return;
+    try {
+      const existingNames = new Set(connections.map((c) => c.name));
+      const toAdd = importPreview.map((c) => ({
+        id: crypto.randomUUID(),
+        name: existingNames.has(c.name) ? `${c.name} (导入)` : c.name,
+        type: c.db_type as DBConnection["type"],
+        host: c.host,
+        port: c.port,
+        username: c.username,
+        password: "",
+        database: c.database,
+      }));
+      const merged = [...connections, ...toAdd];
+      await invoke("save_connections", { connections: merged });
+      setConnections(merged);
+      setShowImportModal(false);
+      setImportPreview([]);
+      msgApi.success(`已导入 ${toAdd.length} 个连接`);
+    } catch (e: any) {
+      const err = classifyError(String(e));
+      msgApi.error(errorDescription(err));
+    }
+  };
+
+  // 切换标签页
+  const switchTab = (id: string) => {
+    const current = tabs.find((t) => t.id === activeTabId);
+    if (current) {
+      setTabs(tabs.map((t) => (t.id === activeTabId ? { ...t, sql: sqlCode } : t)));
+    }
+    setActiveTabId(id);
+    const target = tabs.find((t) => t.id === id);
+    if (target) setSqlCode(target.sql);
+  };
+
+  // 新增标签页
+  const addTab = () => {
+    const newId = `tab-${Date.now()}`;
+    const newNum = tabs.length + 1;
+    setTabs([...tabs, { id: newId, title: `查询 ${newNum}`, sql: "" }]);
+    setActiveTabId(newId);
+    setSqlCode("");
+  };
+
+  // 关闭标签页
+  const closeTab = (id: string) => {
+    if (tabs.length === 1) {
+      msgApi.warning("至少保留一个标签页");
+      return;
+    }
+    const target = tabs.find((t) => t.id === id);
+    if (!target) return;
+    const isActive = activeTabId === id;
+    // 当前标签的 SQL 以编辑器为准（tabs 里的 sql 只在切换时回写）
+    const draft = isActive ? sqlCode : target.sql;
+    const pending = isActive ? changeSet.size : 0;
+    if (!draft.trim() && pending === 0) {
+      applyCloseTab(id);
+      return;
+    }
+    return modal.confirm({
+      title: `关闭标签「${target.title}」？`,
+      content:
+        pending > 0
+          ? `标签里还有 ${pending} 项未提交的网格变更，关闭会一起丢弃；SQL 草稿也会从本机移除。`
+          : "这个标签的 SQL 草稿没有保存为常用查询，关闭后会从本机移除。",
+      okText: pending > 0 ? "丢弃并关闭" : "关闭标签",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: () => applyCloseTab(id),
+    });
+  };
+
+  const applyCloseTab = (id: string) => {
+    const newTabs = tabs.filter((t) => t.id !== id);
+    setTabs(newTabs);
+    if (activeTabId === id) {
+      setChangeSet(new Map());
+      setActiveTabId(newTabs[0].id);
+      setSqlCode(newTabs[0].sql);
+    }
+  };
+
+  // 保存常用查询 —— T-017 接通后端持久化
+  //
+  // ⚠ 这里以前是个**假成功**：只往 React state 里塞一条，然后弹「已保存到常用查询」，
+  // 刷新页面就没了（后端的 save_query 一直注册着、没人调）。
+  // 现在改成真落盘：**先写后端，写成功才更新界面**；写失败就报错，
+  // 界面保持原样 —— 宁可让用户重试，也不假装存上了。
+  const saveAsSavedQuery = async (values: any) => {
+    const now = Math.floor(Date.now() / 1000);
+    const item: SavedQuery = editingSavedQuery
+      ? { ...editingSavedQuery, ...values, updated_at: now }
+      : {
+          id: `sq-${Date.now()}`,
+          name: values.name,
+          sql: values.sql || sqlCode,
+          description: values.description || null,
+          tags: values.tags || [],
+          created_at: now,
+          updated_at: now,
+        };
+    try {
+      await invoke("save_query", { item });
+    } catch (e: any) {
+      msgApi.error(`保存常用查询失败：${e}`);
+      return;
+    }
+    if (editingSavedQuery) {
+      setSavedQueries(savedQueries.map((q) => (q.id === item.id ? item : q)));
+      msgApi.success("已更新");
+    } else {
+      setSavedQueries([...savedQueries, item]);
+      msgApi.success("已保存到常用查询");
+    }
+    setShowSaveQueryModal(false);
+    setEditingSavedQuery(null);
+  };
+
+  // 删除常用查询 —— 同样要真落盘。
+  // 以前只从内存里删（后端记录还在），刷新页面它又回来了。
+  const deleteSavedQuery = (id: string) => {
+    const target = savedQueries.find((s) => s.id === id);
+    return modal.confirm({
+      title: `删除常用查询「${target?.name ?? id}」？`,
+      content: "删除后本机落盘的那份也会消失，不能撤销；编辑器里当前的 SQL 不受影响。",
+      okText: "删除",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await invoke("delete_saved_query", { id });
+        } catch (e: any) {
+          msgApi.error(`删除常用查询失败：${e}`);
+          throw e;
+        }
+        setSavedQueries(savedQueries.filter((s) => s.id !== id));
+        msgApi.success("已删除常用查询");
+      },
+    });
+  };
+
+  // 加载保存的查询
+  const loadSavedQuery = (q: SavedQuery) => {
+    setSqlCode(q.sql);
+    msgApi.success(`已加载: ${q.name}`);
+  };
+
+  // T-002：表格列定义使用后端 column_meta，不再用 Object.keys 推导列名
+  // 零行结果依旧展示列头（A01 / A02）
+  // T-044: 添加单元格编辑支持（双击编辑，change set 跟踪变更）
+  const resultColumns =
+    queryColumnsMeta.length > 0
+      ? queryColumnsMeta.map((meta) => ({
+          title: (
+            <span>
+              {meta.name}
+              <Tag style={{ marginLeft: 6 }} color="blue">
+                {meta.logical_type}
+              </Tag>
+            </span>
+          ),
+          dataIndex: `col_${meta.ordinal}`,
+          key: `col_${meta.ordinal}`,
+          ellipsis: true,
+          onCell: (record: any, rowIndex?: number) => ({
+            onDoubleClick: () => {
+              if (rowIndex !== undefined && writeAccessEnabled) {
+                const cellValue = record[`col_${meta.ordinal}`];
+                setEditingCell({ rowIndex, colIndex: meta.ordinal });
+                setEditValue(cellValue?.value ?? "");
+              }
+            },
+            style: { cursor: writeAccessEnabled ? "pointer" : "default" },
+          }),
+          render: (_: any, record: any) => {
+            const cellKey = `${record.key}_${meta.ordinal}`;
+            const isEditing =
+              editingCell?.rowIndex === record.key && editingCell?.colIndex === meta.ordinal;
+
+            if (isEditing) {
+              return (
+                <Input
+                  size="small"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onPressEnter={() => {
+                    const newCell: TaggedCell = { __kind: "text", value: editValue };
+                    const changeKey = cellKey;
+                    setChangeSet((prev) => new Map(prev).set(changeKey, newCell));
+                    setEditingCell(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setEditingCell(null);
+                  }}
+                  autoFocus
+                  style={{ width: "100%", fontSize: 12 }}
+                />
+              );
+            }
+
+            const isChanged = changeSet.has(cellKey);
+            return (
+              <span
+                style={
+                  isChanged
+                    ? {
+                        backgroundColor: "rgba(82, 196, 26, 0.15)",
+                        padding: "1px 4px",
+                        borderRadius: 2,
+                      }
+                    : {}
+                }
+              >
+                {cellDisplay(record[`col_${meta.ordinal}`])}
+              </span>
+            );
+          },
+        }))
+      : [];
+
+  return (
+    // 2026-11-06 并入 file：去掉了本组件自带的 ConfigProvider。
+    //
+    // 原来 db 是独立 app，自己带一套 ConfigProvider（只设 algorithm，不设 token）。
+    // 并入 file 后全站已经有统一的 ThemeProvider（src/_shared/ThemeContext.tsx），
+    // 里面管主题算法 + zhCN locale + colorPrimary/borderRadius/fontSize 三个 token。
+    // 再套一层只会把外层的 token 覆盖掉一半 —— antd 的 ConfigProvider 是嵌套生效的，
+    // 内层不给 token 时继承外层，给了就是覆盖。
+    //
+    // 所以这里直接渲染内容，主题由 file 的 ThemeProvider 统一管。
+    <>
+      <Layout style={{ height: "100%" }}>
+        <Sider
+          width={280}
+          theme={darkMode ? "dark" : "light"}
+          style={{
+            background: cardBgGradient,
+            borderRight: `1px solid var(--ant-color-border-secondary)`,
+          }}
+        >
+          <div
+            style={{
+              padding: "16px",
+              borderBottom: `1px solid var(--ant-color-border-secondary)`,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <DatabaseOutlined
+              style={{
+                fontSize: "20px",
+                background: brandGradient,
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+              }}
+            />
+            <strong
+              style={{
+                background: brandGradient,
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+              }}
+            >
+              数据库连接
+            </strong>
+          </div>
+          <div style={{ padding: "8px" }}>
+            <Space orientation="vertical" style={{ width: "100%" }}>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                block
+                onClick={() => {
+                  setEditingConnection(null);
+                  form.resetFields();
+                  setShowConnectionModal(true);
+                }}
+                style={{
+                  borderRadius: 8,
+                  background: brandGradient,
+                  boxShadow: "0 4px 12px rgba(102,126,234,0.3)",
+                }}
+              >
+                新建连接
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                block
+                onClick={handleExport}
+                disabled={connections.length === 0}
+                style={{ borderRadius: 8 }}
+              >
+                导出配置
+              </Button>
+              <Button
+                icon={<UploadOutlined />}
+                block
+                onClick={() => handleImportFile()}
+                style={{ borderRadius: 8 }}
+              >
+                导入配置
+              </Button>
+            </Space>
+          </div>
+          <Menu
+            mode="inline"
+            theme={darkMode ? "dark" : "light"}
+            style={{
+              borderRight: 0,
+              background: "transparent",
+            }}
+            items={connections.map((conn) => ({
+              key: conn.id,
+              icon: <DatabaseOutlined />,
+              label: (
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                >
+                  <span>{conn.name}</span>
+                  <Space size="small">
+                    {conn.credentialState === "missing" ? (
+                      <Tooltip title={conn.credentialNote ?? "密码取不回来了，请重新输入"}>
+                        <WarningOutlined
+                          role="img"
+                          aria-label={conn.credentialNote ?? "密码取不回来了，请重新输入"}
+                          style={{ color: "#faad14" }}
+                        />
+                      </Tooltip>
+                    ) : null}
+                    <Tooltip title="编辑连接">
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label={`编辑连接「${conn.name}」`}
+                        icon={<EditOutlined style={{ color: "#1890ff" }} />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          editConnection(conn);
+                        }}
+                      />
+                    </Tooltip>
+                    <Tooltip title="删除连接">
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label={`删除连接「${conn.name}」`}
+                        icon={<DeleteOutlined style={{ color: "#ff4d4f" }} />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteConnection(conn.id);
+                        }}
+                      />
+                    </Tooltip>
+                  </Space>
+                </div>
+              ),
+              onClick: () => connectDB(conn),
+            }))}
+          />
+        </Sider>
+        <Layout>
+          <Header
+            style={{
+              background: darkMode ? "#141414" : "#fff",
+              padding: "0 24px",
+              borderBottom: `1px solid var(--ant-color-border-secondary)`,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Space>
+              <Segmented
+                value={mode}
+                onChange={(v) => {
+                  const next = v as "sql" | "report";
+                  setMode(next);
+                  if (next === "report") setReportSeen(true);
+                }}
+                options={[
+                  { label: "SQL 查询", value: "sql", icon: <CodeOutlined /> },
+                  { label: "AI 报表", value: "report", icon: <DashboardOutlined /> },
+                ]}
+              />
+              {isConnected && selectedConnection && (
+                <>
+                  <Tag color="green">已连接</Tag>
+                  <span>{selectedConnection.name}</span>
+                  <Button size="small" onClick={disconnectDB}>
+                    断开连接
+                  </Button>
+                </>
+              )}
+            </Space>
+            <Space>
+              <Text type="secondary">{selectedConnection?.host || "未连接"}</Text>
+              <Switch
+                checked={darkMode}
+                onChange={toggleTheme}
+                aria-label="深色模式"
+                checkedChildren="🌙"
+                unCheckedChildren="☀️"
+              />
+              <Space>
+                <Tooltip title="AI 助手">
+                  <Button
+                    type="primary"
+                    aria-label="打开 AI 助手"
+                    icon={<RobotOutlined />}
+                    onClick={openAiAssistant}
+                  />
+                </Tooltip>
+                <Tooltip title="AI 服务设置">
+                  <Button
+                    type="text"
+                    aria-label="打开 AI 服务设置"
+                    icon={<SettingOutlined style={{ fontSize: "16px" }} />}
+                    onClick={() => setShowAiConfigModal(true)}
+                  />
+                </Tooltip>
+              </Space>
+            </Space>
+          </Header>
+          <Content style={{ display: "flex", flexDirection: "column" }}>
+            {reportSeen && (
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: mode === "report" ? "block" : "none",
+                }}
+              >
+                <ErrorBoundary label="报表看板" resetKey={reportSeed}>
+                  <Suspense fallback={<Spin description="正在装载报表看板…" style={{ padding: 24 }} />}>
+                    <ReportWorkbench
+                      configs={backendConfigs}
+                      aiReady={aiReady}
+                      onOpenAiSettings={() => setShowAiConfigModal(true)}
+                      seed={reportSeed}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              </div>
+            )}
+            {mode === "report" ? null : isConnected ? (
+              <>
+                {/* 多标签页 */}
+                <div
+                  style={{
+                    padding: "8px 16px 0",
+                    borderBottom: `1px solid var(--ant-color-border-secondary)`,
+                    background: cardBgGradient,
+                    borderRadius: 16,
+                    marginBottom: 12,
+                  }}
+                >
+                  <Tabs
+                    type="editable-card"
+                    activeKey={activeTabId}
+                    onChange={switchTab}
+                    onEdit={(targetKey, action) => {
+                      if (action === "add") addTab();
+                      else if (action === "remove") closeTab(String(targetKey));
+                    }}
+                    items={tabs.map((t) => ({
+                      key: t.id,
+                      label: t.title,
+                      closable: tabs.length > 1,
+                    }))}
+                  />
+                </div>
+
+                {/* 主体三栏布局 */}
+                <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+                  {/* 左：表结构 */}
+                  <div
+                    style={{
+                      width: "240px",
+                      borderRight: `1px solid var(--ant-color-border-secondary)`,
+                      overflow: "auto",
+                      padding: 8,
+                    }}
+                  >
+                    <Card
+                      size="small"
+                      title={
+                        <Space>
+                          <TableOutlined />
+                          表结构{tables.length > 0 && ` (${tables.length})`}
+                        </Space>
+                      }
+                      extra={
+                        <Tooltip title="刷新表列表">
+                          <Button
+                            size="small"
+                            type="text"
+                            aria-label="刷新表列表"
+                            icon={<SyncOutlined />}
+                            onClick={refreshTables}
+                          />
+                        </Tooltip>
+                      }
+                      style={{
+                        borderRadius: 12,
+                        background: cardBgGradient,
+                      }}
+                    >
+                      {tables.map((t) => (
+                        <div
+                          key={t.name}
+                          onClick={() => selectTable(t.name)}
+                          style={{
+                            padding: "6px 8px",
+                            cursor: "pointer",
+                            background:
+                              selectedTable === t.name ? "rgba(102,126,234,0.1)" : undefined,
+                            borderRadius: 6,
+                            transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (selectedTable !== t.name) {
+                              (e.currentTarget as HTMLElement).style.background =
+                                "rgba(102,126,234,0.05)";
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (selectedTable !== t.name) {
+                              (e.currentTarget as HTMLElement).style.background = "transparent";
+                            }
+                          }}
+                        >
+                          <Space orientation="vertical" size={0}>
+                            <strong>{t.name}</strong>
+                            <Text type="secondary" style={{ fontSize: 11 }}>
+                              ~{t.row_estimate} 行 · {((t.size_bytes || 0) / 1024).toFixed(0)} KB
+                            </Text>
+                          </Space>
+                        </div>
+                      ))}
+                      {selectedTable && (
+                        <div
+                          style={{
+                            marginTop: 12,
+                            paddingTop: 12,
+                            borderTop: `1px dashed var(--ant-color-border-secondary)`,
+                          }}
+                        >
+                          <Text strong>{selectedTable} 字段：</Text>
+                          {columns.map((c) => (
+                            <div key={c.name} style={{ marginTop: 6, fontSize: 12 }}>
+                              <Space size={4}>
+                                {c.is_primary && (
+                                  <Tag color="gold" style={{ margin: 0 }}>
+                                    PK
+                                  </Tag>
+                                )}
+                                <span style={{ fontWeight: 500 }}>{c.name}</span>
+                              </Space>
+                              <div
+                                style={{ color: "var(--ant-color-text-secondary)", marginLeft: 20 }}
+                              >
+                                {c.data_type}
+                                {!c.nullable && <span style={{ marginLeft: 4 }}>NOT NULL</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </Card>
+                  </div>
+
+                  {/* 中：SQL 编辑器 + 结果 */}
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 8 }}>
+                    {/* SQL 编辑器 */}
+                    <Card
+                      size="small"
+                      style={{
+                        marginBottom: 8,
+                        flex: "0 0 auto",
+                        borderRadius: 12,
+                        background: cardBgGradient,
+                      }}
+                      title={
+                        <span
+                          style={{
+                            fontWeight: 600,
+                            background: brandGradient,
+                            WebkitBackgroundClip: "text",
+                            WebkitTextFillColor: "transparent",
+                            backgroundImage: brandGradient,
+                          }}
+                        >
+                          SQL 编辑器
+                        </span>
+                      }
+                      extra={
+                        <Space>
+                          <Tooltip title="保存为常用查询">
+                            <Button
+                              size="small"
+                              icon={<StarOutlined />}
+                              onClick={() => {
+                                setEditingSavedQuery(null);
+                                setShowSaveQueryModal(true);
+                              }}
+                              style={{ borderRadius: 6 }}
+                            >
+                              收藏
+                            </Button>
+                          </Tooltip>
+                          <Button
+                            size="small"
+                            icon={<FormatPainterOutlined />}
+                            onClick={formatSQL}
+                            style={{ borderRadius: 6 }}
+                          >
+                            格式化
+                          </Button>
+                          <Tooltip title="看这条语句的执行计划（不写 EXPLAIN 前缀，后端会自己加）">
+                            <Button
+                              size="small"
+                              icon={<DashboardOutlined />}
+                              onClick={explainQuery}
+                              style={{ borderRadius: 6 }}
+                            >
+                              执行计划
+                            </Button>
+                          </Tooltip>
+                          <Tooltip title="把编辑器里的多条语句逐条执行（只读；写语句请用「执行」逐条来）">
+                            <Button
+                              size="small"
+                              icon={<SnippetsOutlined />}
+                              onClick={runBatch}
+                              loading={batchRunning}
+                              style={{ borderRadius: 6 }}
+                            >
+                              批量
+                            </Button>
+                          </Tooltip>
+                          <Tooltip title="流式执行：结果分批取回，大结果集不会一次性塞满内存">
+                            <Button
+                              size="small"
+                              icon={<ThunderboltOutlined />}
+                              onClick={runStreaming}
+                              loading={streamRunning}
+                              style={{ borderRadius: 6 }}
+                            >
+                              流式
+                            </Button>
+                          </Tooltip>
+                          {streamRunning && (
+                            <Tooltip title="请求取消这一单（后端会真的把查询停掉）">
+                              <Button
+                                size="small"
+                                danger
+                                onClick={cancelStream}
+                                style={{ borderRadius: 6 }}
+                              >
+                                取消
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {streamInfo && !streamRunning && (
+                            <Tooltip title={queryStatus || "查这一单的状态"}>
+                              <Button
+                                size="small"
+                                type="text"
+                                onClick={showQueryStatus}
+                                style={{ borderRadius: 6, fontSize: 12 }}
+                              >
+                                状态 {streamInfo.rows} 行/{streamInfo.batches} 批
+                              </Button>
+                            </Tooltip>
+                          )}
+                          <Tooltip title="从 CSV 文件导入数据（先看计划与真正写入的行数，写入审批后才落库；需要「可写」模式）">
+                            <Button
+                              size="small"
+                              icon={<UploadOutlined />}
+                              onClick={pickCsvAndPreview}
+                              style={{ borderRadius: 6 }}
+                            >
+                              导入 CSV
+                            </Button>
+                          </Tooltip>
+                          <Button
+                            size="small"
+                            icon={<CopyOutlined />}
+                            onClick={() => copy(sqlCode)}
+                            style={{ borderRadius: 6 }}
+                          >
+                            复制
+                          </Button>
+                          <Tooltip
+                            title={
+                              writeAccessEnabled ? "可写：可执行 DML/DDL" : "只读：禁止写入，DB-06"
+                            }
+                          >
+                            <Switch
+                              size="small"
+                              checked={writeAccessEnabled}
+                              onChange={setWriteAccessEnabled}
+                              checkedChildren="可写"
+                              unCheckedChildren="只读"
+                              style={{ marginRight: 4 }}
+                            />
+                          </Tooltip>
+                          <Tooltip
+                            title={
+                              "界面行数上限：只把前 N 行送进表格与 CSV（0 = 不限）。" +
+                              (selectedConnection?.type === "sqlite"
+                                ? "sqlite 这条是取到上限就停，库后面的行没取。"
+                                : "这个引擎仍是整批取回后截断，总行数给得准。") +
+                              "要全量请在语句里自己收口。"
+                            }
+                          >
+                            <Space size={2}>
+                              <InputNumber
+                                size="small"
+                                min={0}
+                                step={500}
+                                value={rowCap}
+                                onChange={(v) => setRowCap(Number(v ?? 0))}
+                                style={{ width: 86 }}
+                              />
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                行
+                              </Text>
+                            </Space>
+                          </Tooltip>
+                          <Tooltip
+                            title={
+                              <div style={{ fontSize: 12 }}>
+                                <div>⌘/Ctrl + Enter 执行</div>
+                                <div>⇧⌘/Ctrl + F 格式化</div>
+                                <div>⌘/Ctrl + S 存为常用查询</div>
+                                <div>⌘/Ctrl + E 导出结果 · ⌘/Ctrl + T 新标签 · ⌘/Ctrl + 1…9 切标签</div>
+                              </div>
+                            }
+                          >
+                            <Button
+                              type="primary"
+                              size="small"
+                              icon={<PlayCircleOutlined />}
+                              onClick={executeQuery}
+                              style={{
+                                borderRadius: 6,
+                                background: brandGradient,
+                                boxShadow: "0 4px 12px rgba(102,126,234,0.3)",
+                              }}
+                            >
+                              执行
+                            </Button>
+                          </Tooltip>
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            ⌘↵ 执行 · ⇧⌘F 格式化 · ⌘S 保存
+                          </Text>
+                        </Space>
+                      }
+                    >
+                      {/* T-029: CodeMirror 6 SQL 编辑器 */}
+                      <SqlEditor
+                        value={sqlCode}
+                        onChange={setSqlCode}
+                        onRun={() => void executeQuery()}
+                        dialect={selectedConnection?.type === "sqlserver" ? undefined : selectedConnection?.type}
+                        schema={editorSchema}
+                        height="150px"
+                      />
+                    </Card>
+
+                    {/* 查询结果 */}
+                    <Card
+                      size="small"
+                      style={{
+                        flex: 1,
+                        overflow: "hidden",
+                        borderRadius: 12,
+                        background: cardBgGradient,
+                      }}
+                      title={
+                        <Space size={6}>
+                          {resultMeta
+                            ? `查询结果 (前 ${resultMeta.shown} 行${
+                                resultMeta.total ? ` / 共 ${resultMeta.total} 行` : " · 后面还有"
+                              })`
+                            : `查询结果 (${queryResults.length} 行)`}
+                          {resultMeta && (
+                            <Tooltip
+                              title={`界面上限 ${rowCap} 行：只有前 ${resultMeta.shown} 行进表格与 CSV${
+                                resultMeta.total
+                                  ? `，这次结果共 ${resultMeta.total} 行`
+                                  : "；sqlite 这条是取到上限就停，总行数没数过"
+                              }`}
+                            >
+                              <Tag color="orange">按上限截断</Tag>
+                            </Tooltip>
+                          )}
+                        </Space>
+                      }
+                      extra={
+                        <Space>
+                          {changeSet.size > 0 && (
+                            <Tag color="green">已修改 {changeSet.size} 项</Tag>
+                          )}
+                          <Button
+                            size="small"
+                            icon={<SaveOutlined />}
+                            onClick={handleExportResults}
+                            style={{ borderRadius: 6 }}
+                          >
+                            导出
+                          </Button>
+                          {changeSet.size > 0 && writeAccessEnabled && (
+                            <Button
+                              size="small"
+                              type="primary"
+                              onClick={() => {
+                                void planCommit();
+                              }}
+                              style={{ borderRadius: 6, background: brandGradient }}
+                            >
+                              提交变更
+                            </Button>
+                          )}
+                        </Space>
+                      }
+                    >
+                      {/* T-032: 虚拟滚动结果网格 */}
+                      <Table
+                        columns={resultColumns}
+                        dataSource={queryResults.map((row, index) => {
+                          // T-001：按 ordinal 映射到列，便于大结果/同名列不丢数据
+                          const obj: Record<string, TaggedCell> & { key: number } = {
+                            key: index,
+                          } as any;
+                          row.forEach((cell, ord) => {
+                            obj[`col_${ord}`] = cell;
+                          });
+                          return obj;
+                        })}
+                        size="small"
+                        virtual
+                        scroll={{ x: "max-content", y: 400 }}
+                        pagination={{
+                          pageSize: 100,
+                          showSizeChanger: true,
+                          pageSizeOptions: ["50", "100", "200", "500"],
+                        }}
+                        style={{ borderRadius: 8 }}
+                      />
+                    </Card>
+                  </div>
+
+                  {/* 右：历史 + 收藏 */}
+                  <div
+                    style={{
+                      width: "280px",
+                      borderLeft: `1px solid var(--ant-color-border-secondary)`,
+                      overflow: "auto",
+                    }}
+                  >
+                    <Tabs
+                      size="small"
+                      style={{ padding: 8 }}
+                      items={[
+                        {
+                          key: "history",
+                          label: (
+                            <span>
+                              <HistoryOutlined style={{ color: brandGradient }} />
+                              历史
+                            </span>
+                          ),
+                          children: (
+                            <div style={{ maxHeight: "calc(100vh - 200px)", overflow: "auto" }}>
+                              {/* T-035: 历史搜索和过滤 */}
+                              <Space style={{ marginBottom: 8, width: "100%" }}>
+                                <Input
+                                  placeholder="搜索 SQL 或连接名称..."
+                                  prefix={<SearchOutlined style={{ color: "#aaa" }} />}
+                                  size="small"
+                                  allowClear
+                                  style={{ flex: 1 }}
+                                  onChange={(e) => setHistorySearch(e.target.value.toLowerCase())}
+                                />
+                                <Tooltip title="清空历史（会真的删掉落盘的那份）">
+                                  <Button
+                                    size="small"
+                                    aria-label="清空查询历史"
+                                    icon={<DeleteOutlined />}
+                                    onClick={clearHistory}
+                                    disabled={history.length === 0}
+                                  />
+                                </Tooltip>
+                              </Space>
+                              {history
+                                .filter((h) => {
+                                  if (!historySearch) return true;
+                                  return (
+                                    h.sql.toLowerCase().includes(historySearch) ||
+                                    h.connection_name.toLowerCase().includes(historySearch)
+                                  );
+                                })
+                                .map((h) => (
+                                  <div
+                                    key={h.id}
+                                    onClick={() => setSqlCode(h.sql)}
+                                    style={{
+                                      padding: 8,
+                                      cursor: "pointer",
+                                      borderBottom: `1px solid var(--ant-color-border-secondary)`,
+                                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      (e.currentTarget as HTMLElement).style.background =
+                                        "rgba(102,126,234,0.05)";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      (e.currentTarget as HTMLElement).style.background =
+                                        "transparent";
+                                    }}
+                                  >
+                                    <Space
+                                      orientation="vertical"
+                                      size={2}
+                                      style={{ width: "100%" }}
+                                    >
+                                      <Space
+                                        style={{ width: "100%", justifyContent: "space-between" }}
+                                      >
+                                        <Tag
+                                          color={h.success ? "success" : "error"}
+                                          style={{ margin: 0 }}
+                                        >
+                                          {h.execution_time_ms}ms
+                                        </Tag>
+                                        <Text type="secondary" style={{ fontSize: 11 }}>
+                                          {new Date(h.timestamp * 1000).toLocaleTimeString()}
+                                        </Text>
+                                      </Space>
+                                      <Text
+                                        code
+                                        style={{ fontSize: 11, display: "block" }}
+                                        ellipsis
+                                      >
+                                        {h.sql}
+                                      </Text>
+                                    </Space>
+                                  </div>
+                                ))}
+                              {history.length === 0 && <Empty description="暂无查询历史" />}
+                            </div>
+                          ),
+                        },
+                        {
+                          key: "saved",
+                          label: (
+                            <span>
+                              <StarFilled style={{ color: "#faad14" }} />
+                              常用
+                            </span>
+                          ),
+                          children: (
+                            <div style={{ maxHeight: "calc(100vh - 200px)", overflow: "auto" }}>
+                              {savedQueries.map((q) => (
+                                <div
+                                  key={q.id}
+                                  style={{
+                                    padding: 8,
+                                    cursor: "pointer",
+                                    borderBottom: `1px solid var(--ant-color-border-secondary)`,
+                                    transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    (e.currentTarget as HTMLElement).style.background =
+                                      "rgba(102,126,234,0.05)";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    (e.currentTarget as HTMLElement).style.background =
+                                      "transparent";
+                                  }}
+                                >
+                                  <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                                    <Space
+                                      style={{ width: "100%", justifyContent: "space-between" }}
+                                    >
+                                      <strong style={{ fontSize: 13 }}>{q.name}</strong>
+                                      <Space size={4}>
+                                        <Button
+                                          type="text"
+                                          size="small"
+                                          aria-label={`编辑常用查询「${q.name}」`}
+                                          icon={<EditOutlined />}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setEditingSavedQuery(q);
+                                            setShowSaveQueryModal(true);
+                                          }}
+                                        />
+                                        <Button
+                                          type="text"
+                                          size="small"
+                                          aria-label={`删除常用查询「${q.name}」`}
+                                          icon={<DeleteOutlined />}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void deleteSavedQuery(q.id);
+                                          }}
+                                        />
+                                      </Space>
+                                    </Space>
+                                    <Text
+                                      code
+                                      style={{ fontSize: 11 }}
+                                      ellipsis
+                                      onClick={() => loadSavedQuery(q)}
+                                    >
+                                      {q.sql}
+                                    </Text>
+                                    <Space size={4} wrap>
+                                      {q.tags.map((t) => (
+                                        <Tag
+                                          key={t}
+                                          color="blue"
+                                          style={{ fontSize: 10, margin: 0 }}
+                                        >
+                                          {t}
+                                        </Tag>
+                                      ))}
+                                    </Space>
+                                  </Space>
+                                </div>
+                              ))}
+                              {savedQueries.length === 0 && <Empty description="暂无常用查询" />}
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  height: "100%",
+                  color: "var(--ant-color-text-secondary)",
+                }}
+              >
+                <DatabaseOutlined
+                  style={{
+                    fontSize: "64px",
+                    marginBottom: "16px",
+                    background: brandGradient,
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                  }}
+                />
+                <h2
+                  style={{
+                    background: brandGradient,
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                  }}
+                >
+                  数据库管理工具
+                </h2>
+                <p>请从左侧选择一个连接或创建新连接</p>
+              </div>
+            )}
+          </Content>
+        </Layout>
+      </Layout>
+
+      {msgContext}
+      {modalContext}
+
+      {/* 连接编辑弹窗 */}
+      <Modal
+        title={editingConnection ? "编辑连接" : "新建连接"}
+        open={showConnectionModal}
+        onOk={() => form.submit()}
+        onCancel={() => {
+          setShowConnectionModal(false);
+          setEditingConnection(null);
+          form.resetFields();
+        }}
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={saveConnection}
+          // T-025：默认就是最安全的一档（校验证书）。不设默认值的话，
+          // 新建连接时这个下拉是空的，用户不选就等于"没配" —— 后端虽然会兜到安全档，
+          // 但界面上看不出当前是什么档位。
+          initialValues={{ tlsMode: "verify_full" }}
+        >
+          <Form.Item name="name" label="连接名称" rules={[{ required: true }]}>
+            <Input placeholder="例如：本地 MySQL" />
+          </Form.Item>
+          <Form.Item name="type" label="数据库类型" rules={[{ required: true }]}>
+            <Select
+              placeholder="选择数据库类型"
+              options={[
+                { value: "mysql", label: "MySQL" },
+                { value: "postgresql", label: "PostgreSQL" },
+                { value: "sqlite", label: "SQLite" },
+                {
+                  value: "sqlserver",
+                  label: "SQL Server（暂不支持）",
+                  disabled: true,
+                },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) =>
+              prev?.type !== cur?.type ||
+              prev?.database !== cur?.database ||
+              // T-025：TLS 档位变了，"私有 CA 路径"那栏要跟着出现/消失
+              prev?.tlsMode !== cur?.tlsMode
+            }
+          >
+            {() => {
+              const t = form.getFieldValue("type");
+              const isSqlite = t === "sqlite";
+              return (
+                <>
+                  {!isSqlite && (
+                    <Form.Item name="host" label="主机地址">
+                      <Input placeholder="例如：localhost（SQLite 可留空）" />
+                    </Form.Item>
+                  )}
+                  {!isSqlite && (
+                    <Form.Item name="port" label="端口">
+                      <Input type="number" placeholder="例如：3306（SQLite 可留空）" />
+                    </Form.Item>
+                  )}
+                  {!isSqlite && (
+                    <Form.Item name="username" label="用户名" rules={[{ required: !isSqlite }]}>
+                      <Input placeholder="例如：root" />
+                    </Form.Item>
+                  )}
+                  {!isSqlite && (
+                    <Form.Item name="password" label="密码">
+                      <Input.Password placeholder="输入密码" />
+                    </Form.Item>
+                  )}
+                  {/* T-025：TLS 档位。SQLite 是本地文件，没有 TLS 这回事。 */}
+                  {!isSqlite && (
+                    <Form.Item
+                      name="tlsMode"
+                      label="TLS 校验方式"
+                      extra={
+                        TLS_MODE_OPTIONS.find(
+                          (o) => o.value === form.getFieldValue("tlsMode")
+                        )?.hint ?? TLS_MODE_OPTIONS[0].hint
+                      }
+                    >
+                      <Select
+                        placeholder="选择 TLS 校验方式"
+                        options={TLS_MODE_OPTIONS.map((o) => ({
+                          value: o.value,
+                          label: o.label,
+                        }))}
+                      />
+                    </Form.Item>
+                  )}
+                  {!isSqlite && form.getFieldValue("tlsMode") === "verify_full" && (
+                    <Form.Item
+                      name="tlsCaPath"
+                      label="私有 CA 证书路径（可选）"
+                      extra="内置根证书集是 Mozilla 公共 CA；企业自签 CA 请填写 .pem 文件的绝对路径。"
+                    >
+                      <Input placeholder="例如：/etc/ssl/certs/corp-root-ca.pem" />
+                    </Form.Item>
+                  )}
+                  <Form.Item
+                    name="database"
+                    label={isSqlite ? "数据库文件" : "数据库名"}
+                    rules={[{ required: true }]}
+                  >
+                    <Input
+                      placeholder={
+                        isSqlite
+                          ? "选择或填写 .sqlite / .db 文件绝对路径"
+                          : "例如：my_database（SQLite 填文件路径）"
+                      }
+                    />
+                  </Form.Item>
+                </>
+              );
+            }}
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 网格变更提交前的逐条过目：要写什么、写去哪、按哪个键定位，一眼能看见才按确认 */}
+      <Modal
+        title={`提交 ${commitPlan?.length ?? 0} 条变更到 ${resultSource?.table ?? ""}`}
+        open={!!commitPlan}
+        onCancel={() => !commitBusy && setCommitPlan(null)}
+        okText={commitBusy ? "提交中…" : "确认写入库"}
+        okButtonProps={{ loading: commitBusy, disabled: !commitPlan?.length }}
+        onOk={() => void runCommit()}
+        width={760}
+        mask={{ closable: false }}
+      >
+        {commitRejected.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`有 ${commitRejected.length} 项定位不到行，这次不会提交`}
+            description={
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {commitRejected.slice(0, 5).map((r, i) => (
+                  <li key={i}>
+                    第 {r.rowIndex + 1} 行：{r.reason}
+                  </li>
+                ))}
+              </ul>
+            }
+          />
+        )}
+        <div
+          style={{
+            maxHeight: 320,
+            overflow: "auto",
+            border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 6,
+            padding: 8,
+          }}
+        >
+          {commitPlan?.map((st, i) => (
+            <pre
+              key={i}
+              style={{
+                margin: 0,
+                padding: "4px 0",
+                fontSize: 12,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                borderBottom:
+                  i === (commitPlan?.length ?? 0) - 1 ? "none" : "1px dashed rgba(255,255,255,0.08)",
+              }}
+            >
+              {st.sql}
+            </pre>
+          ))}
+        </div>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          每条语句各过一次写入门禁；某条失败只影响它自己，其余照旧提交，失败的仍留在待提交区。
+        </Typography.Text>
+      </Modal>
+
+      {/* 保存查询弹窗 */}
+      <Modal
+        title={editingSavedQuery ? "编辑常用查询" : "保存为常用查询"}
+        open={showSaveQueryModal}
+        onOk={() => {
+          const form2 = document.getElementById("save-query-form") as HTMLFormElement;
+          form2?.dispatchEvent(new Event("submit", { cancelable: true }));
+        }}
+        onCancel={() => {
+          setShowSaveQueryModal(false);
+          setEditingSavedQuery(null);
+        }}
+      >
+        <Form
+          id="save-query-form"
+          layout="vertical"
+          onFinish={saveAsSavedQuery}
+          initialValues={editingSavedQuery || { sql: sqlCode, tags: [] }}
+        >
+          <Form.Item name="name" label="名称" rules={[{ required: true }]}>
+            <Input placeholder="例如：查询活跃用户" />
+          </Form.Item>
+          <Form.Item name="sql" label="SQL">
+            <TextArea rows={3} />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input placeholder="可选" />
+          </Form.Item>
+          <Form.Item name="tags" label="标签">
+            <Select mode="tags" placeholder="回车添加标签" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* AI 配置弹窗 */}
+      {/*
+        2026-11-01 起：表单换成共享面板 `z-biz-tool-shared/ai/settings`。
+        旧表单的四个问题一并消失：
+        1. **明文密钥回填进表单** —— 旧 `get_ai_config` 把 apiKey 读进
+           React state，密钥在 Rust → IPC → JS 内存 → 表单 DOM 全链路可见；
+        2. **判据是前端自己写的** —— 与后端 `ensure_configured()` 各判一次，
+           已经漂移过一次；现在判据由后端给（`get_ai_config_status`）；
+        3. **没有厂商预设** —— 用户只能手抄地址与模型名；
+        4. **保存按钮只存三项** —— 温度、超时这些字段压根没入口。
+
+        统一面板还带来「本地网关免密钥」的正确行为：密钥框只在真的需要时出现。
+      */}
+      <Modal
+        title="AI 助手配置"
+        open={showAiConfigModal}
+        onCancel={() => setShowAiConfigModal(false)}
+        footer={null}
+        width={560}
+        destroyOnHidden
+      >
+        <DbAiSettingsPanel
+          view={aiView}
+          onSaved={() => {
+            void refreshAiState();
+            setShowAiConfigModal(false);
+            msgApi.success("AI 配置已保存");
+          }}
+        />
+      </Modal>
+
+      {/* AI 结果弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <RobotOutlined />
+            AI 助手
+          </Space>
+        }
+        open={showAiResultModal}
+        onCancel={() => setShowAiResultModal(false)}
+        width={800}
+        footer={null}
+        styles={{ body: { maxHeight: "70vh", overflow: "auto" } }}
+      >
+        <Tabs
+          activeKey={aiActiveTab}
+          onChange={setAiActiveTab}
+          items={[
+            {
+              key: "agent",
+              label: (
+                <Space>
+                  <RobotOutlined />
+                  Agent 问数
+                </Space>
+              ),
+              children: (
+                <div style={{ height: 480 }}>
+                <ErrorBoundary label="Agent 问数">
+                  <Suspense fallback={<Spin description="正在装载 Agent 面板…" style={{ padding: 24 }} />}>
+                  <AgentPanel
+                    hint={agentHint}
+                    onClear={() => {
+                      // 会话清空了还拿上一轮那稿去"改"，用户看不出串台，只会觉得模型在装
+                      aiPriorRef.current = null;
+                    }}
+                    onUseSql={(sql) => {
+                      setSqlCode(sql);
+                      msgApi.success("已填进编辑器，运行前自己过一眼");
+                    }}
+                    onGoReport={(q) => {
+                      setShowAiResultModal(false);
+                      goReport(q, true);
+                    }}
+                    onGoPickTables={() => setAiActiveTab("generate")}
+                  />
+                  </Suspense>
+                </ErrorBoundary>
+                </div>
+              ),
+            },
+            {
+              key: "generate",
+              label: (
+                <Space>
+                  <SnippetsOutlined />
+                  生成 SQL
+                </Space>
+              ),
+              children: (
+                <div style={{ marginTop: 16 }}>
+                  <Form layout="vertical">
+                    <Form.Item
+                      label="这次要用的表"
+                      help={
+                        aiGenTables.length || !selectedTable
+                          ? "模型只能在这些表的真实字段里挑，编出来的字段会被本机挡下"
+                          : `没选就用左侧当前选中的 ${selectedTable}`
+                      }
+                    >
+                      <Select
+                        mode="multiple"
+                        style={{ width: "100%" }}
+                        value={aiGenTables}
+                        onChange={setAiGenTables}
+                        maxTagCount="responsive"
+                        optionFilterProp="label"
+                        placeholder={
+                          tables.length
+                            ? "选择参与本次查询的表"
+                            : "当前连接还没有表清单，先在左侧连上数据库"
+                        }
+                        options={tables.map((t) => ({
+                          value: t.name,
+                          label: t.schema ? `${t.schema}.${t.name}` : t.name,
+                        }))}
+                      />
+                    </Form.Item>
+                    <Form.Item label="自然语言描述">
+                      <TextArea
+                        value={aiNaturalLanguage}
+                        onChange={(e) => setAiNaturalLanguage(e.target.value)}
+                        placeholder="用自然语言描述你的需求，例如：查询所有活跃用户，按创建时间排序"
+                        rows={4}
+                      />
+                    </Form.Item>
+                    <Button
+                      type="primary"
+                      icon={<BulbOutlined />}
+                      onClick={() => handleAiGenerateSql()}
+                      loading={aiLoading}
+                      disabled={!selectedConnection}
+                      block
+                    >
+                      {aiLoading ? "生成中（每次尝试最长 60 秒）" : "生成 SQL"}
+                    </Button>
+                  </Form>
+                  {/* 与其让用户撞了墙再找出口，不如在撞之前就说清这一腿的边界在哪 */}
+                  {connections.length > 1 && (
+                    <div style={{ marginTop: 10 }}>
+                      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+                        {`这一腿只看得到当前连接（${
+                          selectedConnection?.name || "还没连上"
+                        }）的表；本机还有 ${
+                          connections.length - 1
+                        } 条连接的表要一起用，得走报表那条腿：各库分别取数，在本机内存里 join。`}
+                      </Text>
+                      <Button
+                        size="small"
+                        icon={<DashboardOutlined />}
+                        disabled={!aiNaturalLanguage.trim()}
+                        onClick={() => {
+                          setShowAiResultModal(false);
+                          goReport(aiNaturalLanguage, true);
+                        }}
+                      >
+                        把这句需求拿去跨库出图
+                      </Button>
+                    </div>
+                  )}
+                  {aiDraftError && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      closable
+                      onClose={() => setAiDraftError(null)}
+                      style={{ marginTop: 12 }}
+                      title={aiDraftError.title}
+                      description={
+                        <>
+                          <div
+                            style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 12 }}
+                          >
+                            {aiDraftError.detail}
+                          </div>
+                          {/* 点名的表在别的连接里时，"照着错误再改一轮"这条腿是走不通的：
+                              本腿的目录只装得下当前连接的表。这时必须给出另一条腿的入口。 */}
+                          {crossDb && (
+                            <div
+                              className="ai-cross-db"
+                              style={{
+                                marginTop: 8,
+                                padding: "8px 10px",
+                                borderRadius: 6,
+                                borderLeft: "3px solid #1677ff",
+                                background: "rgba(22,119,255,0.08)",
+                                fontSize: 12,
+                              }}
+                            >
+                              {crossDb.found.length > 0 && (
+                                <div>
+                                  {/* 中文句子中间换行会被 JSX 折成一个真空格，所以长句按段拼 */}
+                                  {crossDb.found
+                                    .map((f) => `${f.table} 在连接「${f.connection}」里`)
+                                    .join("；") +
+                                    "。这一腿只把当前连接的表交给模型，而一条 SQL 也只能进一个库——" +
+                                    "这张表进不了本次目录，改多少轮都会以同样的理由被挡下。"}
+                                </div>
+                              )}
+                              {crossDb.missing.length > 0 && (
+                                <div style={{ marginTop: crossDb.found.length ? 4 : 0 }}>
+                                  {(crossDb.found.length ? "另外点名的 " : "点名的 ") +
+                                    crossDb.missing.join("、") +
+                                    (crossDb.failed.length
+                                      ? ` 在已问到的连接里没有，而 ${crossDb.failed.join(
+                                          "、"
+                                        )} 的表清单没读到——问不到不等于不存在。`
+                                      : " 在所有连接里都没有，那是模型编出来的字段名。")}
+                                </div>
+                              )}
+                              {crossDb.found.length > 0 && (
+                                <>
+                                  <Text type="secondary" style={{ display: "block", marginTop: 4 }}>
+                                    {"不同库的表要进同一张结果，走 AI 报表：每个库各自取数，" +
+                                      "在本机内存里 join。下面那一键会带着这句话过去把整条链跑完。"}
+                                  </Text>
+                                  <Button
+                                    size="small"
+                                    type="primary"
+                                    icon={<DashboardOutlined />}
+                                    style={{ marginTop: 6 }}
+                                    onClick={() => {
+                                      setShowAiResultModal(false);
+                                      goReport(aiNaturalLanguage, true);
+                                    }}
+                                  >
+                                    拿去 AI 报表，直接跨库出图
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      }
+                      action={
+                        aiDraftError.fix ? (
+                          <Tooltip title="把上面的拒因和被挡下的那条 SQL 一起回喂给模型，让它改完再过一遍本机校验">
+                            <Button
+                              size="small"
+                              danger
+                              icon={<ThunderboltOutlined />}
+                              loading={aiLoading}
+                              onClick={() => handleAiGenerateSql(aiDraftError.fix)}
+                            >
+                              让 AI 照这条错误改
+                            </Button>
+                          </Tooltip>
+                        ) : null
+                      }
+                    />
+                  )}
+                  {aiDraft && (
+                    <Card
+                      size="small"
+                      style={{ marginTop: 12 }}
+                      title={
+                        <Space size={4}>
+                          <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                          已填入编辑器
+                        </Space>
+                      }
+                      extra={
+                        <Space size={4}>
+                          <Tag color="blue">{aiDraft.dialect}</Tag>
+                          <Tooltip title="模型被本机校验打回并自我修正的次数">
+                            <Badge
+                              count={aiDraft.repairs}
+                              showZero
+                              color={aiDraft.repairs > 0 ? "#faad14" : "#52c41a"}
+                            />
+                          </Tooltip>
+                        </Space>
+                      }
+                    >
+                      <pre
+                        style={{
+                          margin: 0,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-all",
+                          fontSize: 12,
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        {aiDraft.sql}
+                      </pre>
+                      <div style={{ marginTop: 8 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          依据：
+                        </Text>
+                        {aiDraft.tables.length ? (
+                          aiDraft.tables.map((t) => (
+                            <Tag key={t} style={{ marginBottom: 4 }}>
+                              {t}
+                            </Tag>
+                          ))
+                        ) : (
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            没有引用目录里的表
+                          </Text>
+                        )}
+                      </div>
+                      {aiDraft.warnings.map((w) => (
+                        <Alert
+                          key={w}
+                          type="warning"
+                          showIcon
+                          title={w}
+                          style={{ padding: 4, marginTop: 4 }}
+                        />
+                      ))}
+                      <Space style={{ marginTop: 8 }}>
+                        <Button
+                          size="small"
+                          icon={<CopyOutlined />}
+                          onClick={() => copy(aiDraft.sql)}
+                        >
+                          复制
+                        </Button>
+                      </Space>
+                    </Card>
+                  )}
+                </div>
+              ),
+            },
+            {
+              key: "optimize",
+              label: (
+                <Space>
+                  <CodeOutlined />
+                  优化 SQL
+                </Space>
+              ),
+              children: (
+                <div style={{ marginTop: 16 }}>
+                  <Form layout="vertical">
+                    <Form.Item
+                      label="要优化的 SQL"
+                      help={
+                        selectedTable
+                          ? `会带上左侧选中表 ${selectedTable} 的 ${columns.length} 个真实字段，索引建议才落到实处`
+                          : "先在左侧选中一张表，否则模型看不到表结构，索引建议只能泛泛而谈"
+                      }
+                    >
+                      <TextArea
+                        value={aiSqlForOptimize}
+                        onChange={(e) => setAiSqlForOptimize(e.target.value)}
+                        placeholder="输入要优化的 SQL 语句"
+                        rows={6}
+                      />
+                    </Form.Item>
+                    <Button
+                      type="primary"
+                      icon={<BulbOutlined />}
+                      onClick={handleAiOptimizeSql}
+                      disabled={aiLoading}
+                      block
+                    >
+                      {aiLoading ? <Spin size="small" /> : "分析并优化"}
+                    </Button>
+                  </Form>
+                </div>
+              ),
+            },
+            {
+              key: "explain",
+              label: (
+                <Space>
+                  <ApiOutlined />
+                  解释 SQL
+                </Space>
+              ),
+              children: (
+                <div style={{ marginTop: 16 }}>
+                  <Form layout="vertical">
+                    <Form.Item label="要解释的 SQL">
+                      <TextArea
+                        value={aiSqlForExplain}
+                        onChange={(e) => setAiSqlForExplain(e.target.value)}
+                        placeholder="输入要解释的 SQL 语句"
+                        rows={6}
+                      />
+                    </Form.Item>
+                    <Button
+                      type="primary"
+                      icon={<BulbOutlined />}
+                      onClick={handleAiExplainSql}
+                      disabled={aiLoading}
+                      block
+                    >
+                      {aiLoading ? <Spin size="small" /> : "解释执行逻辑"}
+                    </Button>
+                  </Form>
+                </div>
+              ),
+            },
+            {
+              key: "diagnose",
+              label: (
+                <Space>
+                  <BugOutlined />
+                  错误诊断
+                </Space>
+              ),
+              children: (
+                <div style={{ marginTop: 16 }}>
+                  <Form layout="vertical">
+                    <Form.Item label="错误信息">
+                      <Input
+                        value={aiErrorMessage}
+                        onChange={(e) => setAiErrorMessage(e.target.value)}
+                        placeholder="复制的错误信息"
+                      />
+                    </Form.Item>
+                    <Form.Item label="执行的 SQL">
+                      <TextArea
+                        value={aiSqlForError}
+                        onChange={(e) => setAiSqlForError(e.target.value)}
+                        placeholder="执行失败的 SQL 语句"
+                        rows={4}
+                      />
+                    </Form.Item>
+                    <Button
+                      type="primary"
+                      icon={<BugOutlined />}
+                      onClick={handleAiDiagnoseError}
+                      disabled={aiLoading}
+                      block
+                    >
+                      {aiLoading ? <Spin size="small" /> : "诊断问题"}
+                    </Button>
+                  </Form>
+                </div>
+              ),
+            },
+            {
+              key: "explainResults",
+              label: (
+                <Space>
+                  <DatabaseOutlined />
+                  解释结果
+                </Space>
+              ),
+              children: (
+                <div style={{ marginTop: 16 }}>
+                  <Alert
+                    title="提示"
+                    description="执行查询后，可使用此功能分析查询结果"
+                    type="info"
+                    style={{ marginBottom: 16 }}
+                  />
+                  <Button
+                    type="primary"
+                    icon={<BulbOutlined />}
+                    onClick={handleAiExplainResults}
+                    disabled={aiLoading || queryResults.length === 0}
+                    block
+                  >
+                    {aiLoading ? <Spin size="small" /> : "分析查询结果"}
+                  </Button>
+                </div>
+              ),
+            },
+          ]}
+        />
+
+        {aiTextError && (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            onClose={() => setAiTextError("")}
+            style={{ marginTop: 16 }}
+            title="这一条没答上来"
+            description={
+              <div style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 12 }}>
+                {aiTextError}
+              </div>
+            }
+          />
+        )}
+
+        {aiResult && (
+          <Card
+            title="AI 回答"
+            style={{ marginTop: 16 }}
+            extra={
+              <Button size="small" onClick={() => copy(aiResult)}>
+                复制
+              </Button>
+            }
+          >
+            <Typography style={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
+              {aiResult}
+            </Typography>
+          </Card>
+        )}
+      </Modal>
+
+      {/* T-045 写入审批 Modal */}
+      <Modal
+        open={!!pendingApproval}
+        title={
+          <Space>
+            <Tag color="orange">写入审批</Tag>
+            <span>{pendingApproval?.display?.title ?? "确认高风险 SQL"}</span>
+          </Space>
+        }
+        onCancel={() => {
+          approvalPendingRef.current?.(null);
+          setPendingApproval(null);
+        }}
+        okButtonProps={{
+          danger: true,
+          disabled: !pendingApproval || pendingGrant !== null,
+        }}
+        okText="授权执行"
+        cancelText="取消"
+        onOk={() => {
+          if (!pendingApproval) return;
+          const g = buildGrant(pendingApproval);
+          setPendingGrant(g);
+          approvalPendingRef.current?.(g);
+          setPendingApproval(null);
+        }}
+        width={640}
+      >
+        {pendingApproval && (
+          <Space orientation="vertical" style={{ width: "100%" }} size="middle">
+            <Alert
+              type="warning"
+              showIcon
+              title={
+                pendingApproval.display?.detail ??
+                "此 SQL 包含写入/危险子句，需要显式审批"
+              }
+              description={
+                <span>
+                  环境：
+                  <Tag color="blue">{pendingApproval.environment}</Tag>
+                  TTL：{pendingApproval.ttlSec}s ｜ 仅本次有效 ｜ 摘要绑定 SQL 全文
+                </span>
+              }
+            />
+            <Card size="small" title="待执行 SQL">
+              <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: 12 }}>
+                {pendingApproval.sql}
+              </pre>
+            </Card>
+            <Card size="small" title="校验信息">
+              <ul style={{ paddingLeft: 18, margin: 0 }}>
+                <li>审批 ID 将自动生成（UUID v4）</li>
+                <li>SQL 摘要由前 64 字符 + 长度组成</li>
+                <li>超过 TTL 或摘要变化将导致后端拒绝执行</li>
+                <li>单次使用，已使用后无法重放</li>
+              </ul>
+            </Card>
+          </Space>
+        )}
+      </Modal>
+
+      {/* T-037 导入连接 Modal */}
+      <Modal
+        open={showImportModal}
+        title="导入连接配置"
+        onCancel={() => setShowImportModal(false)}
+        onOk={confirmImport}
+        okText="导入所选"
+        cancelText="取消"
+        okButtonProps={{ disabled: importPreview.length === 0 || !!importError }}
+        width={720}
+      >
+        {importError ? (
+          <Alert type="error" showIcon title="导入校验失败" description={importError} />
+        ) : (
+          <Space orientation="vertical" style={{ width: "100%" }} size="middle">
+            <Alert
+              type="info"
+              showIcon
+              title={`将导入 ${importPreview.length} 条连接`}
+              description="导入的连接不携带密码；如有重名会自动追加 (导入) 后缀。"
+            />
+            <Table
+              size="small"
+              dataSource={importPreview}
+              rowKey={(r) => `${r.db_type}-${r.name}-${r.host}`}
+              pagination={false}
+              columns={[
+                { title: "名称", dataIndex: "name", key: "name" },
+                { title: "驱动", dataIndex: "db_type", key: "db_type" },
+                { title: "主机", dataIndex: "host", key: "host" },
+                { title: "端口", dataIndex: "port", key: "port" },
+                { title: "用户名", dataIndex: "username", key: "username" },
+                { title: "数据库", dataIndex: "database", key: "database" },
+              ]}
+            />
+          </Space>
+        )}
+      </Modal>
+
+      {/* 批量执行结果 Modal */}
+      <Modal
+        open={showBatchModal}
+        title={`批量执行结果（${batchResults?.length ?? 0} 条）`}
+        onCancel={() => setShowBatchModal(false)}
+        footer={[
+          <Button key="close" onClick={() => setShowBatchModal(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={820}
+      >
+        <Table
+          size="small"
+          dataSource={batchResults ?? []}
+          rowKey={(_, i) => String(i)}
+          pagination={false}
+          columns={[
+            {
+              title: "#",
+              key: "idx",
+              width: 48,
+              render: (_: any, __: any, i: number) => i + 1,
+            },
+            {
+              title: "语句",
+              key: "sql",
+              render: (r: any) => (
+                <Text code style={{ fontSize: 12 }}>
+                  {r.sql.length > 120 ? `${r.sql.slice(0, 120)}…` : r.sql}
+                </Text>
+              ),
+            },
+            {
+              title: "结果",
+              key: "msg",
+              width: 120,
+              render: (r: any) => (
+                <Tag color={r.ok ? "green" : "red"}>{r.ok ? r.message : r.message}</Tag>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      {/* CSV 导入计划 Modal —— 先看，再写 */}
+      <Modal
+        open={!!csvPlan}
+        title="导入 CSV（确认后才会写入数据库）"
+        onCancel={() => {
+          setCsvPlan(null);
+          setCsvPath("");
+        }}
+        onOk={doCsvImport}
+        okText="确认导入"
+        cancelText="取消"
+        confirmLoading={csvImporting}
+        okButtonProps={{ disabled: !csvPlan || csvPlan.import_rows === 0 }}
+        width={860}
+      >
+        {csvPlan && (
+          <Space orientation="vertical" style={{ width: "100%" }} size="middle">
+            <Alert
+              type={csvPlan.encoding_confidence >= 0.8 ? "info" : "warning"}
+              showIcon
+              title={`文件：${csvPath}`}
+              description={
+                `文件共 ${csvPlan.total_rows} 行数据，**真正会写入 ${csvPlan.import_rows} 行**` +
+                `（空行不生成语句）；编码判定 ${csvPlan.encoding}` +
+                `（置信度 ${csvPlan.encoding_confidence.toFixed(2)}）。` +
+                (csvPlan.encoding_confidence < 0.8
+                  ? "置信度偏低，导入后中文可能乱码 —— 先确认编码再导。"
+                  : "下面只预览前几行，确认无误再导入。")
+              }
+            />
+            <Table
+              size="small"
+              dataSource={(csvPlan.sample_rows ?? []).map((r, i) => ({ _k: i, r }))}
+              rowKey="_k"
+              pagination={false}
+              columns={(csvPlan.headers ?? []).map((h, i) => ({
+                title: h,
+                key: `c${i}`,
+                render: (row: any) => row.r[i] ?? "",
+              }))}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              将导入到表 <Text code>{csvPlan.table_name}</Text>（表名取自文件名，可在下方改；
+              改完会重新出计划，审批摘要也跟着重算）
+            </Text>
+            <Input
+              size="small"
+              value={csvPlan.table_name}
+              onChange={(e) => renameCsvTarget(e.target.value)}
+              placeholder="目标表名"
+              style={{ width: 320 }}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              审批摘要绑定的是：<Text code>{csvPlan.canonical}</Text>
+            </Text>
+          </Space>
+        )}
+      </Modal>
+    </>
+  );
+}
+
+export default App;

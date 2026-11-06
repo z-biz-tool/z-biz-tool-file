@@ -32,6 +32,8 @@ import {
   ColumnHeightOutlined,
   RadarChartOutlined,
   CodeOutlined,
+  // 数据库板块（2026-11-06 从 z-biz-tool-db 仓搬入）
+  DatabaseOutlined,
   CopyFilled,
   SwapOutlined,
   SafetyCertificateOutlined,
@@ -227,6 +229,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   { key: "files", label: "文件管理", icon: <FolderOpenOutlined /> },
   { key: "terminal", label: "终端", icon: <CodeOutlined /> },
   { key: "library", label: "图书馆", icon: <ReadOutlined /> },
+  // 数据库板块：2026-11-06 从 z-biz-tool-db 仓搬入（db 独立 app 废弃）。
+  // 排在图书馆之后 —— 它和图书馆一样是「叠在主区上的独立工作台」，
+  // 与文件管理的浏览树不是一回事。
+  { key: "db", label: "数据库", icon: <DatabaseOutlined /> },
 ];
 
 /**
@@ -244,6 +250,16 @@ const TerminalApp = lazy(() => import("./apps/terminal/TerminalApp"));
  * 首屏在文件管理时完全用不到，没必要让每个用户都下载一遍书目界面。
  */
 const LibraryApp = lazy(() => import("./apps/library/LibraryApp"));
+
+/**
+ * 数据库板块同样按需加载。
+ *
+ * 2026-11-06 从 z-biz-tool-db 仓搬入（db 独立 app 废弃，能力并入本仓）。
+ * 它比终端还重：SQL 编辑器（CodeMirror）、图表（recharts）、报表工作台，
+ * 静态 import 会把首屏 bundle 撑大一大截 —— 而这些代码只有用户真的点了
+ * 活动栏第四个图标才需要。
+ */
+const DbApp = lazy(() => import("./apps/db/DbApp"));
 
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
@@ -2807,6 +2823,28 @@ function AppShellInner() {
           }
         >
           <LibraryApp />
+        </Suspense>
+      ) : activeApp === "db" ? (
+        // 数据库板块：2026-11-06 从 z-biz-tool-db 仓搬入。
+        // 同样是整块替换 —— 它自带连接列表侧栏 + SQL 编辑器 + 报表工作台，
+        // 与文件管理的「路径 + 标签条」和图书馆的「归纳 + 书目 + 阅读」都不是一回事。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在打开数据库…
+            </div>
+          }
+        >
+          <DbApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

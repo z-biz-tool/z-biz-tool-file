@@ -226,6 +226,50 @@ pub fn save_ai_config(config: AiConfigDraft) -> Result<(), String> {
     write_shared_config(&config)
 }
 
+/// AI 配置是否就绪（前端「AI 面板」的可用性指示）。
+///
+/// 2026-11-06 数据库板块并入本仓时补上 —— db 仓原先有这一对
+/// `AiConfigStatus` / `get_ai_config_status`，本仓原先没有。db 那份是
+/// 同一套 `cap_llm_config` 的副本，合并时统一到本模块，避免两份实现漂移。
+///
+/// 判据只有一份，且这一份就是发请求前真正用的那份
+/// （`cap_llm::LlmConfig::validate()`）⇒ 前端显示的「能用」与后端的
+/// 实际行为**必然一致**，不存在第二套口径。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConfigStatus {
+    /// 是否已配置到能发请求。
+    pub configured: bool,
+    /// 没配好时的一句人话（配好了则为空串）。
+    pub reason: String,
+}
+
+/// 查 AI 配置是否就绪。
+#[tauri::command]
+pub fn get_ai_config_status() -> AiConfigStatus {
+    match current_cap().and_then(|cfg| {
+        cfg.validate().map_err(|e| e.to_string())?;
+        Ok(cfg)
+    }) {
+        Ok(_) => AiConfigStatus {
+            configured: true,
+            reason: String::new(),
+        },
+        Err(reason) => AiConfigStatus {
+            configured: false,
+            reason,
+        },
+    }
+}
+
+/// 本仓发请求时用的配置。
+///
+/// **前端不再回传明文 Key** —— 所有 `ai_*` 命令都从这里取配置。
+pub fn current_cap() -> Result<cap_llm::LlmConfig, String> {
+    let (cfg, key) = read_shared_config_with_key()?;
+    to_cap(&cfg, &key)
+}
+
 /// 测试 AI 配置是否可用（接受草稿覆盖 —— 用户填完 Key 不用先保存就能测试）。
 ///
 /// 草稿里的 `api_key` 为空时**继承已保存的密钥**。

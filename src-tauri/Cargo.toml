@@ -76,7 +76,9 @@ regex = "1"
 # 只保留「平铺成 ExifInfo 给预览面板」的展示映射。kamadak-exif 随之删依赖。
 cap-img = "0.4.0"
 sha2 = "0.10"
-chrono = "0.4"
+# chrono 需要 serde feature —— 数据库板块的查询结果里日期时间要能序列化给前端。
+# 2026-11-06 数据库板块并入时补上（db 仓原本就是带 serde feature 的）。
+chrono = { version = "0.4", features = ["serde"] }
 
 
 ureq = "2"
@@ -121,6 +123,36 @@ unrar = "0.5"
 sevenz-rust2 = "0.23"
 # 解出来的文件要恢复原修改时间，否则用户按时间排序全乱了
 filetime = "0.2"
+
+# ─────────────────────── 数据库板块（2026-11-06 从 z-biz-tool-db 仓搬入）──
+# db 独立 app 废弃，能力并入本仓成为第四个板块（活动栏里排在图书馆之后）。
+#
+# sqlx 开了四种数据库驱动：MySQL / PostgreSQL / SQLite / SQL Server。
+# 体积代价明显（+约 8MB），但这是 db 能力的核心，不能砍。
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls",
+  "mysql",
+  "postgres",
+  "sqlite",
+  "chrono",
+  "rust_decimal",
+  "uuid",
+  "json",
+] }
+# sqlx 自身的 fetch() 流按 try_next 消费，取够就停（该 crate 本就在 sqlx 依赖树里）
+futures-util = "0.3"
+rust_decimal = { version = "1", default-features = false, features = ["serde"] }
+anyhow = "1"
+thiserror = "1"
+# db 板块的日志（连接池、查询、报表链路）
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# ⚠️ keyring 只在 Windows / Linux 上作为「显式选择的 OS 密钥库后端」使用；
+# macOS 的**默认**后端是自建加密文件（cap-llm-config 的 MultiSecretFile）——
+# 钥匙串 ACL 绑代码签名，本家族 adhoc 签名（cdhash 每次重打包都变）
+# ⇒ 每次读数据库密码都弹授权框。详见 src/db_app/secrets/encfile.rs 头部。
+keyring = "4.2.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # x86_64-apple-darwin 在 arm64 runner 上交叉编译时找不到系统 OpenSSL，
