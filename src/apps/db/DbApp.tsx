@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
-import SqlEditor from "./components/SqlEditor";
 import ErrorBoundary from "./components/ErrorBoundary";
 // 2026-11-06 并入 file：主题走 file 的全局 ThemeProvider，不再自带一套。
 // UpdaterGate 也一并去掉 —— file 有统一的更新中心（UpdateCenterProvider），
@@ -97,6 +96,10 @@ const ReportWorkbench = lazy(() =>
   import("./report/ReportWorkbench").then((m) => ({ default: m.ReportWorkbench })),
 );
 const AgentPanel = lazy(() => import("./agent/AgentPanel"));
+// CodeMirror 有 378KB。静态 import 的话，用户点开数据库板块的那一刻
+// 要同步下载 + 解析 + JIT 这一整坨 —— 首屏不挡，但切板块会顿一下。
+// 改成 lazy：编辑器自己冒出来，骨架位置不变。
+const SqlEditor = lazy(() => import("./components/SqlEditor"));
 import { csvDoc, downloadCsv, stampName } from "./report/csv";
 import { aiSqlGenerate, catalogColumns, listTables, reportDescribeColumns } from "./report/api";
 import { aiDiagnoseError, aiExplainResults, aiExplainSql, aiOptimizeSql } from "./ipc/ai";
@@ -2951,15 +2954,34 @@ function App() {
                         </Space>
                       }
                     >
-                      {/* T-029: CodeMirror 6 SQL 编辑器 */}
-                      <SqlEditor
-                        value={sqlCode}
-                        onChange={setSqlCode}
-                        onRun={() => void executeQuery()}
-                        dialect={selectedConnection?.type === "sqlserver" ? undefined : selectedConnection?.type}
-                        schema={editorSchema}
-                        height="150px"
-                      />
+                      {/* T-029: CodeMirror 6 SQL 编辑器（lazy：CodeMirror 有 378KB） */}
+                      <Suspense
+                        fallback={
+                          <div
+                            style={{
+                              height: "150px",
+                              borderRadius: 6,
+                              background: "var(--ant-color-fill-quaternary, rgba(0,0,0,0.06))",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              编辑器加载中…
+                            </Text>
+                          </div>
+                        }
+                      >
+                        <SqlEditor
+                          value={sqlCode}
+                          onChange={setSqlCode}
+                          onRun={() => void executeQuery()}
+                          dialect={selectedConnection?.type === "sqlserver" ? undefined : selectedConnection?.type}
+                          schema={editorSchema}
+                          height="150px"
+                        />
+                      </Suspense>
                     </Card>
 
                     {/* 查询结果 */}

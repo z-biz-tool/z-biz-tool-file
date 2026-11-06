@@ -4,8 +4,15 @@
 
 import { Alert, Button, Card, Collapse, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { DatabaseOutlined, FieldTimeOutlined } from "@ant-design/icons";
-import { ChartCard } from "./ChartCard";
+import { lazy, Suspense } from "react";
 import type { SqlPreview, ViewPayload } from "./types";
+
+// recharts 有 434KB，静态 import 会把它拖进**首屏**主 chunk ——
+// 可这组件只在报表看板真的画出一张图时才用得上。
+// 2026-11-06 改成 lazy：看板打开时先出一个占位，图再自己补上。
+const ChartCard = lazy(() =>
+  import("./ChartCard").then((m) => ({ default: m.ChartCard })),
+);
 
 const { Text } = Typography;
 
@@ -13,6 +20,31 @@ const { Text } = Typography;
 const GRID_COLUMNS = 12;
 /** 一个栅格行的高度（px），布局里的 h 乘上它才是卡片高度 */
 const ROW_UNIT = 44;
+
+/**
+ * 图表还在加载时的占位。
+ *
+ * recharts 的 chunk 有 434KB，lazy 加载意味着看板会有一小段时间没图。
+ * 留个同尺寸的占位（而不是空白），避免图"啪"地一下弹出来把布局顶得跳。
+ */
+function ChartPlaceholder({ height }: { height: number }) {
+  return (
+    <div
+      style={{
+        height,
+        borderRadius: 8,
+        background: "var(--ant-color-fill-quaternary, rgba(0,0,0,0.06))",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        图表加载中…
+      </Text>
+    </div>
+  );
+}
 
 export function SqlList({ sqls }: { sqls: SqlPreview[] }) {
   if (sqls.length === 0) return <Text type="secondary">这次没有下推任何 SQL</Text>;
@@ -223,13 +255,15 @@ export function ReportBoard({
                 boxSizing: "border-box",
               }}
             >
-              <ChartCard
-                chart={chart}
-                datasetName={datasetNameOf?.(l.widget)}
-                height={l.h * ROW_UNIT}
-                partial={partialOf?.(l.widget)}
-                onNotice={onNotice}
-              />
+              <Suspense fallback={<ChartPlaceholder height={l.h * ROW_UNIT} />}>
+                <ChartCard
+                  chart={chart}
+                  datasetName={datasetNameOf?.(l.widget)}
+                  height={l.h * ROW_UNIT}
+                  partial={partialOf?.(l.widget)}
+                  onNotice={onNotice}
+                />
+              </Suspense>
             </div>
           );
         })}
@@ -247,13 +281,15 @@ export function ReportBoard({
               boxSizing: "border-box",
             }}
           >
-            <ChartCard
-              chart={c}
-              datasetName={datasetNameOf?.(c.widget)}
-              height={6 * ROW_UNIT}
-              partial={partialOf?.(c.widget)}
-              onNotice={onNotice}
-            />
+            <Suspense fallback={<ChartPlaceholder height={6 * ROW_UNIT} />}>
+              <ChartCard
+                chart={c}
+                datasetName={datasetNameOf?.(c.widget)}
+                height={6 * ROW_UNIT}
+                partial={partialOf?.(c.widget)}
+                onNotice={onNotice}
+              />
+            </Suspense>
           </div>
         ))}
       </div>
