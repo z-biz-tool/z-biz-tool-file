@@ -149,8 +149,12 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 「打开」2 个、「刷新表列表」「清空查询历史」2 个、常用查询的「编辑」「删除」2 个、
  * Agent 面板的「发送消息」1 个、图表卡的「导出图表」1 个、报表簿的「移除报表」1 个。
  * 11 个全部带 aria-label（其中 5 个用模板串按名字动态给出，如「删除连接「生产库」」）。
+ * 115 → 117：系统监控板块（src/apps/sys）2026-11-06 从 z-biz-tool-sys 仓搬入，
+ * 带进来 2 个纯图标按钮（进程详情抽屉与进程表的行内操作）。
+ * 这里只调总数、不放松判定 —— 上面那条「每个纯图标按钮都必须有可及名称」
+ * 仍然逐个扫、逐个断言，新搬进来的两个也都带了 aria-label。
  */
-const TOTAL_ICON_ONLY = 115;
+const TOTAL_ICON_ONLY = 117;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {
@@ -166,9 +170,16 @@ describe("图标按钮的可及名称", () => {
     expect(bad).toEqual([]);
   });
 
-  it("每一个只有图标的按钮都带 aria-label", () => {
-    expect(scanTsxs().bad).toEqual([]);
-  });
+  it(
+    "每一个只有图标的按钮都带 aria-label",
+    // 这条要全量扫 src/ 下所有 tsx（约 4 万行），46 个 worker 并发时 CPU 争抢
+    // 会把它顶过默认的 5 秒上限 —— 单独跑只要 1 秒，全量跑会随机翻车。
+    // 给它一个明确的上限，与 themeTokenColors 同理。
+    { timeout: 30_000 },
+    () => {
+      expect(scanTsxs().bad).toEqual([]);
+    },
+  );
 
   it("解析：自闭合才算图标唯一，children 有文字或 aria-label={变量} 都算有名", () => {
     const cases = [

@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Modal, Form, Input, Select, Button, App as AntdApp, Space } from "antd";
 import { TagOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useFileStore } from "../stores/fileStore";
+// 2026-11-06 性能优化：色板与 getTagColor 挪到 utils/tagColor.ts ——
+// 它们不带 React/antd 依赖，留在 App.tsx 的静态 import 链上不会拖回整个弹窗。
+import { TAG_COLORS, getTagColor } from "../utils/tagColor";
 
 interface Props {
   open: boolean;
@@ -10,30 +13,9 @@ interface Props {
   fileName: string;
 }
 
-const COLORS = [
-  { value: "", label: "无" },
-  { value: "red", label: "红", color: "#f5222d" },
-  { value: "orange", label: "橙", color: "#fa8c16" },
-  { value: "yellow", label: "黄", color: "#fadb14" },
-  { value: "green", label: "绿", color: "#52c41a" },
-  { value: "blue", label: "蓝", color: "#1677ff" },
-  { value: "purple", label: "紫", color: "#722ed1" },
-  { value: "gray", label: "灰", color: "#8c8c8c" },
-];
+const COLORS = TAG_COLORS;
 
-const COLOR_HEX: Record<string, string> = {
-  red: "#f5222d",
-  orange: "#fa8c16",
-  yellow: "#fadb14",
-  green: "#52c41a",
-  blue: "#1677ff",
-  purple: "#722ed1",
-  gray: "#8c8c8c",
-};
-
-export function getTagColor(name: string): string | undefined {
-  return COLOR_HEX[name];
-}
+export { getTagColor };
 
 export default function TagEditModal({ open, onClose, filePath, fileName }: Props) {
   const { message } = AntdApp.useApp();

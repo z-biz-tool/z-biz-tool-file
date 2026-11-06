@@ -86,6 +86,12 @@ tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
 # 更新安装后的「立即重启」：terminal 前端 UpdaterGate 用到 process 插件
 tauri-plugin-process = "2"
+# ── 系统板块（2026-11-06 从 z-biz-tool-sys 搬入）用到的依赖 ──
+# sysinfo: CPU/内存/磁盘/网络的采集源；libc: macOS 上的 sysctl / proc_pidpath 等原生调用；
+# notification: 告警要发系统通知（只从 Rust 侧投递，capabilities 不需要加权限项）。
+sysinfo = "0.33"
+libc = "0.2"
+tauri-plugin-notification = "2.4.0"
 dirs = "5"
 
 # ─────────────────────── 终端板块（2026-11-04 从 z-biz-tool-terminal 仓搬入）──

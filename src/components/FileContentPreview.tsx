@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense, type CSSProperties } from "react";
 import { Empty, Tooltip, Button, Modal, Spin, App as AntdApp } from "antd";
 import {
   CopyOutlined,
@@ -14,18 +14,32 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getFileType, formatFileSize, formatTime, type FileEntry } from "../stores/fileStore";
 import { LoadingState, ErrorState, EmptyState } from "../_shared";
 import { useShortcutHint } from "../_shared/ShortcutHints";
-import EpubReader from "./EpubReader";
-import PdfViewer from "./PdfViewer";
-import OfficePreview from "./OfficePreview";
-import AudioPlayer from "./AudioPlayer";
-import VideoPlayer from "./VideoPlayer";
-import ImageEditor from "./ImageEditor";
-import MarkdownPreview from "./MarkdownPreview";
-import CsvPreview from "./CsvPreview";
-import JsonPreview from "./JsonPreview";
-import YamlPreview from "./YamlPreview";
-import TextConverter from "./TextConverter";
 import { buildExifItems, hasDisplayableExif, type ExifInfo } from "../utils/exifItems";
+
+/**
+ * 2026-11-06 性能优化：11 个阅读器全部走 lazy。
+ *
+ * 每个阅读器只对应一种文件类型（图片/视频/音频/md/csv/json/yaml/epub/pdf/office），
+ * 而用户一次只会打开一种。它们静态 import 在这里，等于**每一种文件类型的
+ * 代码都要在启动时下载 + 解析 + JIT 一遍** —— 哪怕这次只打算看图片。
+ *
+ * 逐文件 sourcemap 归因时，ImageEditor（19KB）、EpubReader（10KB）、
+ * MarkdownPreview 等都在首屏包的前列。
+ *
+ * 注意 `body` 的赋值是「互斥的 switch 分支」—— 同一时刻只有一个会渲染，
+ * 所以 lazy 的加载只会在真正要看那种文件时才发生。
+ */
+const EpubReader = lazy(() => import("./EpubReader"));
+const PdfViewer = lazy(() => import("./PdfViewer"));
+const OfficePreview = lazy(() => import("./OfficePreview"));
+const AudioPlayer = lazy(() => import("./AudioPlayer"));
+const VideoPlayer = lazy(() => import("./VideoPlayer"));
+const ImageEditor = lazy(() => import("./ImageEditor"));
+const MarkdownPreview = lazy(() => import("./MarkdownPreview"));
+const CsvPreview = lazy(() => import("./CsvPreview"));
+const JsonPreview = lazy(() => import("./JsonPreview"));
+const YamlPreview = lazy(() => import("./YamlPreview"));
+const TextConverter = lazy(() => import("./TextConverter"));
 
 interface FileContentPreviewProps {
   file: FileEntry;
@@ -418,15 +432,26 @@ export default function FileContentPreview({
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {topbar}
       <div style={{ flex: 1, overflow: "auto", background: "var(--ant-color-bg-layout)" }}>
-        {body}
+        {/* 阅读器都是 lazy 的，加载期间给个骨架 —— 不然会是一片空白，
+            用户会以为程序卡死了 */}
+        <Suspense fallback={<LoadingState tip="加载预览中..." minHeight={300} />}>
+          {body}
+        </Suspense>
       </div>
-      <TextConverter
-        open={showConverter}
-        filePath={file.path}
-        fileName={file.name}
-        content={textContent}
-        onClose={() => setShowConverter(false)}
-      />
+      {/* 文本转换器是弹窗形态（open 语义），但它被无条件渲染 ——
+          lazy 组件在首帧就会发起 import，等于又把它拖回首屏。
+          所以这里只在 showConverter 为真时才挂载。 */}
+      {showConverter && (
+        <Suspense fallback={null}>
+          <TextConverter
+            open={showConverter}
+            filePath={file.path}
+            fileName={file.name}
+            content={textContent}
+            onClose={() => setShowConverter(false)}
+          />
+        </Suspense>
+      )}
       <Modal
         open={aiSummaryOpen}
         onCancel={() => setAiSummaryOpen(false)}

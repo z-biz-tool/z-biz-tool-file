@@ -210,8 +210,20 @@ export default function ActivityBar({
                 aria-label={item.label}
                 disabled={item.disabled}
                 onClick={() => {
-                  // 点已激活的项 = 收起面板区（VS Code 的行为）。
-                  // 这样用户永远有一条「关掉侧边面板」的路，不必去按标题栏的折叠按钮。
+                  // 两类入口的语义不同，必须分开走（原来只有下面那一行，
+                  // 于是「工具箱 / 下载 / 远程 / 回收站」这四个配了 onClick 的
+                  // 入口点了完全没反应 —— 它们的动作根本没被调用过）：
+                  //
+                  // - **弹窗型**（onClick）：工具箱、下载、远程、回收站。点一下
+                  //   打开一个弹窗/管理器，栏上不留选中态（弹窗关掉后没有
+                  //   「这个入口正开着」这回事）。
+                  // - **面板型**（无 onClick）：搜索、收藏夹、暂存栈、终端。
+                  //   切换面板区的展开与收起；再点一次收起（VS Code 的行为），
+                  //   这样用户永远有一条关掉侧边面板的路。
+                  if (item.onClick) {
+                    item.onClick();
+                    return;
+                  }
                   onActiveChange(isActive ? "" : item.key);
                 }}
                 style={{

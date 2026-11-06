@@ -1,0 +1,175 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #f5f5f5;
+}
+
+#root {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* 监控卡片样式 */
+.monitor-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s;
+}
+
+.monitor-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.monitor-card-title {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.monitor-card-value {
+  font-size: 24px;
+  font-weight: 600;
+  color: #333;
+}
+
+.monitor-card-unit {
+  font-size: 14px;
+  color: #999;
+  margin-left: 4px;
+}
+
+/* 进度条样式 */
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* 状态指示器 */
+.status-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+.status-normal {
+  background: #52c41a;
+}
+
+.status-warning {
+  background: #faad14;
+}
+
+.status-critical {
+  background: #ff4d4f;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* 暗色主题 */
+[data-theme="dark"] body {
+  background: #141414;
+}
+
+[data-theme="dark"] .monitor-card {
+  background: #1f1f1f;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .monitor-card-value {
+  color: #fff;
+}
+
+[data-theme="dark"] .progress-bar {
+  background: #333;
+}
+/* 网络接口表：当前选中的接口（画曲线的那个） */
+.net-row-selected > td {
+  background: rgba(102, 126, 234, 0.12) !important;
+}
+
+[data-theme="dark"] .net-row-selected > td {
+  background: rgba(102, 126, 234, 0.24) !important;
+}
+
+/* 900×600 实战：顶栏右侧 10 个控件合计约 1050 px，挤在 900 里会把标题压成竖排。
+   窄窗把按钮文字收成图标、隐去主机名并收紧间距，顶栏回到一行；更窄时仍允许整体换行。 */
+@media (max-width: 1100px) {
+  .zm-header {
+    padding-inline: 12px !important;
+  }
+
+  .zm-header .zm-host {
+    display: none;
+  }
+
+  /* 窄窗只留图标：文字藏在 .zm-action-label 里，仍带 aria-label 与 Tooltip */
+  .zm-header .zm-actions {
+    column-gap: 8px !important;
+    row-gap: 8px !important;
+  }
+
+  .zm-header .zm-action-label {
+    display: none;
+  }
+
+  /* 卡片标题 + extra 是同一行 flex；extra 里的工具栏比标题宽时必须换行而不是互相挤压 */
+  .zm-header + .ant-layout-content .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .zm-header + .ant-layout-content .ant-card-head-title {
+    flex: 1 1 100%;
+  }
+
+  .zm-header + .ant-layout-content .ant-card-extra {
+    margin-inline-start: 0;
+    flex: 1 1 100%;
+  }
+
+  .zm-header + .ant-layout-content .ant-card-extra .ant-space {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    max-width: 100%;
+  }
+}

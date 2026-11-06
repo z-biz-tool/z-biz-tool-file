@@ -2,7 +2,7 @@
 // 不引原仓的 index.css：它前半段是本仓已有的全局 reset + --tool-* 变量
 // （同一个家族模板，src/index.css 已经导过一遍），重复引入只会让变量被覆盖两次。
 import "./terminal.css";
-import React, { Suspense, useEffect, useRef, useState, useCallback } from "react";
+import React, { Suspense, lazy, useEffect, useRef, useState, useCallback } from "react";
 import { useAIStore } from "./stores/aiStore";
 import { Tabs, theme, Button, Space, Tag, Tooltip, Dropdown, message, Divider } from "antd";
 import type { MenuProps } from "antd";
@@ -35,7 +35,6 @@ import {
   KeyOutlined,
 } from "@ant-design/icons";
 import ServerList from "./components/ServerList";
-import TerminalView from "./components/TerminalView";
 import SftpPanel from "./components/SftpPanel";
 import SnippetsPanel from "./components/SnippetsPanel";
 import CommandPalette from "./components/CommandPalette";
@@ -46,7 +45,7 @@ import DangerConfirmHost from "./components/DangerConfirm";
 import HostKeyPrompt from "./components/HostKeyPrompt";
 import { activeRecentOutput, activeSelection, feedActiveTerminal } from "./services/terminalFeeds";
 import { useServerStore } from "./stores/serverStore";
-import { AppShell, ThemeProvider, EmptyState, AppErrorBoundary, PanelErrorBoundary } from "./_shared";
+import { AppShell, ThemeProvider, EmptyState, LoadingState, AppErrorBoundary, PanelErrorBoundary } from "./_shared";
 import { auditEvent } from "./services/auditLog";
 // 深链由 host（file 的 App.tsx）统一接收后转投到这里，本板块不再自己注册接收器
 import { takePendingTerminalHandoff, subscribeTerminalHandoff } from "./handoff";
@@ -69,6 +68,19 @@ import { envMeta, isProd } from "./utils/environment";
 import { FONT_SIZE_DEFAULT, FONT_SIZE_STEP, stepFontSize } from "./utils/fontZoom";
 import { lazyPanel } from "./_shared/lazyPanel";
 import EnvBadge from "./components/EnvBadge";
+
+/**
+ * 终端画布走 lazy。
+ *
+ * @xterm/xterm + addon-fit 约 394KB，静态 import 的话 —— 切到终端板块那一刻
+ * 要同步下载 + 解析 + JIT 这一整坨，终端会白一下再出来。
+ * 拆成独立 chunk 后，终端板块的骨架先出来，xterm 到位再画。
+ *
+ * 注意别用 lazyPanel：它是给「靠 open 显隐的弹窗」写的，
+ * 而终端画布是常驻内容、靠 tabs 渲染的，没有 open 这层语义。
+ */
+const TerminalView = lazy(() => import("./components/TerminalView"));
+
 const SettingsModal = lazyPanel(() => import("./components/SettingsModal"));
 const ShortcutsModal = lazyPanel(() => import("./components/ShortcutsModal"));
 const SessionLogModal = lazyPanel(() => import("./components/SessionLogModal"));
@@ -1081,7 +1093,9 @@ function AppInner() {
                     >
                       {tab.panes.length <= 1 ? (
                         <PanelErrorBoundary label="终端面板">
-                          <TerminalView tabId={tab.id} paneId={tab.panes[0]?.id} />
+                          <Suspense fallback={<LoadingState tip="正在装载终端…" minHeight={120} />}>
+                            <TerminalView tabId={tab.id} paneId={tab.panes[0]?.id} />
+                          </Suspense>
                         </PanelErrorBoundary>
                       ) : (
                         tab.panes.map((pane, i) => {
@@ -1126,7 +1140,9 @@ function AppInner() {
                                 onMouseDown={() => setActivePane(tab.id, pane.id)}
                               >
                                 <PanelErrorBoundary label="终端面板">
-                                  <TerminalView tabId={tab.id} paneId={pane.id} />
+                                  <Suspense fallback={<LoadingState tip="正在装载终端…" minHeight={120} />}>
+                                    <TerminalView tabId={tab.id} paneId={pane.id} />
+                                  </Suspense>
                                 </PanelErrorBoundary>
                                 {tab.panes.length > 1 && (
                                   <div

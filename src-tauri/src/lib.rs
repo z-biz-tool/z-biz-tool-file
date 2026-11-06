@@ -47,6 +47,16 @@ mod tags;
 // 避免和本仓已有的 commands / ai / ... 撞名。见 src/terminal/mod.rs。
 mod terminal;
 mod trash;
+// 系统监控 / 清理 / 大文件 / 进程管理：从 z-biz-tool-sys 仓整体搬入，
+// 作为 file 的第五个板块（活动栏「系统」图标）。
+// 2026-11-06 起 sys 独立 app 废弃，能力只维护这一份。
+// 整棵树挂在 crate::sys_app::* 下，避免和本仓已有的 commands / monitor / ... 撞名。
+//
+// 和 db_app 一样要显式 #[path]：搬进来后目录名变成了 sys_app，
+// 与 Rust 2018 的「目录名 = 模块名」规则对不上，必须指到 sys_app/lib.rs。
+// 它没有 run()（Tauri Builder 归本仓管），对外只暴露 attach() + startup()。
+#[path = "sys_app/lib.rs"]
+pub mod sys_app;
 mod updater;
 mod video_thumb;
 mod watcher;
@@ -58,9 +68,9 @@ use watcher::WatcherState;
 pub fn run() {
     // 深链队列：manage 给命令用、seed 给冷启动用，两处必须是同一份。
     let zbiz_pending = cap_hub::receiver::SharedPending::default();
-    tauri::Builder::default()
-        // 单实例（2026-10-26 分发底座）：第二次启动聚焦已有窗口，不再开新进程。
-        // 必须作为第一个注册的插件（tauri-plugin-single-instance 官方要求）。
+    // 先攒到 builder 里，最后再交给 sys_app::attach 接上系统板块的状态。
+    let builder = tauri::Builder::default()
+        // 单实例（2026-10-26 分发底座）：第二次启动聚焦已有窗口，不再开新进程。        // 必须作为第一个注册的插件（tauri-plugin-single-instance 官方要求）。
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -74,11 +84,21 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 更新装完「立即重启」用（终端板块的 UpdaterGate 会调，file 自己不用）
         .plugin(tauri_plugin_process::init())
+        // 系统板块的告警要发系统通知。sys 原来只从后端 Rust API 投递
+        // （不走 JS 通道），所以 capabilities 不需要加 notification 权限项。
+        .plugin(tauri_plugin_notification::init())
         .manage(WatcherState::default())
         .manage(aria2::Aria2State::default())
         .manage(archive::job::Jobs::default())
         .manage(operation::Operations::default())
-        .manage(zbiz_pending.clone())
+        .manage(zbiz_pending.clone());
+
+    // 系统板块的状态（采集服务 / 告警 / 通知）由 sys_app::attach 挂上去 ——
+    // 它的 new() 与 publish() 必须紧挨着执行，不适合在这里散成三行 manage。
+    // 链到这里断一次，是因为 attach 是个自由函数，没法接进上面的 builder 链。
+    let builder = sys_app::attach(builder);
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::list_directory,
             commands::list_directory_paged,
@@ -371,6 +391,41 @@ pub fn run() {
             db_app::save_report,
             db_app::load_reports,
             db_app::delete_report,
+            // ── 系统板块（2026-11-06 从 z-biz-tool-sys 搬入）──
+            // 唯一没搬的是 `zbiz_take_pending`：它是家族统一深链命令，
+            // 本仓上面已经注册过一份，同名重复注册会让 Tauri 在启动时 panic。
+            sys_app::commands::get_static_info,
+            sys_app::commands::get_metrics_snapshot,
+            sys_app::commands::get_history,
+            sys_app::commands::get_alert_history,
+            sys_app::commands::set_monitor_config,
+            sys_app::commands::get_alert_config,
+            sys_app::commands::set_alert_config,
+            sys_app::commands::start_process_stream,
+            sys_app::commands::stop_process_stream,
+            sys_app::commands::set_process_query,
+            sys_app::commands::get_processes,
+            sys_app::commands::get_process_rollup,
+            sys_app::commands::get_listening_sockets,
+            sys_app::commands::get_process_detail,
+            sys_app::commands::validate_kill,
+            sys_app::commands::kill_process,
+            sys_app::commands::flush_dns_cache,
+            sys_app::commands::scan_junk_files,
+            sys_app::commands::cancel_junk_scan,
+            sys_app::commands::cleanup_junk_files,
+            sys_app::commands::find_large_files_cmd,
+            sys_app::commands::get_startup_items_cmd,
+            sys_app::commands::disable_startup_item,
+            sys_app::commands::remove_startup_item,
+            sys_app::commands::restore_startup_item,
+            sys_app::commands::export_prefs_file,
+            sys_app::commands::import_prefs_file,
+            sys_app::commands::agent_query,
+            sys_app::commands::get_thermal,
+            sys_app::commands::export_history_csv,
+            sys_app::commands::notify_status,
+            sys_app::commands::send_test_notification,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
@@ -413,6 +468,10 @@ pub fn run() {
             // 原来这套逻辑在 db 仓自己的 run() 里；并入后 file 是唯一的 app，
             // 启动钩子归这里统一管。看门狗每 60 秒扫一次，回收空闲超 5 分钟的池。
             db_app::spawn_pool_lifecycle();
+            // 系统板块（2026-11-06 从 sys 仓搬入）：历史存储 + 采集循环。
+            // 必须放在 setup 里而不是 attach 里 —— 它要解析 app_local_data_dir，
+            // Builder 阶段还没有 AppHandle。
+            sys_app::startup(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

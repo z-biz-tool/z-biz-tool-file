@@ -34,6 +34,7 @@ import {
   CodeOutlined,
   // 数据库板块（2026-11-06 从 z-biz-tool-db 仓搬入）
   DatabaseOutlined,
+  DashboardOutlined,
   CopyFilled,
   SwapOutlined,
   SafetyCertificateOutlined,
@@ -45,6 +46,7 @@ import {
   ThunderboltOutlined,
   PieChartOutlined,
   PictureOutlined,
+  PicRightOutlined,
   VideoCameraOutlined,
   AudioOutlined,
   RocketOutlined,
@@ -64,6 +66,9 @@ import { putTerminalHandoff } from "./apps/terminal/handoff";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
+// 标签色板与配色函数单独住一个文件：App.tsx 只用 getTagColor 一个纯函数，
+// 从 TagEditModal 里 import 会把整个弹窗（连带 antd Form/Select）静态拖回首屏。
+import { getTagColor } from "./utils/tagColor";
 import { Skeleton } from "antd";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { resolveHomeDir, homeDirSync } from "./utils/homeDir";
@@ -77,39 +82,19 @@ import {
 import PreviewPane from "./components/PreviewPane";
 import SearchBar from "./components/SearchBar";
 import Bookmarks from "./components/Bookmarks";
-import BatchRename from "./components/BatchRename";
-import FileProperties from "./components/FileProperties";
 import GridView from "./components/GridView";
 import DualPanelView from "./components/DualPanelView";
 import BuiltInTerminal from "./components/BuiltInTerminal";
 import DropStack from "./components/DropStack";
-import DuplicateFinder from "./components/DuplicateFinder";
-import HashCalculator from "./components/HashCalculator";
-import DirectorySync from "./components/DirectorySync";
 import WorkspaceManager, { type Workspace } from "./components/WorkspaceManager";
-import SettingsModal from "./components/SettingsModal";
-import TrashModal from "./components/TrashModal";
 import TabsBar from "./components/TabsBar";
-import SftpModal from "./components/SftpModal";
-import StorageAnalyzerModal from "./components/StorageAnalyzerModal";
-import TagEditModal, { getTagColor } from "./components/TagEditModal";
-import QuickActionsModal from "./components/QuickActionsModal";
-import ShortcutHelp from "./components/ShortcutHelp";
 import GitStatus from "./components/GitStatus";
 import ColumnView from "./components/ColumnView";
 import FileTagsPanel from "./components/FileTagsPanel";
-import NewFileTemplate from "./components/NewFileTemplate";
-import ArchiveExplorer from "./components/ArchiveExplorer";
-import ArchiveCreateDialog, { type CreateSource } from "./components/ArchiveCreateDialog";
+import type { CreateSource } from "./components/ArchiveCreateDialog";
 import ArchiveJobPanel from "./components/ArchiveJobPanel";
 import { useArchiveJobStore } from "./stores/archiveJobStore";
 import { describeArchiveError, fsBaseName, joinFsPath, type ExtractOptions } from "./utils/archiveModel";
-import PdfTools from "./components/PdfTools";
-import DiffViewer from "./components/DiffViewer";
-import OcrTool from "./components/OcrTool";
-import Aria2Manager from "./components/Aria2Manager";
-import LibraryView from "./components/LibraryView";
-import Updater from "./components/Updater";
 import {
   UpdateCenterProvider,
   UpdateLauncher,
@@ -117,6 +102,8 @@ import {
 } from "./components/UpdateCenter";
 import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
+// 「点开才用」的弹窗统一走 lazyModal（open 为真才挂载，否则不发起 import）
+import { lazyModal } from "./_shared/lazyModal";
 import {
   ThemeProvider,
   AppShell,
@@ -129,7 +116,6 @@ import {
   ShortcutHintsProvider,
 } from "./_shared/ShortcutHints";
 import Omnibar from "./_shared/Omnibar";
-import { MediaGallery } from "./components/MediaGallery";
 import ActivityBar, { ActivityBarMore, type ActivityBarApp, type ActivityBarItem } from "./components/ActivityBar";
 import SidebarPanel from "./components/SidebarPanel";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
@@ -233,6 +219,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   // 排在图书馆之后 —— 它和图书馆一样是「叠在主区上的独立工作台」，
   // 与文件管理的浏览树不是一回事。
   { key: "db", label: "数据库", icon: <DatabaseOutlined /> },
+  // 系统板块：2026-11-06 从 z-biz-tool-sys 仓搬入（sys 独立 app 废弃）。
+  // 排最后 —— 它是「整机的视角」，前面四个都是「内容/数据的视角」；
+  // 用户从具体文件一路看到底层资源，顺序上是收口的位置。
+  { key: "sys", label: "系统监控", icon: <DashboardOutlined /> },
 ];
 
 /**
@@ -260,6 +250,66 @@ const LibraryApp = lazy(() => import("./apps/library/LibraryApp"));
  * 活动栏第四个图标才需要。
  */
 const DbApp = lazy(() => import("./apps/db/DbApp"));
+
+/**
+ * 系统监控板块同样按需加载。
+ *
+ * 2026-11-06 从 z-biz-tool-sys 仓搬入（sys 独立 app 废弃，能力并入本仓）。
+ * 它是八个 tab 一整套（概览/磁盘/网络/进程/清理/大文件/启动项/系统信息）
+ * 外加采集曲线与告警面板 —— 首屏完全用不到，只有点了活动栏第五个图标才需要。
+ *
+ * 这一条不只是为了首屏体积：它的 hooks 一挂载就会 start_process_stream
+ * 拉进程流，静态 import 等于让所有用户一进文件管理就开始采进程表。
+ */
+const SysApp = lazy(() => import("./apps/sys/SysApp"));
+
+/**
+ * 「点开才用」的功能组件 —— 一律走 lazyModal。
+ *
+ * 这些组件原来是静态 import，全部躺在首屏包里。2026-11-06 用 sourcemap
+ * 逐个归因才发现：首屏 1733KB 里排第一的不是 antd 本体，而是这一批
+ * 「open=false 时压根不显示」的弹窗（归档浏览器、PDF 工具、OCR、差异对比…）。
+ *
+ * 为什么是 lazyModal 而不是裸 lazy()：它们的写法是「无条件渲染 + 靠 open 显隐」，
+ * 裸 lazy() 在首帧就会触发 import，等于白拆。lazyModal 多一层「open 为真才挂载」。
+ * 详见 ./_shared/lazyModal.tsx。
+ */
+const BatchRename = lazyModal(() => import("./components/BatchRename"));
+const FileProperties = lazyModal(() => import("./components/FileProperties"));
+const DuplicateFinder = lazyModal(() => import("./components/DuplicateFinder"));
+const HashCalculator = lazyModal(() => import("./components/HashCalculator"));
+const DirectorySync = lazyModal(() => import("./components/DirectorySync"));
+const SettingsModal = lazyModal(() => import("./components/SettingsModal"));
+const TrashModal = lazyModal(() => import("./components/TrashModal"));
+const SftpModal = lazyModal(() => import("./components/SftpModal"));
+const StorageAnalyzerModal = lazyModal(() => import("./components/StorageAnalyzerModal"));
+const QuickActionsModal = lazyModal(() => import("./components/QuickActionsModal"));
+const ShortcutHelp = lazyModal(() => import("./components/ShortcutHelp"));
+const NewFileTemplate = lazyModal(() => import("./components/NewFileTemplate"));
+const ArchiveExplorer = lazyModal(() => import("./components/ArchiveExplorer"));
+const PdfTools = lazyModal(() => import("./components/PdfTools"));
+const DiffViewer = lazyModal(() => import("./components/DiffViewer"));
+const OcrTool = lazyModal(() => import("./components/OcrTool"));
+const Aria2Manager = lazyModal(() => import("./components/Aria2Manager"));
+const LibraryView = lazyModal(() => import("./components/LibraryView"));
+const Updater = lazyModal(() => import("./components/Updater"));
+
+/**
+ * 这三个不能走 lazyModal，都是「同名文件还导出了别的东西」：
+ * - TagEditModal / ArchiveCreateDialog 里有 `getTagColor` / `CreateSource`
+ *   这样的纯函数与类型，lazyModal 的 load 只能取 default，取不到具名导出；
+ * - MediaGallery 外层本来就有 `{mediaLibraryOpen && ...}` 条件渲染，
+ *   裸 lazy() 已经不会在首帧触发 import，不必再加一层。
+ */
+const TagEditModal = lazy(() =>
+  import("./components/TagEditModal").then((m) => ({ default: m.default })),
+);
+const ArchiveCreateDialog = lazy(() =>
+  import("./components/ArchiveCreateDialog").then((m) => ({ default: m.default })),
+);
+const MediaGallery = lazy(() =>
+  import("./components/MediaGallery").then((m) => ({ default: m.MediaGallery })),
+);
 
 // —— AntdApp 内部组件：能够使用 App context（message / modal / notification）
 function AppShellInner() {
@@ -2143,6 +2193,28 @@ function AppShellInner() {
           aria-label={showHidden ? "隐藏隐藏文件" : "显示隐藏文件"}
         />
       </Tooltip>
+      {/* 预览区开关。
+          以前它是「预览区收起时贴在主区右上角」的一颗小按钮 —— 收起之后
+          那个位置空出来，用户反而找不到再打开的入口（唯一的入口藏在了
+          "已经收起"的地方）。挪到顶栏后始终在，且它和刷新/隐藏文件/主题
+          本来就是同一类窗口级动作。
+          分栏视图下不渲染：那个模式本身就是多列预览（下面预览区的
+          渲染条件也写了 `viewMode !== "column"`），放一个永远灰着的按钮
+          只会让人以为坏了。 */}
+      {viewMode !== "column" && (
+        <Tooltip
+          title={`${previewVisible ? "收起预览" : "展开预览"}${hint("显示/隐藏预览区")}`}
+          placement="bottom"
+        >
+          <Button
+            size="small"
+            type={previewVisible ? "primary" : "text"}
+            icon={<PicRightOutlined />}
+            onClick={() => setPreviewVisible((v) => !v)}
+            aria-label={previewVisible ? "收起预览区" : "展开预览区"}
+          />
+        </Tooltip>
+      )}
       <Tooltip title={`快捷键${hint("查看快捷键面板")}`} placement="bottom">
         <Button
           size="small"
@@ -2767,18 +2839,9 @@ function AppShellInner() {
               </div>
             </>
           )}
-          {!previewVisible && (
-            <Tooltip title={`展开预览${hint("显示/隐藏预览区")}`} placement="left">
-              <Button
-                size="small"
-                type="text"
-                icon={<EyeInvisibleOutlined />}
-                onClick={() => setPreviewVisible(true)}
-                style={{ alignSelf: "flex-start", margin: "8px 4px" }}
-                aria-label="展开预览区"
-              />
-            </Tooltip>
-          )}
+          {/* 预览区收起时这里不再挂「展开」按钮 —— 那个入口已经挪到顶栏
+              （tabActions 里那个 PicRight 图标）。留在这里的话，收起后
+              主区右边会多出一条空地，而按钮本身又只在这个空地才出现。 */}
         </div>
         )}
       </div>
@@ -2845,6 +2908,28 @@ function AppShellInner() {
           }
         >
           <DbApp />
+        </Suspense>
+      ) : activeApp === "sys" ? (
+        // 系统板块：2026-11-06 从 z-biz-tool-sys 仓搬入。
+        // 整块替换主区 —— 它自成一套「顶栏 + 8 个 tab + 采集曲线」的仪表盘，
+        // 塞进文件管理那套「路径 + 标签条」里既没有意义也摆不下。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载系统监控…
+            </div>
+          }
+        >
+          <SysApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。
