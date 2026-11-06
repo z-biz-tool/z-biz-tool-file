@@ -49,6 +49,27 @@ pub fn set_monitor_config(
     state.set_config(config)
 }
 
+/// 切换「系统板块是否在前台」。
+///
+/// 并进 file 之后必须有这个命令：采集循环是常驻的，但它只在用户真的打开
+/// 系统板块时才该干活 —— 否则找文件的用户也在后台每秒 refresh 一遍
+/// CPU/内存/磁盘/网络。前端在 SysApp 挂载/卸载时各调一次。
+///
+/// 注意它和 `set_monitor_config({paused})` 是两件事：
+/// - `paused` 是**用户**按空格/按钮主动停采集，界面会显示「已暂停」；
+/// - 这里的 inactive 是**板块不在前台**，用户看不见也不关心，
+///   回来时瞬间恢复，不该被当成一种"暂停"状态展示出来。
+#[tauri::command]
+pub fn set_sys_active(state: State<'_, MonitorService>, active: bool) {
+    state.set_active(active);
+}
+
+/// 读当前活跃态。前端首帧用它对齐（HMR / 快速来回切时避免状态错位）。
+#[tauri::command]
+pub fn get_sys_active(state: State<'_, MonitorService>) -> bool {
+    state.is_active()
+}
+
 /// 告警阈值配置（T5-01）：与 `set_monitor_config` 同口径 —— 后端夹取并把真正生效的值回给前端，
 /// 界面上的输入框据此校正，避免出现"显示 150、实际按 100 判"的两套数。
 #[tauri::command]

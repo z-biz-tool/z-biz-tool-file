@@ -424,6 +424,8 @@ pub fn run() {
             sys_app::commands::agent_query,
             sys_app::commands::get_thermal,
             sys_app::commands::export_history_csv,
+            sys_app::commands::set_sys_active,
+            sys_app::commands::get_sys_active,
             sys_app::commands::notify_status,
             sys_app::commands::send_test_notification,
         ])

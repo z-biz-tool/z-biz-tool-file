@@ -9,3 +9,8 @@ src-tauri/gen/
 # 编译/打包产物一律不入库：可再生、体积大、多仓重复。
 # Rust target / 前端 node_modules / Python 缓存。
 target/
+
+# ---- 本地安装包备份（2026-11-06）----
+# 每次覆盖安装前把 /Applications 里的旧包复制到这里，用于回滚。
+# 它是本机状态、不是源码，体积还大（每个 45MB+）。
+.app-backups/

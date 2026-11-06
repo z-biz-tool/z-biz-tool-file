@@ -35,8 +35,10 @@ import zhCN from "antd/locale/zh_CN";
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { startDeepLinkReceiver, ZBIZ_TAKE_PENDING, type Handoff } from "z-biz-tool-shared/protocol";
-import { resolveSysDeepLink, type SysTab } from "./_shared/deepLink";
+import type { Handoff } from "z-biz-tool-shared/protocol";
+// 深链分流槽：file 的 App.tsx 是唯一接收器，把属于本板块的投到这里
+import { subscribeSysHandoff, takePendingSysHandoff } from "./handoff";
+import { resolveSysDeepLink } from "./_shared/deepLink";
 import {
   Commands,
   MonitorEvent,
@@ -158,6 +160,22 @@ export default function SysApp() {
   // 提示通道复用 file 外层那一个 <AntdApp>：不再自己搭 useMessage holder
   // （两套 holder 会出现「提示条和界面不同色」，也是本仓门禁禁止的写法）。
   const { message: msgApi } = AntdApp.useApp();
+
+  // 本板块在前台 ⇒ 才允许后端采集。
+  //
+  // 合并进 file 之后，进程活着不再等于"用户想看监控"——十次启动有九次是为了
+  // 找文件。采集循环是常驻的（sysinfo 的 refresh 在 macOS 上要走 sysctl +
+  // statfs + IOKit），不闸住就是给所有用户平白加一份常态功耗。
+  // 卸载时（切到别的板块）再关掉，所以这个 effect 的清理函数是必需的。
+  useEffect(() => {
+    invoke(Commands.setSysActive, { active: true }).catch((e) => {
+      // 切不过去只影响"省不省电"，监控本身照常，不必打断用户
+      console.warn("[sys] 激活采集失败（监控本身不受影响）:", e);
+    });
+    return () => {
+      void invoke(Commands.setSysActive, { active: false }).catch(() => {});
+    };
+  }, []);
   // 迷你模式（T5-07）：刻意只做会话级开关，不进 `usePrefs` 的那 5 项快照 ——
   // 加第 6 项要动 `PrefsSnapshot` 的字段与 T5-11 的 Rust/TS 契约测试，而偏好文件的
   // `schemaVersion` 仍是 1、且明确不做猜测式迁移，老文件里没有这一项反而是对的。
@@ -201,40 +219,31 @@ export default function SysApp() {
     processes.page.total,
   ]);
 
-  // zbiz:// 深链接收侧：**机制**在共享层 `startDeepLinkReceiver`（冷启动补取、事件监听、不静默吞掉），
-  // 本仓只通过 translate 注入**语义**（切到哪个 tab / 按 pid 过滤），
-  // 并在 onEffect 里落地到 setActiveTab / changeProcessKeyword。
+  // zbiz:// 深链接收侧：**全仓只有一个接收器**（在 file 的 App.tsx 里，因为它常驻）。
+  // 那边按 item.product 分流，属于本板块的整条投到 handoff 槽 —— 两边各注册一个
+  // 接收器会互相抢 `take_pending`（那是取走式的），表现为「深链点了没反应」。
+  // 这里只负责把「切哪个 tab / 按哪个 pid 过滤」落地。
   useEffect(() => {
-    const stop = startDeepLinkReceiver({
-      productId: "sys",
-      invoke: () => invoke<Handoff[]>(ZBIZ_TAKE_PENDING),
-      listen: (event, handler) => listen(event, handler),
-      translate: (item) => {
-        const out = resolveSysDeepLink(item);
-        if (out.problem) {
-          return { ok: false, problem: out.problem };
-        }
-        return { ok: true, effect: { tab: out.tab, pid: out.pid } };
-      },
-      onProblem: (msg, item) => {
+    const apply = (item: Handoff) => {
+      const out = resolveSysDeepLink(item);
+      if (out.problem) {
         // 未适配的深链静默吞掉 = 用户「点了没反应」，必须给可见提示
-        console.warn("[sys] 未适配的深链", item, msg);
-        msgApi.warning(msg);
-      },
-      onEffect: (effect) => {
-        const tab = effect.tab as SysTab | null;
-        const pid = effect.pid as string | null;
-        if (pid) {
-          // pid 优先：它隐含「去 processes 页」，直接喂给进程表关键字过滤
-          changeProcessKeyword(pid);
-          setActiveTab("processes");
-        } else if (tab) {
-          setActiveTab(tab);
-        }
-      },
-      log: (msg, item) => console.debug("[sys] 深链", msg, item),
-    });
-    return stop;
+        console.warn("[sys] 未适配的深链", item, out.problem);
+        msgApi.warning(out.problem);
+        return;
+      }
+      if (out.pid) {
+        // pid 优先：它隐含「去进程页」，直接喂给进程表关键字过滤
+        changeProcessKeyword(out.pid);
+        setActiveTab("processes");
+      } else if (out.tab) {
+        setActiveTab(out.tab);
+      }
+    };
+    // 板块还没挂载时来的那条，投递方先存着了
+    const queued = takePendingSysHandoff();
+    if (queued) apply(queued);
+    return subscribeSysHandoff(apply);
   }, [setActiveTab, changeProcessKeyword, msgApi]);
 
   // 阈值只有一条链：面板改动 → usePrefs 落盘 → useAlerts 下发 → 后端回夹取后的生效值覆盖输入框

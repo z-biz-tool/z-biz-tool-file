@@ -547,6 +547,15 @@ export const MonitorEvent = {
 export const Commands = {
   getStaticInfo: "get_static_info",
   setMonitorConfig: "set_monitor_config",
+  /**
+   * 切换「本板块是否在前台」。挂载时置真、卸载时置假。
+   *
+   * 采集循环是常驻的（合并进 file 后进程一直在），但它只在用户真的打开
+   * 系统板块时才该干活 —— 否则找文件的用户也在后台每秒 refresh 一遍
+   * CPU/内存/磁盘/网络，等于给所有人平白加一份常态功耗。
+   */
+  setSysActive: "set_sys_active",
+  getSysActive: "get_sys_active",
   startProcessStream: "start_process_stream",
   stopProcessStream: "stop_process_stream",
   setProcessQuery: "set_process_query",

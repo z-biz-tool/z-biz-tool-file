@@ -745,6 +745,15 @@ pub struct MonitorService {
     process_query_gen: Arc<AtomicUsize>,
     /// 缓存帧是在哪个 `process_query_gen` 值下产出的，用于判断缓存是否已落后于查询。
     process_page_gen: Arc<AtomicUsize>,
+    /// 本板块是否正在前台（被用户打开着）。
+    ///
+    /// 为什么需要这个：sys 独立成 app 时，进程活着就代表用户想看监控，
+    /// 采集循环无条件跑是对的。并进 file 之后就不同了 —— 用户十次启动有九次
+    /// 是为了找文件，却每次都在后台每秒 refresh 一遍 CPU/内存/磁盘/网络
+    /// （sysinfo 的 refresh_all 在 macOS 上要走 sysctl + statfs + IOKit，
+    /// 不是零成本）。不闸住的话，"合并进 file" 等于给所有用户平白加了一份
+    /// 常态功耗。
+    active: Arc<AtomicBool>,
 }
 
 static SERVICE: std::sync::OnceLock<RwLock<Option<MonitorService>>> = std::sync::OnceLock::new();
@@ -767,6 +776,9 @@ impl Clone for MonitorService {
             process_query: self.process_query.clone(),
             process_query_gen: self.process_query_gen.clone(),
             process_page_gen: self.process_page_gen.clone(),
+            // clone 共享同一个闸门：各处拿到的 MonitorService 必须看到同一份活跃态，
+            // 否则「前端置真、采集循环手里那份还是假」就永远不采集。
+            active: self.active.clone(),
         }
     }
 }
@@ -781,7 +793,20 @@ impl MonitorService {
             process_query: Arc::new(RwLock::new(ProcessQuery::default())),
             process_query_gen: Arc::new(AtomicUsize::new(0)),
             process_page_gen: Arc::new(AtomicUsize::new(0)),
+            // 默认不活跃：板块没被打开时不该有任何采集开销。
+            // 前端 SysApp 挂载时置真、卸载时置假（见 set_active）。
+            active: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// 切换「本板块是否在前台」。前端在 SysApp 挂载/卸载时调用。
+    pub fn set_active(&self, on: bool) {
+        self.active.store(on, Ordering::Relaxed);
+    }
+
+    /// 供命令层读取当前是否活跃（测试与排障用）。
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
     }
 
     /// 注册为 managed state 前调用一次，使 `lookup_process` 能命中缓存。
@@ -882,10 +907,12 @@ impl MonitorService {
     ) {
         let config = self.config.clone();
         let latest = self.latest.clone();
+        let active = self.active.clone();
         {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                run_metrics_loop(app, config, latest, history, alert_history, alerts, notify).await;
+                run_metrics_loop(app, config, latest, history, alert_history, alerts, notify, active)
+                    .await;
             });
         }
 
@@ -924,6 +951,7 @@ async fn run_metrics_loop(
     alert_history: Option<crate::sys_app::history::AlertStore>,
     alert_config: Arc<RwLock<crate::sys_app::alert::AlertConfig>>,
     notify: crate::sys_app::notify::NotifyState,
+    active: Arc<AtomicBool>,
 ) {
     let mut collector = Collector::new();
     let mut recorder = history.map(crate::sys_app::history::HistoryRecorder::open);
@@ -934,6 +962,15 @@ async fn run_metrics_loop(
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     loop {
+        // 板块不在前台就整段跳过 —— 连 sysinfo 的 refresh 都不做。
+        // 睡 1 秒而不是 cfg.interval_ms：活跃时那是用户的采样间隔，
+        // 闲置时没必要那么勤，既省功耗也让「切回板块」的响应足够快。
+        if !active.load(Ordering::Relaxed) {
+            alerts.reset();
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            continue;
+        }
+
         let cfg = config.read().map(|g| g.clone()).unwrap_or_default();
         if cfg.paused {
             // 暂停期间没有帧，"连续 N 帧"的计数不能跨过这段空白继续攒。

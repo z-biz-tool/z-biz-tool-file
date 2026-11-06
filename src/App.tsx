@@ -63,6 +63,8 @@ import { startDeepLinkReceiver, ZBIZ_TAKE_PENDING } from "z-biz-tool-shared/prot
 import { resolveFileDeepLink, type HandoffItem } from "./_shared/deepLink";
 // 终端板块的深链交接槽（纯数据模块，不带 React/xterm，不会破坏懒加载分包）
 import { putTerminalHandoff } from "./apps/terminal/handoff";
+// 系统监控板块的深链分流槽（与终端同一个模式：本仓只留一个接收器）
+import { putSysHandoff } from "./apps/sys/handoff";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
@@ -721,6 +723,13 @@ function AppShellInner() {
         if (item.product === "terminal") {
           putTerminalHandoff(item);
           setActiveApp("terminal");
+          return;
+        }
+        // 系统监控板块同理（2026-11-06 从 sys 仓搬入）：它也只从那个 handoff 槽取，
+        // 自己不注册接收器 —— 两个接收器抢消费式的 take_pending 就是「点了没反应」。
+        if (item.product === "sys") {
+          putSysHandoff(item);
+          setActiveApp("sys");
           return;
         }
         console.warn("[file] 深链:", msg);
