@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  App as AntdApp,
   Badge,
   Button,
   Card,
@@ -25,7 +26,6 @@ import {
   Tag,
   Tooltip,
   Typography,
-  message,
 } from "antd";
 import {
   BulbOutlined,
@@ -178,7 +178,9 @@ export function ReportWorkbench({
    *  run = 带过来之后直接把链条跑完（挑表→起草→取数出图）；用户在 SQL 腿那边点的就是"出图"。 */
   seed?: { q: string; seq: number; run?: boolean; done?: (o: ChainOutcome) => void } | null;
 }) {
-  const [msgApi, msgHolder] = message.useMessage();
+  // 2026-11-06 并入 file：提示条统一走 file 的 <AntdApp> context，
+  // 不再自搭一套 useMessage holder（静态 API 吃不到主题，深色下是白底黑字）。
+  const { message: msgApi } = AntdApp.useApp();
   const [connState, setConnState] = useState<Record<string, ConnState>>({});
   const [columns, setColumns] = useState<Record<string, ColumnInfo[]>>({});
   // 正在读列清单的表：面板要把它和"读失败"分开显示，
@@ -1149,7 +1151,7 @@ export function ReportWorkbench({
 
   return (
     <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
-      {msgHolder}
+      {/* message holder 由 file 的 <AntdApp> 提供，这里不再单独挂 */}
       {/* 左：数据源目录 + 问题 */}
       <div
         style={{

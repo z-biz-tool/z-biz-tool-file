@@ -1544,7 +1544,7 @@ mod tests {
         let cfgs = vec![shop.clone(), crm.clone()];
         let mut cands: Vec<TableCandidate> = Vec::new();
         for cfg in &cfgs {
-            for t in crate::get_tables(cfg.clone()).await.unwrap() {
+            for t in crate::db_app::get_tables(cfg.clone()).await.unwrap() {
                 cands.push(TableCandidate {
                     connection_id: cfg.id.clone(),
                     connection_name: cfg.name.clone(),

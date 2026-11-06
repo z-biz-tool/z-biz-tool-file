@@ -18,7 +18,7 @@ import {
   Select,
   Form,
   Modal,
-  message,
+  App as AntdApp,
   Tooltip,
   Tag,
   Empty,
@@ -850,8 +850,11 @@ function App() {
     failed: string[];
   } | null>(null);
 
-  const [msgApi, msgContext] = message.useMessage();
-  const [modal, modalContext] = Modal.useModal();
+  // 2026-11-06 并入 file：提示条与确认框统一走 file 的 <AntdApp> context。
+  // db 仓里原本是 message.useMessage() / Modal.useModal() 各自搭一套 holder，
+  // 那套静态 API 吃不到 file 的主题与 locale（深色下会弹出白底黑字），
+  // 且与 file 其余板块的提示通道各走各的。现在整块换掉，调用点一行不用改。
+  const { message: msgApi, modal } = AntdApp.useApp();
 
   // 执行查询
   // T-009：invoke 前快照 connectionId+activeTabId，响应后比对当前状态
@@ -3267,8 +3270,7 @@ function App() {
         </Layout>
       </Layout>
 
-      {msgContext}
-      {modalContext}
+      {/* message / modal 的 holder 由 file 的 <AntdApp> 提供，这里不再单独挂 */}
 
       {/* 连接编辑弹窗 */}
       <Modal

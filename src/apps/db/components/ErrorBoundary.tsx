@@ -1,5 +1,8 @@
 import React from "react";
-import { Alert, Button, Space, message } from "antd";
+import { Alert, App as AntdApp, Button, Space } from "antd";
+
+/** 从 App.useApp() 的返回类型反推 message 实例类型，不引 antd 内部路径 */
+type MessageApi = ReturnType<typeof AntdApp.useApp>["message"];
 
 interface ErrorBoundaryProps {
   /** 出错区域的名字，进提示文案（"报表看板" 而不是"某处"） */
@@ -24,7 +27,10 @@ interface ErrorBoundaryState {
  * 这个应用以前没有任何边界：报表/Agent 子树里一次抛错会把整棵 React 树连带
  * 正在编辑的 SQL 一起白屏，用户唯一的出路是重启应用。
  */
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+class ErrorBoundaryInner extends React.Component<
+  ErrorBoundaryProps & { messageApi: MessageApi },
+  ErrorBoundaryState
+> {
   state: ErrorBoundaryState = { error: null };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
@@ -45,12 +51,13 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   private copyError = () => {
     const { error } = this.state;
+    const { messageApi } = this.props;
     const text = `${error?.message ?? "未知错误"}\n${error?.stack ?? ""}`;
     navigator.clipboard.writeText(text).then(
-      () => message.success("错误详情已复制"),
+      () => messageApi.success("错误详情已复制"),
       (e) => {
         console.warn(`[${this.props.label}] 复制错误详情失败:`, e);
-        message.error("复制失败，请手动选中文本复制");
+        messageApi.error("复制失败，请手动选中文本复制");
       },
     );
   };
@@ -87,6 +94,18 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       />
     );
   }
+}
+
+/**
+ * 2026-11-06 并入 file：提示条统一走 file 的 <AntdApp> context。
+ *
+ * 边界本身必须是 class（getDerivedStateFromError 只有 class 有），
+ * 所以用这层函数外壳把 App.useApp() 的 message 实例取出来注进去 ——
+ * 免得为了拿提示条就把整个边界改成函数组件（那样就没有错误捕获能力了）。
+ */
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  const { message: messageApi } = AntdApp.useApp();
+  return <ErrorBoundaryInner {...props} messageApi={messageApi} />;
 }
 
 export default ErrorBoundary;

@@ -41,13 +41,19 @@ function hits(): string[] {
     if (ALLOW_FILES.has(rel)) continue;
     const lines = readFileSync(file, "utf8").split("\n");
     lines.forEach((line, i) => {
-        if (line.includes("var(--ant-")) return;
-        // 三元分支常常写成 background: mode === "dark" ? … / … "#ffffff" 两行，
-        // 只看当前行会把"已经分主题"的那半误判成违规 —— 往前看两行
-        const window = lines.slice(Math.max(0, i - 2), i + 1).join(" ");
-        if (THEMED.test(window)) return;
-        if (BANNED.some((re) => re.test(line))) out.push(`${rel}:${i + 1}`);
-      });
+      // 先判 BANNED 再查上下文：绝大多数行压根不是亮色字面量，
+      // 而"往前看两行"的窗口拼接每行都要新分配一个数组 + 一次 join。
+      // 全站近 4 万行 × 46 个 worker 并发时，那点分配足以把这条用例拖到超时。
+      // 判定等价：最终入列的条件是「命中 BANNED 且本行不是 var(--ant-) 且窗口里没有主题分支」，
+      // 调换顺序不影响结果。
+      if (!BANNED.some((re) => re.test(line))) return;
+      if (line.includes("var(--ant-")) return;
+      // 三元分支常常写成 background: mode === "dark" ? … / … "#ffffff" 两行，
+      // 只看当前行会把"已经分主题"的那半误判成违规 —— 往前看两行
+      const window = lines.slice(Math.max(0, i - 2), i + 1).join(" ");
+      if (THEMED.test(window)) return;
+      out.push(`${rel}:${i + 1}`);
+    });
   }
   return out;
 }
@@ -62,9 +68,17 @@ describe("亮色字面量", () => {
     expect(THEMED.test("  color: token.colorTextSecondary,")).toBe(true);
   });
 
-  it("全站没有无条件的亮色字面量", () => {
-    expect(hits()).toEqual([]);
-  });
+  it(
+    "全站没有无条件的亮色字面量",
+    // 这条要扫全站近 4 万行源码（数据库板块并入后又涨了三分之一），
+    // 单独跑实测约 0.9s；但 46 个 worker 并发时调度会抢 CPU，
+    // 默认的 5s 超时是踩在边界上随机翻车的 —— 2026-11-06 那轮全量跑
+    // 就因为它红了两次（单独跑必过）。给个宽裕的上限，别让门禁变成随机噪音。
+    { timeout: 30_000 },
+    () => {
+      expect(hits()).toEqual([]);
+    },
+  );
 
   it("豁免清单保持为空（历史豁免都要还掉）", () => {
     // ImageEditor 那圈曾经是唯一的豁免：右侧面板从 #fafafa/#fff/#666 改成跟主题之后归还，

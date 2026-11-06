@@ -1854,7 +1854,9 @@ pub struct MetadataListV2 {
 }
 
 #[command]
-pub async fn metadata_list_v2(config: DBConfig) -> Result<db::ipc::V2Envelope<MetadataListV2>, String> {
+pub async fn metadata_list_v2(
+    config: DBConfig,
+) -> Result<db::ipc::V2Envelope<MetadataListV2>, String> {
     // v2 契约：成功与失败走同一个返回类型（`Err` 分支装业务错误）。
     // 外层的 `Err(String)` 只留给"包络都构造不出来"这种没法装进包络的情况。
     match metadata_list_v2_inner(&config).await {
@@ -1986,7 +1988,9 @@ pub struct QueryStatusV2 {
 }
 
 #[command]
-pub async fn query_status_v2(query_id: String) -> Result<db::ipc::V2Envelope<QueryStatusV2>, String> {
+pub async fn query_status_v2(
+    query_id: String,
+) -> Result<db::ipc::V2Envelope<QueryStatusV2>, String> {
     let reg = db::session::registry();
     // 查无此作业 ⇒ 状态 unknown（**不是**"没这单"：这一单可能只是已经跑完了）
     let (state, message) = reg.get_state(&query_id).unwrap_or((
@@ -3449,7 +3453,7 @@ pub async fn keyset_query(
 /// 幂等：用 `Once` 保证重复调用不会起第二个看门狗循环。
 pub fn spawn_pool_lifecycle() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| spawn_pool_lifecycle_inner());
+    ONCE.call_once(spawn_pool_lifecycle_inner);
 }
 
 /// 应用退出时主动关掉所有连接池，让数据库端看到干净的断开。
@@ -3578,7 +3582,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn connections_persist_roundtrip() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-db-test-{}-{}-{}",
             std::process::id(),
@@ -3615,7 +3619,7 @@ mod tests {
     /// T-053 兼容：旧 connection 配置无 env 字段时也能反序列化
     #[tokio::test(flavor = "current_thread")]
     async fn legacy_connection_without_env_field_loads() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-legacy-conn-{}-{}",
             std::process::id(),
@@ -3777,7 +3781,7 @@ mod tests {
     /// T-043 验收：BEGIN 语句执行后更新 registry 事务状态
     #[tokio::test(flavor = "current_thread")]
     async fn transaction_tracking_updates_registry() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-tx-test-{}-{}",
             std::process::id(),
@@ -3833,7 +3837,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[ignore]
     async fn auto_history_recorded_on_success() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-hist-test-{}-{}",
             std::process::id(),
@@ -3874,7 +3878,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[ignore]
     async fn auto_history_recorded_on_failure() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-hist-fail-{}-{}",
             std::process::id(),
@@ -4019,7 +4023,7 @@ mod tests {
     /// 而不是"猜 revision 水位"（旧口径报出来的数与能不能取回密码无关）。
     #[tokio::test(flavor = "current_thread")]
     async fn run_secret_migration_reports_reentry() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-mig-{}-{}",
             std::process::id(),
@@ -4075,7 +4079,7 @@ mod tests {
     /// T-014 端到端：保存连接 → 落盘里**没有明文** → 读回时明文能还原。
     #[tokio::test(flavor = "current_thread")]
     async fn save_connections_seals_password_and_load_restores_it() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-seal-{}-{}",
             std::process::id(),
@@ -4124,7 +4128,7 @@ mod tests {
     /// T-046：连接 revision 校验
     #[tokio::test(flavor = "current_thread")]
     async fn check_connection_revision_matches() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-rev-check-{}-{}",
             std::process::id(),
@@ -4159,7 +4163,7 @@ mod tests {
     /// T-053 验收：save_connections CAS 拒绝过期 revision
     #[tokio::test(flavor = "current_thread")]
     async fn save_connections_cas_rejects_stale_revision() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-cas-test-{}-{}",
             std::process::id(),
@@ -4420,7 +4424,7 @@ mod tests {
     /// 报表簿落盘走的是同一套信封；这里验往返、按 id 覆盖、列表排序与删除
     #[tokio::test(flavor = "current_thread")]
     async fn report_book_roundtrip_upsert_and_order() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-report-book-{}-{}",
             std::process::id(),
@@ -4486,7 +4490,7 @@ mod tests {
     /// 存进去就注定打不开的稿子要当场拒掉，并且一条都不能落盘
     #[tokio::test(flavor = "current_thread")]
     async fn report_book_rejects_unopenable_specs() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-report-shape-{}-{}",
             std::process::id(),
@@ -4564,7 +4568,7 @@ mod tests {
     /// 这类错在这里炸掉，而不是等用户点保存才发现。
     #[tokio::test(flavor = "current_thread")]
     async fn report_book_accepts_real_frontend_payload() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-report-wire-{}-{}",
             std::process::id(),
@@ -5344,7 +5348,7 @@ mod tests {
     /// T-014：迁移报告的"需重输"清单要能点名到具体连接。
     #[tokio::test]
     async fn secret_migration_names_missing_connections() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-mig2-{}-{}",
             std::process::id(),
@@ -5384,7 +5388,7 @@ mod tests {
     /// T-011：改连接参数后旧池必须关掉（否则还连着旧库/旧凭据）。
     #[tokio::test]
     async fn editing_connection_closes_stale_pool() {
-        let _guard = crate::tests::DATADIR_LOCK.lock().await;
+        let _guard = crate::db_app::tests::DATADIR_LOCK.lock().await;
         let tmp = std::env::temp_dir().join(format!(
             "zbiz-pooledit-{}-{}",
             std::process::id(),

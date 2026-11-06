@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::{db_app::ConnectionRecord, db_app::QueryHistoryItem, db_app::SavedQuery, db_app::SavedReport};
+use crate::{
+    db_app::ConnectionRecord, db_app::QueryHistoryItem, db_app::SavedQuery, db_app::SavedReport,
+};
 
 /// 数据目录获取
 /// S0 修复：失败时返回 Err 而非静默 `.ok()`（DB-09）。
@@ -331,7 +333,8 @@ fn check_report_shape(item: &SavedReport) -> Result<(), String> {
             ));
         }
     }
-    crate::db_app::report::view::resolve_layout(&item.view).map_err(|e| format!("布局不合法：{e}"))?;
+    crate::db_app::report::view::resolve_layout(&item.view)
+        .map_err(|e| format!("布局不合法：{e}"))?;
     Ok(())
 }
 

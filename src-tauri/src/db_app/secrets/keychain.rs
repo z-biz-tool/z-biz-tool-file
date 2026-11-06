@@ -129,6 +129,14 @@ impl SecretStore for KeychainSecretStore {
     fn persistent(&self) -> bool {
         true
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn backend_name(&self) -> &str {
+        backend_name()
+    }
 }
 
 // 后端装配已统一到 `encfile::select_backend`（2026-11-06）。
@@ -154,6 +162,7 @@ mod tests {
     use super::*;
     use crate::db_app::db::credentials::{seal, unseal, CREDENTIAL_MISSING};
     use crate::db_app::ConnectionRecord;
+    use std::sync::Arc;
 
     fn rec(id: &str, name: &str, password: &str) -> ConnectionRecord {
         ConnectionRecord {
@@ -286,34 +295,44 @@ mod tests {
         store.delete(&r).expect("清理");
     }
 
-    /// 后端选择：env 语义（纯函数，不动全局 env，不写任何密钥库）。
+    /// 后端选择的 env 语义（纯函数，不动全局 env，不写任何密钥库）。
+    ///
+    /// 2026-11-06：装配逻辑统一到 `encfile::select_backend_from`，
+    /// 本模块不再自带一份（两套装配并存必然漂移）。
     #[test]
     fn select_backend_honours_env() {
+        use crate::db_app::secrets::encfile;
         assert!(
-            !select_backend_from(Some("inmemory")).persistent(),
+            !encfile::select_backend_from(Some("inmemory")).persistent(),
             "显式 inmemory 必须给非持久后端"
         );
         assert!(
-            !select_backend_from(Some(" INMEMORY ")).persistent(),
+            !encfile::select_backend_from(Some(" INMEMORY ")).persistent(),
             "大小写与空白应被归一化"
         );
     }
 
-    /// auto / keychain：本机 keychain 可用时必须选到持久后端；
-    /// 不可用则走回退分支（不 panic）。探测只读，不写真实 service。
+    /// `ZBIZ_SECRET_BACKEND=keychain` 的平台行为：
+    /// - 非 macOS：keychain 可用时必须选到 keychain 后端（那条路没有签名绑定问题）；
+    /// - macOS：**绝不能**选 keychain 后端 —— 钥匙串授权绑代码签名，
+    ///   本家族 adhoc 签名每次重打包 cdhash 就变 ⇒ 每次读密码都弹授权框。
+    ///   这条断言是"macOS 上不弹授权框"的最后一道防线。
     #[test]
-    fn select_backend_auto_prefers_keychain_when_available() {
-        let available = KeychainSecretStore::production().check_available().is_ok();
-        for env in [None, Some("auto"), Some("keychain"), Some("bogus-value")] {
-            let store = select_backend_from(env);
+    fn select_backend_keychain_env_is_platform_aware() {
+        use crate::db_app::secrets::encfile;
+        let store = encfile::select_backend_from(Some("keychain"));
+        let is_keychain = store
+            .as_any()
+            .downcast_ref::<KeychainSecretStore>()
+            .is_some();
+        if cfg!(target_os = "macos") {
+            assert!(!is_keychain, "macOS 上不得选 keychain 后端（会弹授权框）");
+        } else {
+            let available = KeychainSecretStore::production().check_available().is_ok();
             if available {
-                assert!(
-                    store.persistent(),
-                    "env={:?} 在 keychain 可用时应选持久后端",
-                    env
-                );
+                assert!(is_keychain, "非 macOS 上 keychain 可用时应选 keychain 后端");
             } else {
-                eprintln!("[skip] keychain 不可用，回退分支已被覆盖（env={:?}）", env);
+                eprintln!("[skip] keychain 不可用，回退分支已被覆盖");
             }
         }
     }

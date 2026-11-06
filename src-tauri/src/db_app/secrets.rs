@@ -21,10 +21,10 @@
 // 注意 #[path]：lib.rs 用 `#[path = "secrets.rs"]` 挂载本模块，
 // 该属性下子模块按 path 的目录部分解析，`secrets.rs` 没有目录部分，
 // 所以这里必须显式指到 secrets/ 子目录，否则会被解析到 src/keychain.rs。
-#[path = "secrets/keychain.rs"]
-pub mod keychain;
 #[path = "secrets/encfile.rs"]
 pub mod encfile;
+#[path = "secrets/keychain.rs"]
+pub mod keychain;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -120,6 +120,16 @@ pub trait SecretStore: Send + Sync {
     fn persistent(&self) -> bool {
         false
     }
+    /// 供调用方判别具体后端类型（downcast 到 KeychainSecretStore / EncFileSecretStore …）。
+    ///
+    /// macOS 上必须能问出"这个后端到底是不是 keychain"——
+    /// 钥匙串后端在那台机器上是要弹授权框的老路，测试要能钉死"绝不选它"。
+    fn as_any(&self) -> &dyn std::any::Any;
+    /// 本后端在 SecretRef.backend 里的名字（如 `encfile` / `keychain-macos`）。
+    ///
+    /// 解封时靠它判别"这条引用是不是**别的**后端留下的"——
+    /// 跨后端的旧引用必然取不到密码，提示语得说清"换了个存储位置，请重新输入"。
+    fn backend_name(&self) -> &str;
 }
 
 /// 存储后端内部持有的字节；drop 时清零（不留残余明文）。
@@ -185,6 +195,14 @@ impl SecretStore for InMemorySecretStore {
 
     fn persistent(&self) -> bool {
         false
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn backend_name(&self) -> &str {
+        "inmemory"
     }
 }
 

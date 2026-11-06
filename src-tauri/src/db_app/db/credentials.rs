@@ -120,6 +120,18 @@ pub fn unseal(
                              重启后即失效，请重新输入密码",
                             r.name
                         )
+                    } else if sref.backend != store.backend_name() {
+                        // 跨后端的旧引用（2026-11-06 并入 file 后最常见的一种）：
+                        // 老 db 独立 app 在 macOS 上把密码存在钥匙串（backend=keychain-macos），
+                        // 现在 macOS 改走自建加密文件 ⇒ 这类引用**必然**取不到。
+                        // 旧钥匙串条目我们不读（读一次弹一次授权框，比重输密码更糟），
+                        // 所以这里必须点名"重新输入"，否则用户只看到"找不到"，
+                        // 不知道是自己弄丢了还是被换了个存储位置。
+                        format!(
+                            "连接 {} 的密码无法恢复：该凭据保存在旧版后端（{}），\
+                             本版本已改用新的凭据存储方式，请重新输入密码",
+                            r.name, sref.backend
+                        )
                     } else if store.persistent() {
                         format!("密钥库中找不到该连接的凭据（{}）：{}", r.name, e)
                     } else {

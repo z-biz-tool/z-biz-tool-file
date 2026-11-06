@@ -430,7 +430,7 @@ mod tests {
         assert_ne!(fp, fingerprint(&c), "改 database 必须换池");
 
         let mut c = base.clone();
-        c.tls_mode = Some(crate::TlsMode::Disable);
+        c.tls_mode = Some(crate::db_app::TlsMode::Disable);
         assert_ne!(fp, fingerprint(&c), "改 TLS 档位必须换池");
 
         // 只改显示名不该换池（名字与连哪个库无关）

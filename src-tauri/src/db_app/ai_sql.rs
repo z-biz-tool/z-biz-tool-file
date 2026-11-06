@@ -12,7 +12,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::db_app::db::sql_classify;
-use crate::db_app::report::ai::{column_list, strip_fences, CatalogTable, HttpModel, Model, MAX_REPAIRS};
+use crate::db_app::report::ai::{
+    column_list, strip_fences, CatalogTable, HttpModel, Model, MAX_REPAIRS,
+};
 use crate::db_app::report::view::problem_list;
 
 /// 进提示词的表数上限：SQL 编辑器对着一个连接，几十张表模型也抓不住重点

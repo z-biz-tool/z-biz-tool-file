@@ -81,9 +81,8 @@ impl EncFileSecretStore {
     /// **不碰任何真实条目** —— 只确保「能写」这件事成立。
     pub fn check_available(&self) -> Result<(), String> {
         if let Some(parent) = self.file.path().parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!("创建数据库配置目录失败（{}）: {}", parent.display(), e)
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建数据库配置目录失败（{}）: {}", parent.display(), e))?;
         }
         // 读一次全部条目：文件不存在就是空表（不是错误）。
         self.file.read_all().map(|_| ())
@@ -136,10 +135,7 @@ impl SecretStore for EncFileSecretStore {
         }
         match self.file.get(&secret_ref.id) {
             Ok(Some(v)) => Ok(PlainSecret::new(v)),
-            Ok(None) => Err(format!(
-                "加密文件里找不到条目（id={}）",
-                secret_ref.id
-            )),
+            Ok(None) => Err(format!("加密文件里找不到条目（id={}）", secret_ref.id)),
             Err(e) => Err(format!("读取加密文件失败: {}", e)),
         }
     }
@@ -157,6 +153,14 @@ impl SecretStore for EncFileSecretStore {
 
     fn persistent(&self) -> bool {
         true
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn backend_name(&self) -> &str {
+        ENCFILE_BACKEND
     }
 }
 
@@ -195,7 +199,8 @@ pub fn select_backend_from(env_value: Option<&str>) -> Arc<dyn SecretStore> {
                         eprintln!(
                             "[warn] {}=keychain 但 keychain 不可用（{}），已回退 inmemory：\
                              密码将不跨进程持久",
-                            super::ENV_SECRET_BACKEND, e
+                            super::ENV_SECRET_BACKEND,
+                            e
                         );
                         Arc::new(InMemorySecretStore::default())
                     }
@@ -428,11 +433,7 @@ mod tests {
     fn select_backend_prefers_persistent() {
         for env in [None, Some("auto"), Some("encfile")] {
             let store = select_backend_from(env);
-            assert!(
-                store.persistent(),
-                "env={:?} 应选持久后端",
-                env
-            );
+            assert!(store.persistent(), "env={:?} 应选持久后端", env);
         }
         assert!(
             !select_backend_from(Some("inmemory")).persistent(),
@@ -450,13 +451,8 @@ mod tests {
     #[test]
     fn keychain_env_falls_back_on_macos() {
         let store = select_backend_from(Some("keychain"));
-        assert!(
-            !store.persistent() || store.persistent(),
-            "占位断言（真正判据是下面这行）"
-        );
         // 关键判据：不能是 keychain 后端。
         let is_keychain = store
-            .as_ref()
             .as_any()
             .downcast_ref::<crate::db_app::secrets::keychain::KeychainSecretStore>()
             .is_some();
