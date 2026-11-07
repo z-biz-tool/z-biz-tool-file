@@ -106,6 +106,7 @@ import TransferQueue from "./components/TransferQueue";
 import { DragDropTarget } from "./components/DragDropMove";
 // 「点开才用」的弹窗统一走 lazyModal（open 为真才挂载，否则不发起 import）
 import { lazyModal } from "./_shared/lazyModal";
+import { APP_VERSION, BUILD_TIME, GIT_HASH } from "./_shared/version";
 import {
   ThemeProvider,
   AppShell,
@@ -2245,6 +2246,39 @@ function AppShellInner() {
    */
   const tabActions = (
     <>
+      {/* 版本戳：构建时注入的版本号 + 构建时刻 + git 哈希。
+          放顶栏最左（其它都是动作按钮，它只是“现在是哪个包”的身份信息）。
+          平时只露一个 v0.2.2，hover 才看得到打包时间与 commit。 */}
+      <Tooltip
+        title={
+          <>
+            版本 {APP_VERSION}
+            <br />
+            构建于 {BUILD_TIME}
+            {GIT_HASH !== "—" && (
+              <>
+                <br />
+                提交 {GIT_HASH}
+              </>
+            )}
+          </>
+        }
+        placement="bottom"
+      >
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--ant-color-text-tertiary)",
+            padding: "0 6px",
+            cursor: "default",
+            whiteSpace: "nowrap",
+            userSelect: "none",
+          }}
+          aria-label={`版本 ${APP_VERSION}，构建于 ${BUILD_TIME}${GIT_HASH !== "—" ? `，提交 ${GIT_HASH}` : ""}`}
+        >
+          v{APP_VERSION}
+        </span>
+      </Tooltip>
       <Tooltip title={`刷新${hint("刷新当前目录")}`} placement="bottom">
         <Button
           type="text"

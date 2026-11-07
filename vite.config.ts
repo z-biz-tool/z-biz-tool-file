@@ -1,12 +1,42 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import fs from "node:fs";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ── 构建信息注入（顶栏版本号用）────────────────────────────────────────
+// 打包时把「当前版本号 / 构建时刻 / git 短哈希」写死进产物，前端 src/_shared/version.ts
+// 从 __APP_VERSION__ / __BUILD_TIME__ / __GIT_HASH__ 三个全局读。
+// 这样用户一眼能看出手里这份是什么时候打的、对应哪个 commit ——
+// 不至于分不清“这个 file 是不是最新的”。
+function buildMeta() {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "package.json"), "utf-8"));
+  let hash = "—";
+  try {
+    hash = execSync("git rev-parse --short HEAD", { cwd: __dirname })
+      .toString()
+      .trim();
+  } catch {
+    // 构建目录不在 git 里（比如 CI 拉的是 tarball），退回占位符
+  }
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+  return {
+    __APP_VERSION__: JSON.stringify(pkg.version ?? "0.0.0"),
+    __BUILD_TIME__: JSON.stringify(time),
+    __GIT_HASH__: JSON.stringify(hash),
+  };
+}
+
 export default defineConfig({
   plugins: [react()],
+  define: buildMeta(),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
