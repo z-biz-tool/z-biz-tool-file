@@ -19,6 +19,7 @@ mod db;
 mod models;
 mod storage;
 mod task_state;
+pub mod workspace; // 命令从主 invoke_handler 注册，须 pub 否则 lib.rs 引用不到
 
 use tauri::Manager;
 

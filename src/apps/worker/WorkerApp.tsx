@@ -203,6 +203,13 @@ export default function WorkerApp() {
     return subscribeWorkerHandoff(apply);
   }, [landProjectDeepLink, msgApi]);
 
+  // 内置 Pi：装完即用 —— 当前项目切换时自动确保有一个默认 Pi Agent，
+  // 用户不用手动导入就能给工作事项指派（写作都在工作区文件夹里）。
+  useEffect(() => {
+    if (!currentProject) return;
+    void useWorkerStore.getState().ensureBuiltinPi();
+  }, [currentProject?.id]);
+
   const hasInFlight = useMemo(
     () => tasks.some((t) => t.status === "doing" || t.status === "waiting"),
     [tasks],

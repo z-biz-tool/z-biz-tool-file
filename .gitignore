@@ -14,3 +14,8 @@ target/
 # 每次覆盖安装前把 /Applications 里的旧包复制到这里，用于回滚。
 # 它是本机状态、不是源码，体积还大（每个 45MB+）。
 .app-backups/
+
+# ---- 离线捆绑的运行时（node + pi + agent-proxy），226M，不入库 ----
+# 由 scripts/prepare-runtime.sh 生成；打包时经 tauri resources 带进 app。
+# 不入库：体积巨大，且是编译/安装产物而非源码。
+src-tauri/runtime/

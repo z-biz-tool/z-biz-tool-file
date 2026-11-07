@@ -6,7 +6,7 @@ import {
 import {
   DeleteOutlined, ClockCircleOutlined,
   CheckCircleOutlined, PlayCircleOutlined, EyeOutlined, PauseCircleOutlined,
-  LinkOutlined, FlagOutlined, PlusOutlined,
+  LinkOutlined, FlagOutlined, PlusOutlined, FolderOpenOutlined,
 } from "@ant-design/icons";
 import type { Task, Agent, TaskMessage } from "../types";
 import { useWorkerStore } from "../stores/workerStore";
@@ -58,6 +58,31 @@ function TaskDetailPanelBody({ task, agents, open, onClose }: TaskDetailPanelPro
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // 工作区文件夹：这个工作事项的写作空间（Pi 在其中读写）
+  const [wsDir, setWsDir] = useState<string | null>(null);
+  const [wsFiles, setWsFiles] = useState<{ name: string; path: string; dir: boolean; size: number }[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    invoke<{ dir: string; files: { name: string; path: string; dir: boolean; size: number }[]; inventory: string }>(
+      "get_task_workspace", { taskId: task.id },
+    )
+      .then((ws) => {
+        if (cancelled) return;
+        setWsDir(ws.dir);
+        setWsFiles(ws.files);
+      })
+      .catch(() => { if (!cancelled) { setWsDir(null); setWsFiles([]); } });
+    return () => { cancelled = true; };
+  }, [open, task.id]);
+
+  const openWorkspace = () => {
+    invoke("open_task_workspace", { taskId: task.id })
+      .then(() => message.success("已打开工作区文件夹"))
+      .catch((e: any) => message.error(`打开工作区失败：${e?.toString?.() || e}`));
+  };
 
   const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -284,6 +309,51 @@ function TaskDetailPanelBody({ task, agents, open, onClose }: TaskDetailPanelPro
             label: <Space><Avatar size={16} style={{ backgroundColor: "#1677ff" }}>{a.name[0]}</Avatar>{a.name}</Space>,
           }))}
         />
+      </div>
+
+      {/* 工作区文件夹：这个工作事项的写作空间（Pi 在其中读上下文、写产出） */}
+      <div style={{ marginBottom: 16 }}>
+        <Text type="secondary" style={{ fontSize: 12, marginBottom: 4, display: "block" }}>工作区文件夹</Text>
+        <div
+          style={{
+            border: "1px solid var(--ant-color-border, rgba(0,0,0,0.06))",
+            borderRadius: 8,
+            padding: "8px 10px",
+            background: "var(--ant-color-bg-layout)",
+          }}
+        >
+          <Space align="center" style={{ width: "100%", justifyContent: "space-between", marginBottom: 6 }}>
+            <Text
+              code
+              ellipsis
+              style={{ fontSize: 11, maxWidth: 380 }}
+              title={wsDir ?? "加载中…"}
+            >
+              <FolderOpenOutlined style={{ marginRight: 4 }} />
+              {wsDir ?? "…"}
+            </Text>
+            <Button size="small" icon={<FolderOpenOutlined />} onClick={openWorkspace} disabled={!wsDir}>
+              打开
+            </Button>
+          </Space>
+          {wsFiles.length > 0 && (
+            <div style={{ maxHeight: 120, overflow: "auto" }}>
+              {wsFiles.map((f) => (
+                <div key={f.path} style={{ fontSize: 11, display: "flex", justifyContent: "space-between", padding: "1px 0" }}>
+                  <span style={{ color: "var(--ant-color-text-secondary)" }}>
+                    {f.dir ? "📁" : "📄"} {f.name}
+                  </span>
+                  {!f.dir && (
+                    <span style={{ color: "var(--ant-color-text-tertiary)" }}>({(f.size / 1024).toFixed(1)}KB)</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {wsDir && wsFiles.length === 0 && (
+            <Text type="secondary" style={{ fontSize: 11 }}>空文件夹 —— AI 从这里开始产出</Text>
+          )}
+        </div>
       </div>
 
       {/* 日期 */}

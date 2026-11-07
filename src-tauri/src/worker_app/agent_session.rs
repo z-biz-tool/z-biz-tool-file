@@ -213,6 +213,7 @@ pub async fn chat(
     cli_type: &str,
     proxy_agent_id: Option<&str>,
     messages: Vec<ChatMessage>,
+    working_dir: Option<&str>,
 ) -> Result<String, String> {
     let url = format!("{}/v1/chat/completions", proxy_url);
     // no_proxy()：agent-proxy 是**本机**起的服务（proxy_url() 指向 127.0.0.1），
@@ -232,6 +233,11 @@ pub async fn chat(
         .header("Content-Type", "application/json")
         .header("X-Session-Id", session_id)
         .header("X-CLI-Type", cli_type);
+    // 工作区目录（工作事项的写作文件夹）：Pi 等 wrapper 用它作为 cwd，
+    // 在这里读上下文、写回产出。对话（面板）不传则为 None，走默认 cwd。
+    if let Some(wd) = working_dir.filter(|s| !s.trim().is_empty()) {
+        req = req.header("X-Working-Dir", wd);
+    }
     if let Some(aid) = proxy_agent_id {
         if !aid.trim().is_empty() {
             req = req.header("X-Agent-Id", aid);
@@ -721,6 +727,7 @@ pub async fn run_agent_turn_inner(
     system_prompt: String,
     user_message: String,
     history: Option<Vec<ChatMessage>>,
+    working_dir: Option<String>,
 ) -> Result<AgentTurnResult, String> {
     let state = app.state::<AgentSessionState>();
     let sid = state.get_or_create(&agent_id);
@@ -752,6 +759,7 @@ pub async fn run_agent_turn_inner(
         &cli_type,
         proxy_agent_id.as_deref(),
         messages,
+        working_dir.as_deref(),
     )
     .await?;
     Ok(AgentTurnResult {

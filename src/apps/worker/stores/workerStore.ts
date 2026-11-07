@@ -41,6 +41,8 @@ interface WorkerState {
   cloneAgent: (projectId: string, sourceId: string, name: string) => Promise<boolean>;
   discoverLocalAgents: () => Promise<LocalAgentInfo[]>;
   importLocalAgent: (cli: LocalAgentInfo) => Promise<boolean>;
+  /** 确保当前项目内置了「Pi」默认 Agent（装完即用，无需用户手动导入）。 */
+  ensureBuiltinPi: () => Promise<boolean>;
 
   createTask: (projectId: string, title: string, desc: string, parentId?: string, status?: string) => Promise<boolean>;
   deleteTask: (id: string) => Promise<boolean>;
@@ -304,6 +306,30 @@ export const useWorkerStore = create<WorkerState>()(
           await get().selectProject(pid, { silent: true });
           succeed();
           return true;
+        },
+
+        ensureBuiltinPi: async () => {
+          const pid = get().currentProjectId;
+          if (!pid) return false;
+          // 已有 pi agent 就不再重复挂（import_local_agent 也会查重拒绝）
+          const hasPi = get().agents.some((a) => a.cli_type === "pi");
+          if (hasPi) return true;
+          try {
+            await invoke("import_local_agent", {
+              projectId: pid,
+              cliType: "pi",
+              command: "pi",
+              cliPath: null,
+              cliVersion: "内置",
+              localAgentId: null,
+            });
+            await get().selectProject(pid, { silent: true });
+            return true;
+          } catch (e) {
+            // Pi 已存在（并发生成）等情况：静默失败，不打断用户
+            console.warn("[worker] ensureBuiltinPi:", toText(e));
+            return false;
+          }
         },
 
         createTask: async (projectId, title, desc, parentId, status) => {

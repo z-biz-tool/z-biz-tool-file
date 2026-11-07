@@ -165,6 +165,7 @@ pub fn import_local_agent(
         "claude-code" => "Claude Code",
         "hermes" => "Hermes",
         "opencode" => "OpenCode",
+        "pi" => "Pi（内置）",
         other => other,
     };
     let now = Utc::now().to_rfc3339();
@@ -378,10 +379,10 @@ pub async fn assign_task(
     //   它与**面板对话**共用同一个 proxy session（同一个 Agent ⇒ 同一个会话）。
     let task_id_bg = task.id.clone();
     let agent_id_bg = agent.id.clone();
-    let prompt_bg = format!(
-        "任务标题: {}\n任务描述: {}\n\n请直接给出结果,不要解释你的工具调用过程。",
-        task.title, task.description
-    );
+    // 任务书：给 AI 感知「这个工作事项 + 它的工作区文件夹 + 同项目其它任务」。
+    // 对内置 Pi 尤其关键 —— 它按此在工作区里读上下文、写回产出。
+    let peers = storage::read_tasks_by_project(&task.project_id);
+    let prompt_bg = crate::worker_app::workspace::build_task_kickoff(&task, &peers);
     let app_bg = app.clone();
     tauri::async_runtime::spawn(async move {
         run_task_background(&app_bg, &task_id_bg, &agent_id_bg, &prompt_bg).await;
@@ -412,10 +413,9 @@ pub async fn retry_task(app: tauri::AppHandle, task_id: String) -> Result<Task, 
 
     let task_id_bg = task.id.clone();
     let agent_id_bg = agent.id.clone();
-    let prompt_bg = format!(
-        "任务标题: {}\n任务描述: {}\n\n请直接给出结果,不要解释你的工具调用过程。",
-        task.title, task.description
-    );
+    // 与 assign_task 同款任务书：工作区文件清单进上下文，让重试也带着文件夹感知。
+    let peers = storage::read_tasks_by_project(&task.project_id);
+    let prompt_bg = crate::worker_app::workspace::build_task_kickoff(&task, &peers);
     let app_bg = app.clone();
     tauri::async_runtime::spawn(async move {
         run_task_background(&app_bg, &task_id_bg, &agent_id_bg, &prompt_bg).await;
@@ -456,12 +456,25 @@ async fn run_task_background(app: &tauri::AppHandle, task_id: &str, agent_id: &s
     // 历史：这个任务已有的消息（用户追问 + 之前的自动执行结果）⇒ 重试能接上
     let history_msgs = build_history_msgs(task_id);
 
+    // 工作区文件夹：若 agent 是内置 Pi（或任何支持 workingDir 的 CLI），
+    // 把它作为 Pi 的工作目录 —— AI 在这里读取上下文、写回产出。
+    // 非 Pi 的 CLI 传 None，走各自默认 cwd。
+    let working_dir = match crate::worker_app::storage::find_task(task_id) {
+        Some(t) => Some(
+            crate::worker_app::workspace::ensure_task_dir(&t)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
+        None => None,
+    };
+
     let result = crate::worker_app::agent_session::run_agent_turn_inner(
         app,
         agent_id.to_string(),
         agent.system_prompt.clone(),
         prompt.to_string(),
         Some(history_msgs),
+        working_dir,
     )
     .await;
 
@@ -774,6 +787,8 @@ pub async fn send_task_message(
         agent.system_prompt.clone(),
         message,
         Some(history_msgs),
+        // 面板对话不指定工作目录（走 agent 默认 cwd）；只有任务后台执行带工作区
+        None,
     )
     .await;
 
@@ -842,6 +857,46 @@ pub fn get_worker_config() -> AppConfig {
 #[tauri::command]
 pub fn save_config(config: AppConfig) -> Result<(), String> {
     storage::write_config(&config);
+    Ok(())
+}
+
+// ===== 工作区文件夹（工作事项的写作空间） =====
+
+/// 取一个 task 的工作区目录信息：路径 + 一层文件清单。
+///
+/// 目录由 task id **确定性推导**（见 `workspace.rs`），不落库。它既用来
+/// 给前端展示「这个工作事项的文件夹在哪、里面有什么」，也作为 Pi 写作的
+/// 工作目录（AI 在这里读取上下文、写回产出）。
+#[tauri::command]
+pub fn get_task_workspace(task_id: String) -> Result<serde_json::Value, String> {
+    let task = storage::find_task(&task_id).ok_or("任务不存在")?;
+    let dir = crate::worker_app::workspace::ensure_task_dir(&task).map_err(|e| e.to_string())?;
+    let files = crate::worker_app::workspace::list_dir(&dir);
+    let inventory = crate::worker_app::workspace::file_inventory_text(&dir);
+    Ok(serde_json::json!({
+        "dir": dir.to_string_lossy(),
+        "files": files,
+        "inventory": inventory,
+    }))
+}
+
+/// 打开工作区文件夹（Finder/文件管理器）。
+#[tauri::command]
+pub fn open_task_workspace(_app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let task = storage::find_task(&task_id).ok_or("任务不存在")?;
+    let dir = crate::worker_app::workspace::ensure_task_dir(&task).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        // 用 Finder 打开
+        std::process::Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("打开失败: {e}"))?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // 预留：Windows/Linux 用 plugin-shell 的 reveal（本仓主要在 macOS 跑）
+    }
     Ok(())
 }
 

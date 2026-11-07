@@ -478,6 +478,10 @@ pub fn run() {
             worker_app::agent_session::get_agent_session,
             worker_app::agent_session::set_agent_cli_type,
             worker_app::agent_session::list_agent_sessions,
+            // 工作区文件夹：工作事项的写作空间（get_task_workspace 返回路径+清单，
+            // open_task_workspace 用系统文件管理器打开）
+            worker_app::commands::get_task_workspace,
+            worker_app::commands::open_task_workspace,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。

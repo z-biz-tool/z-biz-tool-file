@@ -307,6 +307,9 @@ fn is_port_in_use(port: u16) -> bool {
 
 /// 解析 `node` 可执行文件。行为是**显式**的（W-02）：
 ///
+/// 0. **捆绑的 node 优先**（2026-11-07）：若 app bundle 里带了一个
+///    `resources/runtime/bin/node`（离线打包的运行时），就用它。
+///    —— 这保证「装完即用、不依赖用户机器上有 node」。
 /// 1. 只在 `PATH` 的每个目录里找 `node`（Windows 额外认 `node.exe`）；
 ///    `PATH` 缺失或为空 ⇒ 这一步**跳过**，不会去猜当前目录；
 /// 2. 扫常见安装位置（Homebrew / /usr/local / /usr/bin / ~/.local/bin）；
@@ -318,11 +321,73 @@ fn is_port_in_use(port: u16) -> bool {
 ///   这是「启动失败时错误可行动」与「不要静默假装成功」的取舍：
 ///   真正的失败点在 `spawn`，那里会把原因翻译成人话。
 pub fn resolve_node() -> Option<PathBuf> {
+    // 0) 捆绑运行时优先：离线打包自带的 node，装完即用
+    if let Some(b) = bundled_node_path() {
+        eprintln!("[agent-proxy] using bundled node: {}", b.display());
+        return Some(b);
+    }
     let path_env = std::env::var_os("PATH");
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
     resolve_node_in(path_env.as_deref(), &home, &common_node_candidates(&home))
+}
+
+/// 捆绑 node 的位置。agent-proxy 用 Tauri `resources` 打包时，
+/// 捆绑的运行时目录落在 `<Contents>/Resources/runtime/`（macOS）或
+/// binary 旁的 `runtime/`（Windows / Linux），node 就在 `bin/node`。
+///
+/// 捆绑结构（离线、装完即用）：
+/// ```text
+/// Resources/
+///   runtime/
+///     bin/node                 ← 独立 node 可执行（~108M）
+///     lib/pi/                  ← 捆绑的 pi agent node_modules
+///     agent-proxy/dist/        ← agent-proxy 自身（自包含 JS）
+/// ```
+/// 返回 `None` 表示没捆绑（dev / 源码跑没带 runtime），走系统 node。
+pub fn bundled_node_path() -> Option<PathBuf> {
+    let p = bundled_runtime_dir()?.join("bin").join(node_exe_name());
+    if !p.is_file() {
+        return None;
+    }
+    // 某些打包流程会丢掉可执行位（resources 拷贝不总保留 mode）。
+    // 这里兜底补 +x：node 二进制必须能 exec。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&p).ok()?.permissions();
+        if perms.mode() & 0o111 == 0 {
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(perms.mode() | 0o755));
+        }
+    }
+    Some(p)
+}
+
+#[cfg(windows)]
+fn node_exe_name() -> &'static str { "node.exe" }
+#[cfg(not(windows))]
+fn node_exe_name() -> &'static str { "node" }
+
+/// 捆绑运行时目录：`<Contents>/Resources/runtime`（macOS）或
+/// binary 旁 `runtime`（其它平台）。找不到返回 `None`。
+pub fn bundled_runtime_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    // macOS .app：抛到 <Contents>/Resources/
+    if let Some(contents) = dir.parent() {
+        let resources = contents.join("Resources");
+        let in_resources = resources.join("runtime");
+        if in_resources.join("bin").join(node_exe_name()).is_file() {
+            return Some(in_resources);
+        }
+        // dev/production 非 bundle：binary 旁 runtime/ 也认
+        let beside = dir.join("runtime");
+        if beside.join("bin").join(node_exe_name()).is_file() {
+            return Some(beside);
+        }
+    }
+    None
 }
 
 fn common_node_candidates(home: &Path) -> Vec<PathBuf> {
@@ -459,6 +524,13 @@ fn pick_highest_nvm_node(nvm_root: &std::path::Path) -> Option<PathBuf> {
 }
 
 fn resolve_entry() -> Option<PathBuf> {
+    // 0. Bundled runtime: <Resources>/runtime/agent-proxy/dist/index.js
+    if let Some(runtime) = bundled_runtime_dir() {
+        let p = runtime.join("agent-proxy").join("dist").join("index.js");
+        if p.exists() {
+            return Some(p);
+        }
+    }
     // 1. Production: alongside the executable. On macOS .app bundles the
     //    Tauri `resources` map lands under Contents/Resources/, while on
     //    Windows / Linux the bundle is laid out next to the .exe / binary.
