@@ -217,6 +217,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   { key: "files", label: "文件管理", icon: <FolderOpenOutlined /> },
   { key: "terminal", label: "终端", icon: <CodeOutlined /> },
   { key: "library", label: "图书馆", icon: <ReadOutlined /> },
+  // 图片库：紧贴图书馆。两者是同一类「按类型看内容」的视图（书 / 图），
+  // 都独立于文件管理的目录树 —— 放在一起，用户找"换个方式看我的东西"时
+  // 不用在两个相隔很远的位置之间跳。
+  { key: "gallery", label: "图片库", icon: <PictureOutlined /> },
   // 数据库板块：2026-11-06 从 z-biz-tool-db 仓搬入（db 独立 app 废弃）。
   // 排在图书馆之后 —— 它和图书馆一样是「叠在主区上的独立工作台」，
   // 与文件管理的浏览树不是一回事。
@@ -242,6 +246,14 @@ const TerminalApp = lazy(() => import("./apps/terminal/TerminalApp"));
  * 首屏在文件管理时完全用不到，没必要让每个用户都下载一遍书目界面。
  */
 const LibraryApp = lazy(() => import("./apps/library/LibraryApp"));
+
+/**
+ * 图片库板块按需加载。
+ *
+ * 它复用 components/MediaGallery（678 行，画廊/列表 + 三档缩略图尺寸），
+ * 首屏在文件管理时完全用不到 —— 没必要让每个用户都下载一遍。
+ */
+const GalleryApp = lazy(() => import("./apps/gallery/GalleryApp"));
 
 /**
  * 数据库板块同样按需加载。
@@ -2944,6 +2956,29 @@ function AppShellInner() {
           }
         >
           <LibraryApp />
+        </Suspense>
+      ) : activeApp === "gallery" ? (
+        // 图片库板块：整块替换主区。
+        // 它有自己的浏览位置（默认 ~/Pictures，记在 localStorage），
+        // **不跟文件管理的 currentPath 联动** —— 「按类型看内容」和
+        // 「当前站在哪个目录」本来就是两件事。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在打开图片库…
+            </div>
+          }
+        >
+          <GalleryApp />
         </Suspense>
       ) : activeApp === "db" ? (
         // 数据库板块：2026-11-06 从 z-biz-tool-db 仓搬入。

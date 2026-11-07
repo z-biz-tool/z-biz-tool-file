@@ -212,6 +212,7 @@ describe("点开才用的组件不许回到首屏", () => {
       // 四个「板块 app」：活动栏点哪个才渲染哪个
       "TerminalApp",
       "LibraryApp",
+      "GalleryApp",
       "DbApp",
       "SysApp",
       "FileManagerApp",

@@ -153,8 +153,10 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 带进来 2 个纯图标按钮（进程详情抽屉与进程表的行内操作）。
  * 这里只调总数、不放松判定 —— 上面那条「每个纯图标按钮都必须有可及名称」
  * 仍然逐个扫、逐个断言，新搬进来的两个也都带了 aria-label。
+ * 117 → 119：图片库板块（src/apps/gallery）新增 2 个纯图标按钮 ——
+ * 工具条的「上级文件夹」与「刷新」（「选文件夹」「回到主目录」带文字，不计入）。
  */
-const TOTAL_ICON_ONLY = 117;
+const TOTAL_ICON_ONLY = 119;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {
