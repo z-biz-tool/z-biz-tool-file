@@ -14,6 +14,34 @@ use tauri::Manager;
 
 const PROXY_DEFAULT_URL: &str = "http://127.0.0.1:9099";
 
+/// 把 file 统一 AI 配置的 provider 预设 id 映射成 **Pi 认的 API key 环境变量名**。
+///
+/// Pi（@earendil-works/pi-coding-agent）用环境变量收凭据，每个 provider 一支
+/// `*_API_KEY`。这里对齐我们实测到的 pi 映射表（chunk-UKVNB6C4.js）：
+/// deepseek → `DEEPSEEK_API_KEY`、openai → `OPENAI_API_KEY`、anthropic →
+/// `ANTHROPIC_API_KEY`、gemini → `GEMINI_API_KEY` 等。把统一配置的密钥
+/// 映射成这支 env，PI wrapper spawn pi 时设进去，Pi 就能拿 LLM 了。
+///
+/// 返回 `(provider_env_name, ...)`；不认识或空 provider 返回 `None` —
+/// 调用方不设对应 env，Pi 走它自己的登录态。
+fn pi_api_key_env(provider: &str) -> Option<&'static str> {
+    let p = provider.trim().to_ascii_lowercase();
+    match p.as_str() {
+        "anthropic" | "claude" => Some("ANTHROPIC_API_KEY"),
+        "openai" | "gpt" | "chatgpt" | "azure" => Some("OPENAI_API_KEY"),
+        "gemini" | "google" | "google-gemini" | "generativelanguage" => Some("GEMINI_API_KEY"),
+        "deepseek" | "深度求索" => Some("DEEPSEEK_API_KEY"),
+        "minimax" | "minimaxi" | "海螺" => Some("MINIMAX_API_KEY"),
+        "kimi" | "moonshot" | "moonshotai" | "月之暗面" => Some("MOONSHOT_API_KEY"),
+        "qwen" | "通义千问" => Some("QWEN_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "xai" | "grok" => Some("XAI_API_KEY"),
+        "groq" => Some("GROQ_API_KEY"),
+        "ollama" => None, // ollama 本地通常不需要 key；即便需要也不走 *_API_KEY 惯例
+        _ => None,
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Persisted {
     /// agentId -> proxySessionId
@@ -237,6 +265,24 @@ pub async fn chat(
     // 在这里读上下文、写回产出。对话（面板）不传则为 None，走默认 cwd。
     if let Some(wd) = working_dir.filter(|s| !s.trim().is_empty()) {
         req = req.header("X-Working-Dir", wd);
+    }
+    // Pi 的 LLM 接入：把 file 统一 AI 配置的 provider + api key 带给 agent-proxy，
+    // 由 Pi wrapper 设成 Pi 认的环境变量（DEEPSEEK_API_KEY 等）。这样「AI 配置板块
+    // 里配的模型商 / Key」真正驱动 Pi —— 不再依赖 Pi 自己的登录态。
+    // 只有 cli_type == pi 才读（claude-code/hermes/opencode 走各自原生登录，不受影响）。
+    if cli_type == "pi" {
+        if let Ok((cfg, key)) = crate::llm_config::read_shared_config_with_key() {
+            let provider = if cfg.preset.is_empty() { cfg.provider } else { cfg.preset };
+            if let Some(env_name) = pi_api_key_env(&provider) {
+                if !key.trim().is_empty() {
+                    req = req.header("X-LLM-Key-Env", env_name);
+                    req = req.header("X-LLM-Key", key.trim());
+                    if !cfg.model.trim().is_empty() {
+                        req = req.header("X-LLM-Model", cfg.model.trim());
+                    }
+                }
+            }
+        }
     }
     if let Some(aid) = proxy_agent_id {
         if !aid.trim().is_empty() {

@@ -1,10 +1,18 @@
 import { useState, useEffect, useRef } from "react";
-import { Typography, Switch, Select, InputNumber, Input, Button, Space, Tabs, Alert, Spin, App as AntdApp } from "antd";
+import { Typography, Switch, Select, Input, Button, Space, Tabs, Alert, Spin, App as AntdApp } from "antd";
 import { ArrowLeftOutlined, TagsOutlined, SettingOutlined } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppConfig } from "../../types";
 import WorkflowEditor from "../WorkflowEditor";
 import TagManager from "../TagManager";
+// 统一 AI 配置面板：与 file 主设置共用一个真源（provider/模型/密钥/测试连接）。
+// 它走 family 统一落点（~/.z-biz-tool/llm/config.json + OS 密钥库），
+// Pi 的 LLM 接入也由这份配置驱动 —— worker 板块不再维护自己那套被禁用的假配置。
+import {
+  FileAiSettingsPanel,
+  loadAiConfigView,
+  type FileAiConfigView,
+} from "../../../../components/AiSettingsPanelAdapter";
 
 const { Text } = Typography;
 
@@ -41,6 +49,12 @@ export default function Settings({ onBack, projectId }: SettingsProps) {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const saveChain = useRef<Promise<void>>(Promise.resolve());
+  // 统一 AI 配置（family 真源）：Pi 的 LLM 接入由它驱动
+  const [aiView, setAiView] = useState<FileAiConfigView | null>(null);
+
+  const loadAiView = () => {
+    loadAiConfigView().then(setAiView).catch(() => setAiView(null));
+  };
 
   const load = () => {
     setLoading(true);
@@ -53,6 +67,7 @@ export default function Settings({ onBack, projectId }: SettingsProps) {
 
   useEffect(() => {
     load();
+    loadAiView();
   }, []);
 
   const save = (newConfig: AppConfig) => {
@@ -128,13 +143,21 @@ export default function Settings({ onBack, projectId }: SettingsProps) {
               label: "AI 模型",
               children: (
                 <div style={{ maxWidth: 600 }}>
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                    message="只有 Agent Proxy URL 会影响运行"
-                    description="默认模型、API Key 与采样参数当前只写入配置文件，尚未接入对话请求，因此已禁用，避免造成「改了会生效」的错觉。"
-                  />
+                  <Section title="统一 AI 配置（Pi / 各 Agent 共用）">
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="这块配置与 file 主设置「AI / LLM」同一个真源"
+                      description="配置 Pi 等内置 Agent 的模型服务商、API Key 与采样参数，实时生效，可点「测试连接」验证。服务商与模型内置深度求索 / OpenAI / Claude / Gemini 等预设。"
+                    />
+                    <FileAiSettingsPanel
+                      view={aiView}
+                      onSaved={() => {
+                        loadAiView();
+                      }}
+                    />
+                  </Section>
                   <Section title="AI 配置">
                     <Row label="Agent Proxy URL">
                       <Input
@@ -142,62 +165,6 @@ export default function Settings({ onBack, projectId }: SettingsProps) {
                         onChange={(e) => update("agent_proxy_url", e.target.value)}
                         style={{ width: 300 }}
                         placeholder="http://127.0.0.1:9099"
-                      />
-                    </Row>
-                    <Row label="默认模型">
-                      <Select
-                        value={config.default_model}
-                        onChange={(v) => update("default_model", v)}
-                        style={{ width: 200 }}
-                        disabled
-                        options={[
-                          { value: "default", label: "默认" },
-                          { value: "claude-code", label: "Claude Code" },
-                          { value: "hermes", label: "Hermes" },
-                          { value: "opencode", label: "OpenCode" },
-                        ]}
-                      />
-                    </Row>
-                    <Row label="API Key">
-                      <Input.Password
-                        value={config.api_key}
-                        onChange={(e) => update("api_key", e.target.value)}
-                        style={{ width: 300 }}
-                        placeholder="可选，部分模型需要"
-                        disabled
-                      />
-                    </Row>
-                    <Row label="Temperature">
-                      <InputNumber
-                        value={config.temperature}
-                        onChange={(v) => update("temperature", v || 0.7)}
-                        min={0}
-                        max={2}
-                        step={0.1}
-                        style={{ width: 120 }}
-                        disabled
-                      />
-                    </Row>
-                    <Row label="Max Tokens">
-                      <InputNumber
-                        value={config.max_tokens}
-                        onChange={(v) => update("max_tokens", v || 4096)}
-                        min={256}
-                        max={128000}
-                        step={256}
-                        style={{ width: 120 }}
-                        disabled
-                      />
-                    </Row>
-                    <Row label="Top P">
-                      <InputNumber
-                        value={config.top_p}
-                        onChange={(v) => update("top_p", v || 1.0)}
-                        min={0}
-                        max={1}
-                        step={0.1}
-                        style={{ width: 120 }}
-                        disabled
                       />
                     </Row>
                   </Section>

@@ -38,8 +38,8 @@ fi
 echo "▶ 使用 node: $NODE_BIN ($("$NODE_BIN" --version))"
 echo "▶ 使用 npm : $NPM_BIN"
 
-# 3) agent-proxy dist 来源（默认 worker 原仓）
-AGENT_PROXY_DIST="${AGENT_PROXY_DIST:-$ROOT/../z-biz-tool-worker/agent-proxy/dist}"
+# 3) agent-proxy dist 来源（默认本仓 vend 的已修复版本 —— 含 Pi LLM 接入）
+AGENT_PROXY_DIST="${AGENT_PROXY_DIST:-$ROOT/src-tauri/agent-proxy-dist}"
 if [ ! -d "$AGENT_PROXY_DIST" ]; then
   echo "❌ 没有 agent-proxy dist: $AGENT_PROXY_DIST（传 AGENT_PROXY_DIST 覆盖）"
   exit 1
