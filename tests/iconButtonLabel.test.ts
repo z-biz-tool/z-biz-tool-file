@@ -155,8 +155,12 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 仍然逐个扫、逐个断言，新搬进来的两个也都带了 aria-label。
  * 117 → 119：图片库板块（src/apps/gallery）新增 2 个纯图标按钮 ——
  * 工具条的「上级文件夹」与「刷新」（「选文件夹」「回到主目录」带文字，不计入）。
+ * 119 → 135：AI 任务看板板块（src/apps/worker）2026-11-07 从 z-biz-tool-worker 搬入，
+ * 带进来 16 个纯图标按钮（项目/Agent 的编辑删除、视图切换、任务行内操作、
+ * 侧栏折叠等，散在 WorkerApp 与各 view 组件里）。这 16 个都已带 aria-label，
+ * 期间只补过 1 个漏网的（WorkerApp 的侧栏折叠钮）。
  */
-const TOTAL_ICON_ONLY = 119;
+const TOTAL_ICON_ONLY = 135;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

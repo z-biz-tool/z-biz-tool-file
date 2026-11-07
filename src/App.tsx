@@ -35,6 +35,7 @@ import {
   // 数据库板块（2026-11-06 从 z-biz-tool-db 仓搬入）
   DatabaseOutlined,
   DashboardOutlined,
+  ProjectOutlined,
   CopyFilled,
   SwapOutlined,
   SafetyCertificateOutlined,
@@ -65,6 +66,8 @@ import { resolveFileDeepLink, type HandoffItem } from "./_shared/deepLink";
 import { putTerminalHandoff } from "./apps/terminal/handoff";
 // 系统监控板块的深链分流槽（与终端同一个模式：本仓只留一个接收器）
 import { putSysHandoff } from "./apps/sys/handoff";
+// AI 任务看板板块的深链分流槽（与终端/系统同一个模式：本仓只留一个接收器）
+import { putWorkerHandoff } from "./apps/worker/handoff";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
@@ -230,6 +233,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   // 排最后 —— 它是「整机的视角」，前面四个都是「内容/数据的视角」；
   // 用户从具体文件一路看到底层资源，顺序上是收口的位置。
   { key: "sys", label: "系统监控", icon: <DashboardOutlined /> },
+  // AI 任务看板：2026-11-07 从 z-biz-tool-worker 仓搬入。
+  // 排最后 —— 它是最「需要用户主动打开」的工具型板块（项目管理），
+  // 不像文件/系统那样一进来就要用，放末尾不抢注意力。
+  { key: "worker", label: "工作台", icon: <ProjectOutlined /> },
 ];
 
 /**
@@ -277,6 +284,12 @@ const DbApp = lazy(() => import("./apps/db/DbApp"));
  * 拉进程流，静态 import 等于让所有用户一进文件管理就开始采进程表。
  */
 const SysApp = lazy(() => import("./apps/sys/SysApp"));
+
+/**
+ * AI 任务看板板块按需加载（2026-11-07 从 z-biz-tool-worker 仓搬入）。
+ * 项目管理在文件管理场景下用不到，没必要让每个用户都下载一遍。
+ */
+const WorkerApp = lazy(() => import("./apps/worker/WorkerApp"));
 
 /**
  * 「点开才用」的功能组件 —— 一律走 lazyModal。
@@ -743,6 +756,12 @@ function AppShellInner() {
         if (item.product === "sys") {
           putSysHandoff(item);
           setActiveApp("sys");
+          return;
+        }
+        // AI 任务看板板块同理（2026-11-07 从 worker 仓搬入）
+        if (item.product === "worker") {
+          putWorkerHandoff(item);
+          setActiveApp("worker");
           return;
         }
         console.warn("[file] 深链:", msg);
@@ -3057,6 +3076,27 @@ function AppShellInner() {
           }
         >
           <SysApp />
+        </Suspense>
+      ) : activeApp === "worker" ? (
+        // AI 任务看板板块：2026-11-07 从 z-biz-tool-worker 仓搬入。
+        // 整块替换主区 —— 项目和任务的看板不适合塞进文件管理的目录树。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载任务看板…
+            </div>
+          }
+        >
+          <WorkerApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

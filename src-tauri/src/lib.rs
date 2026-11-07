@@ -53,10 +53,16 @@ mod trash;
 // 整棵树挂在 crate::sys_app::* 下，避免和本仓已有的 commands / monitor / ... 撞名。
 //
 // 和 db_app 一样要显式 #[path]：搬进来后目录名变成了 sys_app，
-// 与 Rust 2018 的「目录名 = 模块名」规则对不上，必须指到 sys_app/lib.rs。
-// 它没有 run()（Tauri Builder 归本仓管），对外只暴露 attach() + startup()。
+    // 与 Rust 2018 的「目录名 = 模块名」规则对不上，必须指到 sys_app/lib.rs。
+    // 它没有 run()（Tauri Builder 归本仓管），对外只暴露 attach() + startup()。
 #[path = "sys_app/lib.rs"]
 pub mod sys_app;
+// AI 任务看板（项目管理 / Agent 员工 / 任务分配执行验收）：从 z-biz-tool-worker
+// 仓整体搬入，作为 file 的一个板块。整棵树挂在 crate::worker_app::* 下，
+// 避免和本仓已有的 commands / db / ... 撞名。它同样没有 run()，只暴露
+// attach() + startup() + shutdown()。
+#[path = "worker_app/lib.rs"]
+pub mod worker_app;
 mod updater;
 mod video_thumb;
 mod watcher;
@@ -97,6 +103,10 @@ pub fn run() {
     // 它的 new() 与 publish() 必须紧挨着执行，不适合在这里散成三行 manage。
     // 链到这里断一次，是因为 attach 是个自由函数，没法接进上面的 builder 链。
     let builder = sys_app::attach(builder);
+
+    // AI 任务看板板块的状态（agent-proxy 句柄 / 会话表）由 worker_app::attach 挂上去。
+    // 与 sys_app 同理断开再接，因为 attach 是自由函数。
+    let builder = worker_app::attach(builder);
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -428,6 +438,46 @@ pub fn run() {
             sys_app::commands::get_sys_active,
             sys_app::commands::notify_status,
             sys_app::commands::send_test_notification,
+            // ── AI 任务看板（2026-11-07 从 z-biz-tool-worker 搬入）──
+            // 36 个命令全部搬。唯一没搬的 `zbiz_take_pending`：它是家族统一深链
+            // 命令，本仓已经注册过一份同名同义的，重复注册会让 Tauri 启动 panic。
+            worker_app::commands::list_projects,
+            worker_app::commands::create_project,
+            worker_app::commands::rename_project,
+            worker_app::commands::delete_project,
+            worker_app::commands::get_project_stats,
+            worker_app::commands::list_agents,
+            worker_app::commands::create_agent,
+            worker_app::commands::delete_agent,
+            worker_app::commands::clone_agent,
+            worker_app::commands::discover_local_agents,
+            worker_app::commands::import_local_agent,
+            worker_app::commands::list_tasks,
+            worker_app::commands::create_task,
+            worker_app::commands::delete_task,
+            worker_app::commands::assign_task,
+            worker_app::commands::retry_task,
+            worker_app::commands::review_task,
+            worker_app::commands::update_task_status,
+            worker_app::commands::update_task,
+            worker_app::commands::batch_update_tasks,
+            worker_app::commands::get_agent_status,
+            worker_app::commands::send_task_message,
+            worker_app::commands::get_task_messages,
+            worker_app::commands::get_worker_config,
+            worker_app::commands::save_config,
+            worker_app::commands::list_tags,
+            worker_app::commands::create_tag,
+            worker_app::commands::delete_tag,
+            worker_app::commands::get_task_dependencies,
+            worker_app::commands::set_task_dependencies,
+            worker_app::commands::list_documents,
+            worker_app::commands::create_document,
+            worker_app::commands::update_document,
+            worker_app::commands::delete_document,
+            worker_app::agent_session::get_agent_session,
+            worker_app::agent_session::set_agent_cli_type,
+            worker_app::agent_session::list_agent_sessions,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
@@ -474,6 +524,9 @@ pub fn run() {
             // 必须放在 setup 里而不是 attach 里 —— 它要解析 app_local_data_dir，
             // Builder 阶段还没有 AppHandle。
             sys_app::startup(app.handle());
+            // AI 任务看板：拉起 agent-proxy 守护进程（连接本地 CLI 用）。
+            // 失败不阻断启动 —— 只是代理暂时不可用，界面功能照常。
+            worker_app::startup(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -486,6 +539,9 @@ pub fn run() {
             // 由 file 的退出回调统一负责。
             if let tauri::RunEvent::Exit = event {
                 db_app::shutdown_pool_registry();
+                // AI 任务看板：agent-proxy 和它拉起的 CLI 不能跟着"关窗即隐藏"继续烧
+                // token（独立运行时靠 exit(0) 触发；这里由文件统一在 Exit 时清理）。
+                worker_app::shutdown(_app);
             }
         });
 }

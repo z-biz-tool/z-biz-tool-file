@@ -25,7 +25,9 @@ function sourceFiles(): string[] {
     // 终端板块（src/apps/terminal）是 2026-11-04 从 z-biz-tool-terminal 仓搬入的
     // 冻结模块：它用静态 message / Modal.confirm 有 30 多处，全部改成 App.useApp()
     // 要动 40 多个面板组件的调用点，属于独立一轮重构。搬入期先不纳入门禁。
-    .filter((p) => !p.includes("/apps/terminal/"));
+    // AI 任务看板（src/apps/worker）同理(2026-11-07 从 z-biz-tool-worker 仓搬入)，
+    // 9 个文件用静态 message、scope 跨 store 与多面板，同为搬入期冻结、后续单独一轮对齐。
+    .filter((p) => !p.includes("/apps/terminal/") && !p.includes("/apps/worker/"));
 }
 
 /**

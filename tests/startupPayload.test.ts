@@ -215,6 +215,7 @@ describe("点开才用的组件不许回到首屏", () => {
       "GalleryApp",
       "DbApp",
       "SysApp",
+      "WorkerApp",
       "FileManagerApp",
     ]);
     for (const m of src.matchAll(/const\s+(\w+)\s*=\s*lazy\s*\(/g)) {

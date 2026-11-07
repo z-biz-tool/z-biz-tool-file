@@ -92,6 +92,11 @@ tauri-plugin-process = "2"
 sysinfo = "0.33"
 libc = "0.2"
 tauri-plugin-notification = "2.4.0"
+# ── AI 任务看板（2026-11-07 从 z-biz-tool-worker 搬入）用到的依赖 ──
+# rusqlite: 任务/Agent 的组织数据落库（bundled 自带 SQLite，免系统库依赖）；
+# reqwest: 本地 agent-proxy 的 HTTP/SSE 转发。serde/serde_json/uuid/chrono 上面已有。
+rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 dirs = "5"
 
 # ─────────────────────── 终端板块（2026-11-04 从 z-biz-tool-terminal 仓搬入）──

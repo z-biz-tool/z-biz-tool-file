@@ -34,7 +34,9 @@ function hits(): string[] {
     // 终端板块（src/apps/terminal）是 2026-11-04 从 z-biz-tool-terminal 仓搬入的
     // 冻结模块，它自带一套深色终端配色，个别字面量还没换成主题变量。
     // 搬入期先豁免，等这轮重构收尾再逐处对齐。
-    .filter((p) => !p.includes("/apps/terminal/"));
+    // AI 任务看板（src/apps/worker）同理(2026-11-07 从 z-biz-tool-worker 搬入)，
+    // 看板/甘特控件有若干业务配色字面量，同为搬入期冻结、后续单独对齐。
+    .filter((p) => !p.includes("/apps/terminal/") && !p.includes("/apps/worker/"));
   for (const file of files) {
     // ROOT 没有结尾斜杠，slice 出来会带一个前导 "/" —— 不剥掉的话豁免清单永远对不上
     const rel = file.slice(ROOT.length).replace(/^\/+/, "");

@@ -1,0 +1,968 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Layout, Button, Modal, Input, Tag, Empty, Space, Typography, Dropdown,
+  Avatar, Collapse, Card, Spin, Alert, Tooltip, Checkbox, Radio,
+  // 提示通道全站一条：用 App.useApp() 拿到的局部实例（跟着 file 的 ConfigProvider 走，
+  // 才能吃到主题与 locale）。静态 `msgApi.xxx` 会渲染到 body 上，主题是默认亮色。
+  App as AntdApp,
+} from "antd";
+import type { InputRef } from "antd";
+import {
+  PlusOutlined, DeleteOutlined, CopyOutlined, EditOutlined,
+  SettingOutlined, ApiOutlined, ThunderboltOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  SwapOutlined,
+} from "@ant-design/icons";
+import { invoke } from "@tauri-apps/api/core";
+import type { Handoff } from "z-biz-tool-shared/protocol";
+import { resolveWorkerDeepLink } from "./_shared/deepLink";
+// 深链分流槽：file 的 App.tsx 是唯一接收器，把属于工作台的投到这里
+import { subscribeWorkerHandoff, takePendingWorkerHandoff } from "./handoff";
+// store 不是组件不能调 useApp，把 context 实例 bind 给它
+import { bindWorkerMessage } from "./messageBridge";
+import { useWorkerStore } from "./stores/workerStore";
+import { useViewStore, VIEW_ORDER } from "./stores/viewStore";
+import { filterTasks } from "./utils/taskFilters";
+import { useDraft } from "./hooks/useDraft";
+import type { Task, LocalAgentInfo, Project, Agent } from "./types";
+import TopBar from "./components/TopBar";
+import KanbanView from "./components/views/KanbanView";
+import ListView from "./components/views/ListView";
+import DashboardView from "./components/views/DashboardView";
+import CalendarView from "./components/views/CalendarView";
+import GanttView from "./components/views/GanttView";
+import DocumentsView from "./components/views/DocumentsView";
+import TaskDetailPanel from "./components/TaskDetailPanel";
+import Settings from "./components/Settings";
+
+const { Sider, Content } = Layout;
+const { Text } = Typography;
+const { TextArea } = Input;
+
+const CLI_LABELS: Record<string, { label: string; color: string }> = {
+  "claude-code": { label: "Claude Code", color: "#d97706" },
+  hermes: { label: "Hermes", color: "#7c3aed" },
+  opencode: { label: "OpenCode", color: "#0ea5e9" },
+};
+
+const AGENT_COLORS = ["#1677ff", "#52c41a", "#faad14", "#eb2f96", "#722ed1", "#13c2c2"];
+
+const POLL_BASE_MS = 5000;
+const POLL_MAX_MS = 30000;
+const POLL_HIDDEN_MS = 30000;
+
+/**
+ * AI 任务看板板块（2026-11-07 从 z-biz-tool-worker 仓整体搬入）。
+ *
+ * 和 sys / db / terminal 板块同一套并入约定：
+ *   1. 高度 100vh → 100%（主区已给了高度，再要 viewport 会超出容器底部）；
+ *   2. 提示通道走 file 外层那个 <AntdApp>（`App.useApp()`），不自己搭
+ *      `msgApi.useMessage()` holder —— 本仓门禁要求全站只有一条提示通道
+ *      （否则提示条和界面不同色、且是静态 API 吃不到主题）；
+ *   3. 深链不再自己注册 `zbiz://` 接收器 —— 那个是取走式、全仓只该有
+ *      file 的 App.tsx 一个，按 product 分流到 handoff.ts（见下方深链块注释）。
+ *   4. 导出名改成 WorkerApp，由 file 的 App.tsx 懒加载（顶层有条件渲染，
+ *      不在首屏）。
+ */
+export default function WorkerApp() {
+  const store = useWorkerStore();
+  // 提示通道复用 file 外层那一个 <AntdApp>（本仓门禁要求全站只有一条提示通道）
+  const { message: msgApi } = AntdApp.useApp();
+  // store 不是组件，把这份 context 实例交给它（见 messageBridge.ts）
+  useEffect(() => { bindWorkerMessage(msgApi); }, [msgApi]);
+  const {
+    currentView, setView, sidebarCollapsed, toggleSidebar,
+    searchQuery, filterPriority, filterAgent, filterTags,
+  } = useViewStore();
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [importLocalOpen, setImportLocalOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Project | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [projectForm, setProjectForm, resetProjectForm] = useDraft("project-new", { name: "", desc: "" });
+  const [manualAgentForm, setManualAgentForm, resetManualAgentForm] = useDraft("agent-manual", {
+    name: "", prompt: "", model: "",
+  });
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [newTaskSignal, setNewTaskSignal] = useState(0);
+  // Agent 会话：当前正在挑 CLI 类型的 Agent（+ 它生效中的类型与会话 id）
+  const [cliPicker, setCliPicker] = useState<{
+    agentId: string;
+    agentName: string;
+    current: string;
+    sessionId: string;
+    saving: boolean;
+  } | null>(null);
+  const searchInputRef = useRef<InputRef>(null);
+
+  const currentProject = store.projects.find((p) => p.id === store.currentProjectId);
+  const agents = store.agents;
+  const tasks = store.tasks;
+
+  // 详情面板跟着 store 走，后台刷新后展示的才是最新内容，而不是点进去那一刻的快照
+  const selectedTask = useMemo(
+    () => (selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) ?? null : null),
+    [selectedTaskId, tasks],
+  );
+
+  // 搜索 + 优先级 + Agent + 标签：过滤逻辑集中在 utils/taskFilters
+  const activeFilters = { query: searchQuery, priority: filterPriority, agentId: filterAgent, tags: filterTags };
+  const filteredTasks = useMemo(
+    () => filterTasks(tasks, activeFilters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks, searchQuery, filterPriority, filterAgent, filterTags],
+  );
+
+  // 启动：恢复上次打开的项目，失效则回落到第一个
+  //
+  // projectsLoaded / pendingDeepLink 是给下面深链接线用的：深链在冷启动时
+  // 就到了，而项目列表是这个 effect 里 `await loadProjects()` 之后才有。
+  // 不等的话，深链落地时 projects 还是空的，会被误报成「没有这个项目」。
+  const projectsLoadedRef = useRef(false);
+  const pendingDeepLinkRef = useRef<{ projectId: string | null; taskId: string | null } | null>(null);
+
+  // 把深链的「选项目 + 定位任务」真正落到界面上。
+  //
+  // 定位任务走 setSelectedTaskId 而不是 setSearchQuery：前者会打开任务详情抽屉
+  // （见下面的 selectedTask / TaskDetail），那才是「给我看这个任务」；
+  // 后者是搜索框，只是把列表过滤成标题匹配的一堆，反而把上下文打散了。
+  const landProjectDeepLink = useCallback(async (projectId: string, taskId: string | null) => {
+    const wstore = useWorkerStore.getState();
+    const proj = wstore.projects.find((p) => p.id === projectId);
+    if (!proj) {
+      msgApi.error(`没有这个项目 ${projectId}`);
+      return;
+    }
+    await wstore.selectProject(projectId);
+    if (!taskId) return;
+
+    const task = useWorkerStore.getState().tasks.find((t) => t.id === taskId);
+    if (!task) {
+      msgApi.warning(`项目 ${proj.name} 里没有这个任务 ${taskId}`);
+      return;
+    }
+    useViewStore.getState().setView("list");
+    setSelectedTaskId(task.id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await store.loadProjects();
+      if (cancelled) return;
+      const { projects, currentProjectId, selectProject, clearProject } = useWorkerStore.getState();
+      const stillValid = currentProjectId && projects.some((p) => p.id === currentProjectId);
+      if (stillValid) {
+        await selectProject(currentProjectId!);
+      } else if (projects.length > 0) {
+        await selectProject(projects[0].id);
+      } else if (currentProjectId) {
+        clearProject();
+      }
+      // 加载完成（成功与否）就放开深链落地，避免 pending 永远等不到列表
+      projectsLoadedRef.current = true;
+      const pending = pendingDeepLinkRef.current;
+      pendingDeepLinkRef.current = null;
+      if (pending?.projectId) void landProjectDeepLink(pending.projectId, pending.taskId);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // zbiz:// 深链接收侧：**机制**共享层、唯一接收器在 file 的 App.tsx（它常驻）。
+  // 那边按 item.product 分流，属于 worker 的整条投到 handoff 槽 —— 两个接收器
+  // 会互相抢消费式的 `take_pending`，表现为「深链点了没反应」，且两条链路都不报错。
+  // 这里只负责把「切视图 / 选项目 / 定位任务」落地到两个 store。
+  // 接不住（未知动作、未知视图、task 缺 project）必须给可见提示 —— 否则又是「点了没反应」。
+  useEffect(() => {
+    const apply = (item: Handoff) => {
+      const out = resolveWorkerDeepLink(item);
+      if (out.problem) {
+        console.warn("[worker] 未适配的深链", item, out.problem);
+        msgApi.warning(out.problem);
+        return;
+      }
+      const view = out.view;
+      const projectId = out.projectId;
+      const taskId = out.taskId;
+
+      if (view) useViewStore.getState().setView(view);
+
+      if (!projectId) return;
+
+      // 项目列表还没回来：先挂起，等上面那个启动 effect 收尾时再落地
+      if (!projectsLoadedRef.current) {
+        pendingDeepLinkRef.current = { projectId, taskId };
+        return;
+      }
+      void landProjectDeepLink(projectId, taskId);
+    };
+    // 板块还没挂载时投递的那条，投递方先存着了
+    const queued = takePendingWorkerHandoff();
+    if (queued) apply(queued);
+    return subscribeWorkerHandoff(apply);
+  }, [landProjectDeepLink, msgApi]);
+
+  const hasInFlight = useMemo(
+    () => tasks.some((t) => t.status === "doing" || t.status === "waiting"),
+    [tasks],
+  );
+
+  // 后台执行中：只轮便宜的 stats，窗口不可见时降频，失败指数退避，卸载即停
+  useEffect(() => {
+    const projectId = currentProject?.id;
+    if (!projectId || !hasInFlight) return;
+    let stopped = false;
+    let timer: number | undefined;
+    let delay = POLL_BASE_MS;
+
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        if (stopped) return;
+        if (document.hidden) {
+          delay = POLL_HIDDEN_MS;
+        } else {
+          const ok = await useWorkerStore.getState().refreshQuiet(projectId);
+          delay = ok ? POLL_BASE_MS : Math.min(delay * 2, POLL_MAX_MS);
+        }
+        schedule();
+      }, delay);
+    };
+    schedule();
+
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [currentProject?.id, hasInFlight]);
+
+  // 真正的失效信号：窗口重新获得焦点/回到前台才补一次全量
+  useEffect(() => {
+    const reactivate = () => {
+      if (document.hidden) return;
+      const { currentProjectId, selectProject } = useWorkerStore.getState();
+      if (currentProjectId) void selectProject(currentProjectId, { silent: true });
+    };
+    window.addEventListener("focus", reactivate);
+    document.addEventListener("visibilitychange", reactivate);
+    return () => {
+      window.removeEventListener("focus", reactivate);
+      document.removeEventListener("visibilitychange", reactivate);
+    };
+  }, []);
+
+  // ─────────── 快捷键 ───────────
+  // 用 ref 持有最新闭包，全局监听只装一次，免得每次渲染摘装 keydown。
+  const hotkeyRef = useRef<{
+    newItem: () => void;
+    focusSearch: () => void;
+    switchIndex: (i: number) => void;
+    closeTop: () => void;
+    modalOpen: () => boolean;
+  }>({
+    newItem: () => {},
+    focusSearch: () => {},
+    switchIndex: () => {},
+    closeTop: () => {},
+    modalOpen: () => false,
+  });
+
+  useEffect(() => {
+    hotkeyRef.current = {
+      newItem: () => {
+        if (!currentProject) {
+          setNewProjectOpen(true);
+          return;
+        }
+        setView("kanban");
+        setNewTaskSignal((n) => n + 1);
+      },
+      focusSearch: () => searchInputRef.current?.focus(),
+      switchIndex: (i) => {
+        const view = VIEW_ORDER[i];
+        if (view) setView(view);
+      },
+      closeTop: () => {
+        if (selectedTaskId) {
+          setSelectedTaskId(null);
+          return;
+        }
+        if (currentView === "settings") setView("kanban");
+      },
+      modalOpen: () => newProjectOpen || importLocalOpen || !!renameTarget,
+    };
+  });
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing =
+        !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+
+      if (e.key === "Escape") {
+        if (typing) return; // 输入框里的 Esc 交给组件自己（下拉/Modal）
+        // antd Modal 自带 Esc 关闭，这里只处理它管不到的浮层
+        if (hotkeyRef.current.modalOpen()) return;
+        e.preventDefault();
+        hotkeyRef.current.closeTop();
+        return;
+      }
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "n") {
+        e.preventDefault();
+        hotkeyRef.current.newItem();
+        return;
+      }
+      if (typing) return;
+      if (k === "f") {
+        e.preventDefault();
+        hotkeyRef.current.focusSearch();
+      } else if (/^[1-9]$/.test(k)) {
+        e.preventDefault();
+        hotkeyRef.current.switchIndex(Number(k) - 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const openRename = (p: Project) => {
+    setRenameTarget(p);
+    setRenameValue(p.name);
+  };
+
+  const submitNewProject = async () => {
+    if (await store.createProject(projectForm.name, projectForm.desc)) {
+      setNewProjectOpen(false);
+      resetProjectForm();
+    }
+  };
+
+  const submitRename = async () => {
+    const target = renameTarget;
+    if (!target) return;
+    const name = renameValue.trim();
+    if (!name) return msgApi.warning("项目名称不能为空");
+    if (store.projects.some((p) => p.id !== target.id && p.name.trim().toLowerCase() === name.toLowerCase())) {
+      return msgApi.warning("已存在同名项目");
+    }
+    if (name === target.name) {
+      setRenameTarget(null);
+      return;
+    }
+    if (await store.renameProject(target.id, name)) setRenameTarget(null);
+  };
+
+  const sider = (
+    <Sider
+      width={sidebarCollapsed ? 48 : 220}
+      collapsed={sidebarCollapsed}
+      collapsedWidth={48}
+      style={{ background: "#fff", borderRight: "1px solid #f0f0f0", transition: "width 0.2s" }}
+    >
+      <div style={{ padding: sidebarCollapsed ? "8px 4px" : "12px 12px" }}>
+        <div style={{ display: "flex", justifyContent: sidebarCollapsed ? "center" : "space-between", alignItems: "center", marginBottom: 8 }}>
+          {!sidebarCollapsed && <Text strong style={{ fontSize: 13 }}>项目</Text>}
+          <Tooltip title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}>
+            <Button
+              type="text"
+              size="small"
+              icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={toggleSidebar}
+              aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            />
+          </Tooltip>
+        </div>
+        {!sidebarCollapsed && (
+          <>
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={() => setNewProjectOpen(true)}
+              block
+              style={{ marginBottom: 12 }}
+            >
+              新建项目
+            </Button>
+            {store.projects.map((p) => (
+              <Card
+                key={p.id}
+                size="small"
+                hoverable
+                style={{ marginBottom: 6, borderLeft: p.id === store.currentProjectId ? "3px solid #1677ff" : undefined, cursor: "pointer" }}
+                onClick={() => store.selectProject(p.id)}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text strong ellipsis style={{ flex: 1, fontSize: 12 }}>{p.name}</Text>
+                  <Dropdown
+                    menu={{
+                      items: [
+                        { key: "rename", label: "重命名", icon: <EditOutlined /> },
+                        { key: "del", label: "删除", icon: <DeleteOutlined />, danger: true },
+                      ],
+                      onClick: ({ key }) => {
+                        if (key === "rename") openRename(p);
+                        if (key === "del") {
+                          Modal.confirm({
+                            title: `删除项目「${p.name}」？`,
+                            content: "该项目的任务、Agent、文档与标签会一并删除，无法恢复。",
+                            okText: "删除",
+                            cancelText: "取消",
+                            okButtonProps: { danger: true },
+                            autoFocusButton: "cancel",
+                            onOk: async () => {
+                              const ok = await store.deleteProject(p.id);
+                              if (!ok) throw new Error("delete project failed");
+                              msgApi.success("项目已删除");
+                            },
+                          });
+                        }
+                      },
+                    }}
+                    trigger={["click"]}
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<SettingOutlined />}
+                      aria-label={`管理项目「${p.name}」`}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Dropdown>
+                </div>
+                <Text type="secondary" ellipsis style={{ fontSize: 11 }}>{p.description}</Text>
+              </Card>
+            ))}
+            {store.projects.length === 0 && (
+              <Empty description={store.loading ? "加载中" : "暂无项目"} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )}
+          </>
+        )}
+      </div>
+    </Sider>
+  );
+
+  const renderContent = () => {
+    if (currentView === "settings") {
+      return <Settings onBack={() => setView("kanban")} projectId={store.currentProjectId} />;
+    }
+
+    if (!currentProject) {
+      return (
+        <Content style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Empty description="请选择或创建一个项目" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setNewProjectOpen(true)}>创建项目</Button>
+          </Empty>
+        </Content>
+      );
+    }
+
+    if (store.loading && tasks.length === 0) {
+      return (
+        <Content style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Spin tip="加载项目中" />
+        </Content>
+      );
+    }
+
+    const handleTaskClick = (task: Task) => setSelectedTaskId(task.id);
+
+    switch (currentView) {
+      case "dashboard":
+        return <Content style={{ padding: 16, overflow: "auto" }}><DashboardView tasks={filteredTasks} agents={agents} stats={store.stats} /></Content>;
+      case "kanban":
+        return <Content style={{ padding: 16, overflow: "auto" }}><KanbanView tasks={filteredTasks} agents={agents} onTaskClick={handleTaskClick} openNewTaskSignal={newTaskSignal} /></Content>;
+      case "list":
+        return <Content style={{ padding: 16, overflow: "auto" }}><ListView tasks={filteredTasks} agents={agents} onTaskClick={handleTaskClick} /></Content>;
+      case "calendar":
+        return <Content style={{ padding: 16, overflow: "auto" }}><CalendarView tasks={filteredTasks} /></Content>;
+      case "gantt":
+        return <Content style={{ padding: 16, overflow: "auto" }}><GanttView tasks={filteredTasks} /></Content>;
+      case "documents":
+        return <Content style={{ padding: 16, overflow: "auto" }}><DocumentsView projectId={currentProject.id} /></Content>;
+      case "agents":
+        return <Content style={{ padding: 16, overflow: "auto" }}>{renderAgentTab()}</Content>;
+      default:
+        return <Content style={{ padding: 16, overflow: "auto" }}><KanbanView tasks={filteredTasks} agents={agents} onTaskClick={handleTaskClick} openNewTaskSignal={newTaskSignal} /></Content>;
+    }
+  };
+
+  /**
+   * 打开「切换 CLI 类型」对话框。
+   *
+   * ⚠ 为什么要这个入口（2026-10-25）：
+   * 后端本来就有 `get_agent_session` / `set_agent_cli_type` 两个命令，
+   * 但**前端从来没调过**（家族探针实测：worker 38 个注册命令里，
+   * 它们属「连提都没提」那一档）⇒
+   * ① 用户没法决定某个 Agent 用哪个 CLI 对话；
+   * ② 后端那张「覆盖表」永远是空的 ⇒ 对话**永远**路由到 claude-code
+   *    ⇒ 卡片上写着「Hermes」的 Agent，对话里跑的却是 Claude Code。
+   * ⇒ 现在这个入口把两者接上：读当前生效值（get）→ 改（set）。
+   */
+  const openCliPicker = async (agent: Agent) => {
+    let current = agent.cli_type || "claude-code";
+    let sessionId = "";
+    try {
+      const info = await invoke<{ agent_id: string; session_id: string; cli_type: string }>(
+        "get_agent_session",
+        { agentId: agent.id },
+      );
+      if (info?.cli_type) current = info.cli_type;
+      sessionId = info?.session_id || "";
+    } catch (e) {
+      // 读不到就退回卡片上显示的那个，别把对话框卡住
+      msgApi.warning(`读取 Agent 会话失败：${e?.toString?.() || e}`);
+    }
+    setCliPicker({ agentId: agent.id, agentName: agent.name, current, sessionId, saving: false });
+  };
+
+  const saveCliType = async (cliType: string) => {
+    if (!cliPicker) return;
+    setCliPicker({ ...cliPicker, saving: true });
+    try {
+      await invoke("set_agent_cli_type", { agentId: cliPicker.agentId, cliType });
+      msgApi.success(`${cliPicker.agentName} 现在走 ${CLI_LABELS[cliType]?.label || cliType}`);
+      setCliPicker(null);
+    } catch (e) {
+      msgApi.error(`保存失败：${e?.toString?.() || e}`);
+      setCliPicker({ ...cliPicker, saving: false });
+    }
+  };
+
+  // Agent 管理面板
+  const renderAgentTab = () => (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <Text type="secondary">
+          本项目当前挂载 <Text strong>{agents.length}</Text> 个 Agent。
+        </Text>
+        <Space>
+          <Button icon={<ApiOutlined />} onClick={() => setImportLocalOpen(true)}>引入本地 Agent</Button>
+        </Space>
+      </div>
+      {agents.length === 0 ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            <Space direction="vertical" size={8}>
+              <Text type="secondary">本项目还没有 Agent</Text>
+              <Button type="primary" icon={<ApiOutlined />} onClick={() => setImportLocalOpen(true)}>引入本地 Agent</Button>
+            </Space>
+          }
+          style={{ padding: "60px 0" }}
+        />
+      ) : (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {agents.map((a, i) => {
+            const cliMeta = a.cli_type ? CLI_LABELS[a.cli_type] : null;
+            const isLocal = a.source === "local";
+            return (
+              <Card key={a.id} size="small" style={{ width: 260, borderTop: cliMeta ? `3px solid ${cliMeta.color}` : undefined }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Avatar style={{ backgroundColor: AGENT_COLORS[i % AGENT_COLORS.length], flexShrink: 0 }}>{a.name[0]}</Avatar>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text strong ellipsis style={{ display: "block", fontSize: 13 }}>{a.name}</Text>
+                    <Space size={4}>
+                      <Tag color={a.status === "working" ? "processing" : a.status === "idle" ? "default" : "error"} style={{ fontSize: 11, margin: 0 }}>
+                        {a.status === "working" ? "工作中" : a.status === "idle" ? "空闲" : "离线"}
+                      </Tag>
+                      {isLocal && cliMeta && <Tag color={cliMeta.color} style={{ fontSize: 11, margin: 0 }}>{cliMeta.label}</Tag>}
+                    </Space>
+                  </div>
+                  <Dropdown
+                    menu={{
+                      items: [
+                        { key: "clone", label: "克隆", icon: <CopyOutlined /> },
+                        {
+                          key: "cli",
+                          label: "切换 CLI 类型",
+                          icon: <SwapOutlined />,
+                          disabled: !isLocal,
+                        },
+                        { key: "del", label: "删除", icon: <DeleteOutlined />, danger: true },
+                      ],
+                      onClick: async ({ key }) => {
+                        if (key === "del") {
+                          Modal.confirm({
+                            title: `删除 Agent「${a.name}」？`,
+                            content: "该 Agent 会从项目移除，并通知代理关闭它拉起的 CLI 会话；此操作无法恢复。",
+                            okText: "删除",
+                            cancelText: "取消",
+                            okButtonProps: { danger: true },
+                            autoFocusButton: "cancel",
+                            onOk: async () => {
+                              const ok = await store.deleteAgent(a.id);
+                              if (!ok) throw new Error("delete agent failed");
+                              msgApi.success(`已删除 ${a.name}`);
+                            },
+                          });
+                        }
+                        if (key === "clone") {
+                          const ok = await store.cloneAgent(currentProject!.id, a.id, "");
+                          if (ok) msgApi.success(`已克隆 ${a.name}`);
+                        }
+                        if (key === "cli" && isLocal) {
+                          await openCliPicker(a);
+                        }
+                      },
+                    }}
+                    trigger={["click"]}
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<SettingOutlined />}
+                      aria-label={`管理 Agent「${a.name}」`}
+                    />
+                  </Dropdown>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 11, color: "#999" }}>
+                  模型: {a.model || "default"}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      <Collapse
+        ghost
+        style={{ marginTop: 24 }}
+        items={[{
+          key: "advanced",
+          label: <Space><ThunderboltOutlined /><Text type="secondary">高级模式:手填 Agent</Text></Space>,
+          children: (
+            <div style={{ padding: "0 12px 12px", maxWidth: 600 }}>
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <Input placeholder="Agent 名称" value={manualAgentForm.name} onChange={(e) => setManualAgentForm({ ...manualAgentForm, name: e.target.value })} />
+                <TextArea placeholder="系统提示词" rows={3} value={manualAgentForm.prompt} onChange={(e) => setManualAgentForm({ ...manualAgentForm, prompt: e.target.value })} />
+                <Input placeholder="模型(如 gpt-4, claude-3)" value={manualAgentForm.model} onChange={(e) => setManualAgentForm({ ...manualAgentForm, model: e.target.value })} />
+                <Button
+                  type="dashed"
+                  icon={<PlusOutlined />}
+                  onClick={async () => {
+                    if (!manualAgentForm.name.trim()) return msgApi.warning("请输入 Agent 名称");
+                    const ok = await store.createAgent(
+                      currentProject!.id,
+                      manualAgentForm.name.trim(),
+                      manualAgentForm.prompt,
+                      manualAgentForm.model,
+                    );
+                    if (ok) {
+                      resetManualAgentForm();
+                      msgApi.success("已创建 Agent");
+                    }
+                  }}
+                >
+                  创建手填 Agent
+                </Button>
+              </Space>
+            </div>
+          ),
+        }]}
+      />
+    </div>
+  );
+
+  const retryLast = async () => {
+    const ok = await store.reloadAll();
+    if (ok) msgApi.success("已重新加载");
+  };
+
+  return (
+    <Layout style={{ height: "100%" }}>
+      {sider}
+      {/* minWidth:0 是这里的关键：antd Layout 是 flex 项，默认 min-width:auto，
+          900px 窗宽下看板内容会把整个页面撑出横向滚动条，而不是在内容区内部滚 */}
+      <Layout style={{ minWidth: 0 }}>
+        {currentProject && currentView !== "settings" && (
+          <div style={{ padding: "12px 12px 0", minWidth: 0 }}>
+            <TopBar
+              projectName={currentProject.name}
+              searchInputRef={searchInputRef}
+              filteredCount={filteredTasks.length}
+              totalCount={tasks.length}
+            />
+          </div>
+        )}
+        {store.error && (
+          <div style={{ padding: "0 16px 8px" }}>
+            <Alert
+              type="error"
+              showIcon
+              message={store.error}
+              closable
+              onClose={store.clearError}
+              action={
+                <Button size="small" onClick={retryLast}>
+                  重试
+                </Button>
+              }
+            />
+          </div>
+        )}
+        {currentView === "settings" ? (
+          renderContent()
+        ) : (
+          <Content style={{ overflow: "auto" }}>
+            {renderContent()}
+          </Content>
+        )}
+      </Layout>
+
+      {/* 新建项目弹窗 */}
+      <Modal
+        title="新建项目"
+        open={newProjectOpen}
+        okText="创建"
+        onOk={submitNewProject}
+        onCancel={() => setNewProjectOpen(false)}
+      >
+        <Input
+          autoFocus
+          placeholder="项目名称"
+          value={projectForm.name}
+          onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })}
+          onPressEnter={submitNewProject}
+          style={{ marginBottom: 8 }}
+        />
+        <TextArea placeholder="项目描述" rows={3} value={projectForm.desc} onChange={(e) => setProjectForm({ ...projectForm, desc: e.target.value })} />
+      </Modal>
+
+      {/* 切换 Agent 的 CLI 类型 */}
+      <Modal
+        title={cliPicker ? `切换 "${cliPicker.agentName}" 的 CLI 类型` : "切换 CLI 类型"}
+        open={!!cliPicker}
+        onCancel={() => setCliPicker(null)}
+        footer={null}
+        width={480}
+      >
+        {cliPicker && (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Alert
+              type="info"
+              showIcon
+              message="这个设置会同时作用于「自动执行」和「面板对话」"
+              description="后端取的是：显式覆盖 > 这个 Agent 自己的 cli_type > claude-code。改动立即生效。"
+            />
+            <Radio.Group
+              value={cliPicker.current}
+              onChange={(e) => setCliPicker({ ...cliPicker, current: e.target.value })}
+              style={{ display: "flex", flexDirection: "column", gap: 8 }}
+            >
+              {Object.entries(CLI_LABELS).map(([key, meta]) => (
+                <Radio key={key} value={key}>
+                  <Tag color={meta.color} style={{ marginRight: 8 }}>{meta.label}</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{key}</Text>
+                </Radio>
+              ))}
+            </Radio.Group>
+            {cliPicker.sessionId && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                会话 ID：{cliPicker.sessionId}
+              </Text>
+            )}
+            <Space>
+              <Button
+                type="primary"
+                loading={cliPicker.saving}
+                onClick={() => saveCliType(cliPicker.current)}
+              >
+                保存
+              </Button>
+              <Button onClick={() => setCliPicker(null)}>取消</Button>
+            </Space>
+          </Space>
+        )}
+      </Modal>
+
+      {/* 重命名项目弹窗 */}
+      <Modal
+        title={renameTarget ? `重命名项目 "${renameTarget.name}"` : "重命名项目"}
+        open={!!renameTarget}
+        okText="保存"
+        onOk={submitRename}
+        onCancel={() => setRenameTarget(null)}
+      >
+        <Input
+          autoFocus
+          placeholder="项目名称"
+          value={renameValue}
+          maxLength={60}
+          showCount
+          status={renameValue.trim() ? "" : "error"}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onPressEnter={submitRename}
+        />
+        {!renameValue.trim() && (
+          <Text type="danger" style={{ fontSize: 12 }}>
+            名称不能为空
+          </Text>
+        )}
+      </Modal>
+
+      {/* 引入本地 Agent 弹窗 */}
+      <ImportLocalAgentModal
+        open={importLocalOpen}
+        onClose={() => setImportLocalOpen(false)}
+        onImport={async (cli) => {
+          try {
+            await store.importLocalAgent(cli);
+            msgApi.success(`已引入 ${CLI_LABELS[cli.type]?.label || cli.type}`);
+          } catch (e: any) {
+            msgApi.error(e?.toString() || "引入失败");
+            throw e;
+          }
+        }}
+        alreadyImported={new Set(agents.filter((a) => a.cli_type).map((a) => a.cli_type!))}
+      />
+
+      {/* 任务详情面板 */}
+      <TaskDetailPanel
+        task={selectedTask}
+        agents={agents}
+        open={!!selectedTask}
+        onClose={() => setSelectedTaskId(null)}
+      />
+    </Layout>
+  );
+}
+
+// ─────────── 引入本地 Agent 弹窗 ───────────
+function ImportLocalAgentModal(props: {
+  open: boolean;
+  onClose: () => void;
+  onImport: (cli: LocalAgentInfo) => Promise<void>;
+  alreadyImported: Set<string>;
+}) {
+  // 独立函数组件（在 WorkerApp 作用域外），提示通道仍走外层 <AntdApp>
+  const { message: msgApi } = AntdApp.useApp();
+  const { open, onClose, onImport, alreadyImported } = props;
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [list, setList] = useState<LocalAgentInfo[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+
+  const refresh = async () => {
+    setLoading(true);
+    setError(null);
+    setSelected(new Set());
+    try {
+      const data = await useWorkerStore.getState().discoverLocalAgents();
+      setList(data);
+    } catch (e: any) {
+      setList([]);
+      setError(e?.toString?.() || "探测本地 CLI 失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { if (open) refresh(); }, [open]);
+
+  const handleOk = async () => {
+    if (selected.size === 0) return msgApi.warning("请至少勾选一个");
+    setImporting(true);
+    setImportError(null);
+    const failed: string[] = [];
+    try {
+      for (const cli of list) {
+        if (!selected.has(cli.type)) continue;
+        try {
+          await onImport(cli);
+        } catch (e: any) {
+          failed.push(`${CLI_LABELS[cli.type]?.label || cli.type}：${e?.toString?.() || e}`);
+        }
+      }
+      if (failed.length === 0) {
+        onClose();
+        return;
+      }
+      // 旧实现 catch {} 把失败吞掉：弹窗不关、也不说为什么，看着像卡住了。
+      setImportError(`以下 ${failed.length} 个 Agent 引入失败：${failed.join("；")}`);
+      msgApi.warning(`已引入 ${selected.size - failed.length} 个，${failed.length} 个失败`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={<Space><ApiOutlined />引入本地 Agent</Space>}
+      open={open}
+      onCancel={onClose}
+      onOk={handleOk}
+      okText={`导入选中 (${selected.size})`}
+      confirmLoading={importing}
+      width={640}
+    >
+      <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Text type="secondary">扫描本机已安装的 CLI: claude-code / hermes / opencode</Text>
+        <Button size="small" icon={<ApiOutlined />} onClick={refresh} loading={loading}>重新探测</Button>
+      </div>
+      {importError && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="部分 Agent 未引入"
+          description={importError}
+          closable
+          onClose={() => setImportError(null)}
+        />
+      )}
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
+      ) : error ? (
+        <Alert
+          type="error"
+          showIcon
+          message="无法探测本地 CLI"
+          description={
+            <Space direction="vertical" size={8}>
+              <Text style={{ fontSize: 12 }}>{error}</Text>
+              <Button size="small" onClick={refresh}>重试</Button>
+            </Space>
+          }
+        />
+      ) : list.length === 0 ? (
+        <Alert type="warning" showIcon message="未发现本地 CLI" description="确保 agent-proxy 在 127.0.0.1:9099 在线" />
+      ) : (
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          {list.map((cli) => {
+            const meta = CLI_LABELS[cli.type] || { label: cli.type, color: "#666" };
+            const imported = alreadyImported.has(cli.type);
+            const checked = selected.has(cli.type);
+            return (
+              <Card
+                key={cli.type}
+                size="small"
+                style={{
+                  borderColor: checked ? "#1677ff" : undefined,
+                  background: imported ? "#fafafa" : checked ? "#e6f4ff" : undefined,
+                  opacity: imported ? 0.6 : 1,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <Checkbox disabled={imported || !cli.available} checked={checked || imported}
+                    onChange={(e) => { const next = new Set(selected); e.target.checked ? next.add(cli.type) : next.delete(cli.type); setSelected(next); }}
+                  />
+                  <Tag color={meta.color} style={{ minWidth: 110, textAlign: "center", margin: 0 }}>{meta.label}</Tag>
+                  <div style={{ flex: 1 }}>
+                    <Text code style={{ fontSize: 12 }}>{cli.command}</Text>
+                    {cli.version && <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>v{cli.version}</Text>}
+                    {imported && <Tag color="green" style={{ marginLeft: 8, fontSize: 11 }}>已挂载</Tag>}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </Space>
+      )}
+    </Modal>
+  );
+}
