@@ -103,6 +103,9 @@
 .zm-main {
   flex: 1;
   min-width: 0;
+  /* 显式高度：投影外壳与画布都是 height:100%，要求这一层的高度也是确定值。
+     只靠 stretch 拿到的高度在 WebKit 里不足以解析嵌套百分比，画布会塌。 */
+  height: 100%;
   position: relative;
   overflow: hidden;
 }

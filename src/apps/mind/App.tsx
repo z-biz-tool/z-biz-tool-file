@@ -1130,7 +1130,10 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <ThemeProvider>
-        <AntdApp>
+        {/* antd App 会插一层 .ant-app div，默认 height:auto。搬到 file 里之后
+            这层会把 .zm-shell 的 height:100% 掐断，画布塌到内容高度，
+            主区下方露出一整块空白。给它显式 100%（父级 Content 已有确定高度）。 */}
+        <AntdApp style={{ height: "100%" }}>
           <Shell />
         </AntdApp>
       </ThemeProvider>

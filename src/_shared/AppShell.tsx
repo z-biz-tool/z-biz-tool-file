@@ -250,7 +250,13 @@ export function AppShell({
               ? "linear-gradient(180deg, #0f0f23 0%, #1a1a2e 100%)"
               : "linear-gradient(180deg, #f8fafd 0%, #eef2f7 100%)",
             transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+            // 主区要给「显式 height」，不能只给 min-height。
+            // 各子板块（思维导图、看板、词库…）的布局链整条都是 height:100%，
+            // 而百分比高度要求父级高度是确定值；只有 min-height 时父级仍算 auto，
+            // 子链会一路塌到画布自己的 min-height(200px)，下方露出一整块
+            // 主壳渐变背景 —— 看起来就像「多出来一大块空白」。
             // 没有 Header 时整条内容区就是满高，不能再减 48px（否则底部会空一条）
+            height: hideHeader ? "100vh" : "calc(100vh - 48px)",
             minHeight: hideHeader ? "100vh" : "calc(100vh - 48px)",
           }}
         >

@@ -281,12 +281,21 @@ fn forward_stream(stream: impl Read, limit: usize, mut sink: impl FnMut(&[u8])) 
 fn pipe_to_stderr(prefix: impl Into<String>, stream: impl Read + Send + 'static) {
     let prefix = prefix.into();
     thread::spawn(move || {
-        let stderr = std::io::stderr();
-        let mut out = stderr.lock();
-        let _ = write!(out, "[{}] ", prefix);
+        // stderr 锁**绝不能跨过阻塞读**：这条线程要读到子进程关闭管道为止，
+        // 而 setup 主线程在 spawn 返回后立刻 eprintln。锁一跨读就是死锁 ——
+        // 实测应用启动即无响应（主线程持锁等待，窗口永不显示）。
+        {
+            let stderr = std::io::stderr();
+            let mut out = stderr.lock();
+            let _ = write!(out, "[{}] ", prefix);
+        }
         let stats = forward_stream(stream, MAX_FORWARDED_BYTES, |chunk| {
+            let stderr = std::io::stderr();
+            let mut out = stderr.lock();
             let _ = out.write_all(chunk);
         });
+        let stderr = std::io::stderr();
+        let mut out = stderr.lock();
         if stats.truncated {
             let _ = writeln!(
                 out,
