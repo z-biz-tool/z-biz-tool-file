@@ -67,7 +67,6 @@ import {
   SyncOutlined,
   TableOutlined,
   HistoryOutlined,
-  SettingOutlined,
   DownloadOutlined,
   UploadOutlined,
   StarOutlined,
@@ -104,10 +103,13 @@ import { csvDoc, downloadCsv, stampName } from "./report/csv";
 import { aiSqlGenerate, catalogColumns, listTables, reportDescribeColumns } from "./report/api";
 import { aiDiagnoseError, aiExplainResults, aiExplainSql, aiOptimizeSql } from "./ipc/ai";
 import {
-  DbAiSettingsPanel,
+  createAiSettingsActions,
   loadAiConfigView,
-  type DbAiConfigView,
 } from "./components/AiSettingsPanelAdapter";
+// 2026-11-09：AI 配置改成紧凑表单弹窗；设置入口统一到主壳左下角的账户区，
+// 板块顶栏不再放第二个齿轮。
+import AiSettingsDialog from "../../components/AiSettingsDialog";
+import { notifyDbConnection, onAiConfigSaved } from "../../_shared/aiConfigEvents";
 import type { BackendConfig, TableSummary } from "./report/api";
 import type { CatalogTable, ChainOutcome, SqlDraft, SqlReject } from "./report/types";
 import type { AgentAskContext, AgentIntent, AgentResponse } from "./agent/types";
@@ -774,13 +776,11 @@ function App() {
 
   // AI 配置。
   //
-  // 现在前端**不持有**配置内容，只持有两样东西：
-  // - `aiView`：脱敏视图（apiKey 恒空串，hasApiKey 表达有无）
-  // - `aiReady`：能不能发请求，**由后端判**
+  // 前端**不持有**配置内容：脱敏视图由设置弹窗打开时自己读一次，
+  // 这里只留 `aiReady`（能不能发请求，**由后端判**）。
   //
   // 旧实现把 `{ baseUrl, apiKey, model }` 整份留在 React state 里，
   // 并把 apiKey 塞进每个 `ai_*` 命令的载荷 ⇒ 明文密钥常驻 JS 内存。
-  const [aiView, setAiView] = useState<DbAiConfigView | null>(null);
   const [aiReady, setAiReady] = useState(false);
   // 没配好时的一句人话，**由后端给**。前端不再自己编「先配置 AI 服务地址、
   // 密钥与模型」这种话 —— 它和后端真正缺的那一项可能对不上（用户明明填了
@@ -1417,18 +1417,10 @@ function App() {
       });
   }, []);
 
-  // 加载 AI 配置（脱敏视图）+ 就绪状态。
-  //
-  // 两个都读，读不读得到**都不假装「配好了」**：读失败就当未配置，
-  // 让用户去设置窗口看看到底缺什么，而不是等点 AI 时报一句「未配置」。
+  // 读 AI 就绪状态。读不读得到**都不假装「配好了」**：读失败就当未配置，
+  // 让用户去左下角的设置区看看到底缺什么，而不是等点 AI 时报一句「未配置」。
+  // 脱敏视图不由这里持有：设置弹窗每次打开时自己读一次，密钥不常驻 JS 内存。
   const refreshAiState = useCallback(async () => {
-    try {
-      const view = await loadAiConfigView();
-      setAiView(view);
-    } catch (e) {
-      console.warn("[db] AI 配置没读出来，本次按未配置启动:", e);
-      setAiView(null);
-    }
     try {
       const status = await invoke<{ configured: boolean; reason: string }>(
         "get_ai_config_status"
@@ -1444,7 +1436,17 @@ function App() {
 
   useEffect(() => {
     void refreshAiState();
+    // 设置中心也能改同一份配置：保存后广播一次，这里立刻重读，
+    // 免得「刚在设置里配好，回到数据库点 AI 还说未配置」。
+    return onAiConfigSaved(() => void refreshAiState());
   }, [refreshAiState]);
+
+  // 主壳左下角账户区要显示真实的连接态，但那个组件不该反向 import 板块状态。
+  useEffect(() => {
+    notifyDbConnection(
+      isConnected && selectedConnection ? `已连 ${selectedConnection.name}` : "未连接"
+    );
+  }, [isConnected, selectedConnection]);
 
   // 一次问数用的表目录。列清单读不到的表要丢掉：没有列清单，后端的列校验对那张表形同虚设。
   // 「生成 SQL」按钮与 Agent 对话共用这一份，两边给模型的字段必须一模一样。
@@ -2594,14 +2596,7 @@ function App() {
                   onClick={openAiAssistant}
                 />
               </Tooltip>
-              <Tooltip title="AI 服务设置">
-                <Button
-                  type="text"
-                  aria-label="打开 AI 服务设置"
-                  icon={<SettingOutlined />}
-                  onClick={() => setShowAiConfigModal(true)}
-                />
-              </Tooltip>
+              {/* 设置齿轮退役：整窗只有一个设置入口，在主壳左下角的账户区。 */}
             </Space>
           </Header>
           <Content style={{ display: "flex", flexDirection: "column" }}>
@@ -3463,36 +3458,22 @@ function App() {
         </Form>
       </Modal>
 
-      {/* AI 配置弹窗 */}
-      {/*
-        2026-11-01 起：表单换成共享面板 `z-biz-tool-shared/ai/settings`。
-        旧表单的四个问题一并消失：
-        1. **明文密钥回填进表单** —— 旧 `get_ai_config` 把 apiKey 读进
-           React state，密钥在 Rust → IPC → JS 内存 → 表单 DOM 全链路可见；
-        2. **判据是前端自己写的** —— 与后端 `ensure_configured()` 各判一次，
-           已经漂移过一次；现在判据由后端给（`get_ai_config_status`）；
-        3. **没有厂商预设** —— 用户只能手抄地址与模型名；
-        4. **保存按钮只存三项** —— 温度、超时这些字段压根没入口。
-
-        统一面板还带来「本地网关免密钥」的正确行为：密钥框只在真的需要时出现。
-      */}
-      <Modal
-        title="AI 助手配置"
+      {/* AI 配置：紧凑表单弹窗。
+          判据仍全部走 shared（要不要密钥 / 算不算配好 / 切厂商换地址），
+          这里只换掉那面 18 张卡片的墙 —— 它在 560px 的居中 Modal 里
+          会把下半截内容和保存按钮一起顶出屏幕。 */}
+      <AiSettingsDialog
         open={showAiConfigModal}
-        onCancel={() => setShowAiConfigModal(false)}
-        footer={null}
-        width={560}
-        destroyOnHidden
-      >
-        <DbAiSettingsPanel
-          view={aiView}
-          onSaved={() => {
-            void refreshAiState();
-            setShowAiConfigModal(false);
-            msgApi.success("AI 配置已保存");
-          }}
-        />
-      </Modal>
+        onClose={() => setShowAiConfigModal(false)}
+        loadView={loadAiConfigView}
+        createActions={createAiSettingsActions}
+        title="数据库 · AI 服务设置"
+        onSaved={() => {
+          void refreshAiState();
+          setShowAiConfigModal(false);
+          msgApi.success("AI 配置已保存");
+        }}
+      />
 
       {/* AI 结果弹窗 */}
       <Modal

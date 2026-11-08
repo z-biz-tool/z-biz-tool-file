@@ -161,8 +161,13 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 期间只补过 1 个漏网的（WorkerApp 的侧栏折叠钮）。
  * 135 → 137：词库板块（src/apps/glossary）2026-11-08 新建，带进来 2 个纯图标按钮
  * ——— 词条列表行内的「编辑」「删除」。两个都带了 aria-label（按词名动态给出）。
+ * 137 → 140：2026-11-09 左下角账户/设置区 + 紧凑 AI 设置表单。新增 3 个纯图标
+ * <Button>：账户卡的「打开设置」、表单里「重新读取服务商列表」与
+ * 「删除已保存的密钥」，三个都带 aria-label。同一轮删掉了 db 顶栏那个
+ * 「打开 AI 服务设置」齿轮（它也带 aria-label，所以是净 +3 而不是 +4）；
+ * dock 里另外两枚是原生 <button> 且带 aria-label，不计入这个数。
  */
-const TOTAL_ICON_ONLY = 137;
+const TOTAL_ICON_ONLY = 140;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

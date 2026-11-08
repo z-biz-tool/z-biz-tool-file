@@ -126,6 +126,9 @@ import {
 } from "./_shared/ShortcutHints";
 import Omnibar from "./_shared/Omnibar";
 import ActivityBar, { ActivityBarMore, type ActivityBarApp, type ActivityBarItem } from "./components/ActivityBar";
+// 左下角常驻的「账户 / 登录态 + 设置」区（活动栏底部，所有板块共用同一处）。
+import AccountDock from "./components/AccountDock";
+import { onAiConfigSaved, onDbConnection } from "./_shared/aiConfigEvents";
 import SidebarPanel from "./components/SidebarPanel";
 import { sizeControlEnabled, type MediaGallerySize, type MediaViewMode } from "./utils/mediaLayout";
 import { parentOfPath } from "./utils/parentDir";
@@ -415,12 +418,38 @@ function AppShellInner() {
     const [updaterOpen, setUpdaterOpen] = useState(false);
   const [newFileTemplateOpen, setNewFileTemplateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"llm" | "about">("llm");
+  // 左下角状态点：AI 配置整窗一份，由后端判「能不能用」，界面不自己猜。
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [connectionLabel, setConnectionLabel] = useState("未连接");
   const [trashOpen, setTrashOpen] = useState(false);
   const [sftpOpen, setSftpOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
   const [tagEditOpen, setTagEditOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+
+  // 账户区那颗状态点读的是后端判据；任一设置入口保存后广播一次，立刻重读。
+  useEffect(() => {
+    let cancelled = false;
+    const read = () => {
+      invoke<{ configured: boolean }>("get_ai_config_status")
+        .then((s) => {
+          if (!cancelled) setAiConfigured(s?.configured === true);
+        })
+        .catch(() => {
+          if (!cancelled) setAiConfigured(false);
+        });
+    };
+    read();
+    const stop = onAiConfigSaved(read);
+    const stopConn = onDbConnection(setConnectionLabel);
+    return () => {
+      cancelled = true;
+      stop();
+      stopConn();
+    };
+  }, []);
   // 媒体库视图状态
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [mediaLibraryType, setMediaLibraryType] = useState<"image" | "video" | "audio">("image");
@@ -2410,13 +2439,34 @@ function AppShellInner() {
           activeKey={railActive}
           onActiveChange={setRailActive}
           footer={
-            activeApp === "files" ? (
-              <>
-                {/* 左下角常驻：平时安静，有新版挂红点，点一下自己装完重启 */}
-                <UpdateLauncher />
+            <>
+              {/* 左下角常驻区：账户 / 登录态 + 设置。
+                  以前只在文件板块有「更多」，切到数据库等板块整块 footer 消失，
+                  设置入口又回到各板块自己的顶栏右上角 —— 位置随板块漂移。
+                  现在这一组不挑板块，永远钉在活动栏最下面。 */}
+              <UpdateLauncher />
+              {activeApp === "files" && (
                 <ActivityBarMore label="更多工具" onClick={() => setQuickActionsOpen(true)} />
-              </>
-            ) : undefined
+              )}
+              <AccountDock
+                aiConfigured={aiConfigured}
+                connectionLabel={activeApp === "db" ? connectionLabel : undefined}
+                themeLabel={mode === "dark" ? "深色" : "亮色"}
+                onOpenAiSettings={() => {
+                  setSettingsTab("llm");
+                  setSettingsOpen(true);
+                }}
+                onOpenGeneralSettings={() => {
+                  setSettingsTab("llm");
+                  setSettingsOpen(true);
+                }}
+                onToggleTheme={toggleTheme}
+                onAbout={() => {
+                  setSettingsTab("about");
+                  setSettingsOpen(true);
+                }}
+              />
+            </>
           }
         />
       }
@@ -3347,6 +3397,7 @@ function AppShellInner() {
       />
       <SettingsModal
         open={settingsOpen}
+        initialTab={settingsTab}
         onClose={() => setSettingsOpen(false)}
       />
       {/* 媒体库视图 */}

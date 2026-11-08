@@ -1,98 +1,111 @@
 /**
- * 设置面板。
+ * 设置中心。
  *
- * ## 2026-11-01 改造：AI 配置接入家族统一落点 + 统一面板
+ * ## 2026-11-09 改造：和数据库板块共用同一份紧凑表单
  *
- * LLM 设置整页换成共享面板 `z-biz-tool-shared/ai/settings`：
+ * 之前这里直接挂共享面板 `z-biz-tool-shared/ai/settings`：18 家厂商的
+ * 卡片墙铺在 720px 的 Modal 里，数据库板块又在自己的 560px Modal 里
+ * 再挂一遍同样的卡片墙 —— 同一份配置，两处长得不一样，而且都超出一屏。
  *
- * - 18 家厂商预设、模型列表拉取、结构化失败（kind + hint + focus）、
- *   「已保存密钥」占位 —— 判据与交互都收口在 shared 一处；
- * - 配置真源改为家族统一落点（`~/.z-biz-tool/llm/config.json` + OS 密钥库），
- *   本仓原来的明文 `llm.json` 由启动迁移器搬入并抹掉密钥；
- * - 本仓只留适配层（见 `AiSettingsPanelAdapter.tsx`）：IPC 命令名、
- *   字段名翻译、失败透传。渲染判据一行不写。
+ * 现在两边都渲染 `AiSettingsForm`：分组下拉 + 密钥 / 模型 / 高级折叠 +
+ * 固定高度滚动区 + 不随内容滚走的动作条。判据仍然只有 shared 一份
+ * （要不要密钥、算不算配好、切厂商时地址怎么变），本文件只负责壳。
  *
- * 旧的自绘表单（约 600 行：预设下拉 / 密钥框 / 模型 AutoComplete /
- * 高级折叠 / FailureAlert）全部退役 —— 它们的每一项判据在共享面板里
- * 都有对应的、经过家族测试的实现。
+ * 配置真源是家族统一落点（Rust `llm_config`），密钥不回显、只存本机。
  */
 
-import { useState } from "react";
-import { Modal, Tabs } from "antd";
+import { useRef, useState } from "react";
+import { Modal, Tabs, theme } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 
-import { FileAiSettingsPanel, loadAiConfigView, type FileAiConfigView } from "./AiSettingsPanelAdapter";
+import {
+  createAiSettingsActions,
+  loadAiConfigView,
+  type FileAiConfigView,
+} from "./AiSettingsPanelAdapter";
+import { AiSettingsForm } from "./AiSettingsDialog";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** 左下角账户区「关于」直接落到关于页。 */
+  initialTab?: "llm" | "about";
 }
 
-export default function SettingsModal({ open, onClose }: Props) {
+export default function SettingsModal({ open, onClose, initialTab = "llm" }: Props) {
+  const { token } = theme.useToken();
   const [view, setView] = useState<FileAiConfigView | null>(null);
+  // 动作对象必须稳定：表单拿它当 effect 依赖，每次渲染换引用会重复拉预设。
+  const actionsRef = useRef<ReturnType<typeof createAiSettingsActions> | null>(null);
+  if (!actionsRef.current) actionsRef.current = createAiSettingsActions();
 
-  // 面板打开时读一次已保存配置（脱敏视图）。读失败不挡填表 ——
-  // 用户可以当没配过从头填，保存会覆盖。
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen && view === null) {
-      loadAiConfigView()
-        .then(setView)
-        .catch(() => setView(null));
-    }
+  const refresh = () => {
+    loadAiConfigView()
+      .then(setView)
+      .catch(() => setView(null));
   };
 
   return (
     <Modal
       open={open}
-      afterOpenChange={handleOpenChange}
+      afterOpenChange={(nextOpen) => {
+        if (nextOpen) refresh();
+      }}
       onCancel={onClose}
       footer={null}
-      width={720}
+      width={560}
+      centered
+      destroyOnHidden
+      styles={{
+        body: { padding: 0 },
+        header: {
+          marginBottom: 0,
+          padding: "14px 20px",
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        },
+      }}
       title={
-        <span>
-          <SettingOutlined style={{ marginRight: 8 }} />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <SettingOutlined style={{ color: token.colorPrimary }} />
           设置
         </span>
       }
-      destroyOnHidden
     >
       <Tabs
-        defaultActiveKey="llm"
+        defaultActiveKey={initialTab}
+        tabBarStyle={{ padding: "0 20px", margin: 0 }}
         items={[
           {
             key: "llm",
-            label: <span>AI / LLM</span>,
+            label: "AI 服务",
             children: (
-              <div style={{ padding: "8px 0" }}>
-                <FileAiSettingsPanel
-                  view={view}
-                  onSaved={() => {
-                    // 保存后刷新脱敏视图（hasApiKey 可能从无到有）
-                    loadAiConfigView()
-                      .then(setView)
-                      .catch(() => {});
-                  }}
-                />
-              </div>
+              <AiSettingsForm
+                view={view}
+                actions={actionsRef.current!}
+                onSaved={refresh}
+                scrollMax="min(60vh, 480px)"
+              />
             ),
           },
           {
             key: "about",
-            label: <span>关于</span>,
+            label: "关于",
             children: (
               <div
                 style={{
-                  padding: "16px 0",
-                  color: "var(--ant-color-text-secondary)",
+                  padding: "16px 20px 24px",
+                  color: token.colorTextSecondary,
                   fontSize: 13,
                   lineHeight: 1.8,
                 }}
               >
-                <p>
-                  <strong>z-biz-tool-file</strong> v0.2.1
+                <p style={{ margin: 0 }}>
+                  <strong>z-biz-tool-file</strong> v0.2.2
                 </p>
-                <p>基于 Tauri 2 + React 19 + Rust 的桌面文件管理器。</p>
-                <p>AI / LLM 功能由用户自定义配置驱动 — 数据全部存在本地。</p>
+                <p style={{ margin: 0 }}>基于 Tauri 2 + React 19 + Rust 的本地工作台。</p>
+                <p style={{ margin: 0 }}>
+                  AI 服务由你自己配置，密钥保存在本机系统密钥库，不会上传到服务器。
+                </p>
               </div>
             ),
           },
