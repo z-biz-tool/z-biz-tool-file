@@ -33,9 +33,9 @@ const INTENT_PLACEHOLDER: Record<AgentIntent, string> = {
 
 /** 失败现场里的 SQL / 报错原文：等宽、能滚、不许把面板撑破 */
 const RAW_BOX: React.CSSProperties = {
-  backgroundColor: 'rgba(0, 0, 0, 0.05)',
+  backgroundColor: 'var(--ant-color-fill-quaternary)',
   padding: '4px 8px',
-  borderRadius: 4,
+  borderRadius: 6,
   fontFamily: 'monospace',
   fontSize: 12,
   whiteSpace: 'pre-wrap',
@@ -118,7 +118,7 @@ export function AgentPanel({ hint, onUseSql, onClear, onGoReport, onGoPickTables
     <Card
       title={
         <Space>
-          <RobotOutlined style={{ fontSize: '20px', color: '#1890ff' }} />
+          <RobotOutlined style={{ fontSize: '20px', color: 'var(--ant-color-primary)' }} />
           <span>Agent 问数</span>
         </Space>
       }
@@ -171,7 +171,7 @@ export function AgentPanel({ hint, onUseSql, onClear, onGoReport, onGoPickTables
                 }}
               >
                 {msg.error ? (
-                  <div style={{ width: '100%', borderLeft: '3px solid #ff4d4f', paddingLeft: 10 }}>
+                  <div style={{ width: '100%', borderLeft: '3px solid var(--ant-color-error)', paddingLeft: 10 }}>
                     <Text type="danger" style={{ fontSize: 12 }}>
                       {msg.content} · {new Date(msg.timestamp).toLocaleTimeString()}
                     </Text>
@@ -204,10 +204,10 @@ export function AgentPanel({ hint, onUseSql, onClear, onGoReport, onGoPickTables
               <div
                 style={{
                   maxWidth: '86%',
-                  backgroundColor: msg.role === 'user' ? '#1890ff' : '#f0f0f0',
-                  color: msg.role === 'user' ? '#fff' : '#000',
+                  backgroundColor: msg.role === 'user' ? 'var(--ant-color-primary)' : 'var(--ant-color-fill-tertiary)',
+                  color: msg.role === 'user' ? 'var(--ant-color-text-light-solid)' : 'var(--ant-color-text)',
                   padding: '12px 16px',
-                  borderRadius: '8px',
+                  borderRadius: 6,
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -222,9 +222,9 @@ export function AgentPanel({ hint, onUseSql, onClear, onGoReport, onGoPickTables
                 {msg.sql && (
                   <div
                     style={{
-                      backgroundColor: 'rgba(0, 0, 0, 0.05)',
+                      backgroundColor: 'var(--ant-color-fill-quaternary)',
                       padding: '8px',
-                      borderRadius: '4px',
+                      borderRadius: 6,
                       fontFamily: 'monospace',
                       fontSize: '12px',
                       maxWidth: '100%',

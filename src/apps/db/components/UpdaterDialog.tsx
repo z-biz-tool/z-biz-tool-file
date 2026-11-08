@@ -124,7 +124,7 @@ export default function UpdaterGate({ delayMs = 5000 }: { delayMs?: number }) {
     <Modal
       title={
         <Space>
-          <CloudDownloadOutlined style={{ color: "#1890ff" }} />
+          <CloudDownloadOutlined style={{ color: "var(--ant-color-primary)" }} />
           <span>发现新版本</span>
         </Space>
       }
@@ -152,7 +152,7 @@ export default function UpdaterGate({ delayMs = 5000 }: { delayMs?: number }) {
               <Statistic
                 title="新版本"
                 value={`v${update.version}`}
-                valueStyle={{ color: "#52c41a" }}
+                valueStyle={{ color: "var(--ant-color-success)" }}
                 prefix={<CheckCircleOutlined />}
               />
             </Card>

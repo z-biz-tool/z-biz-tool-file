@@ -112,10 +112,20 @@ import type { BackendConfig, TableSummary } from "./report/api";
 import type { CatalogTable, ChainOutcome, SqlDraft, SqlReject } from "./report/types";
 import type { AgentAskContext, AgentIntent, AgentResponse } from "./agent/types";
 
-// 渐变色主题常量
-const brandGradient = "linear-gradient(135deg, #667eea 0%, #764ba2 100%)";
-const cardBgGradient =
-  "linear-gradient(135deg, rgba(102,126,234,0.04) 0%, rgba(118,75,162,0.04) 100%)";
+// 2026-11-09 视觉对齐：db 独立 app 时期自带一套 #667eea→#764ba2 紫渐变，
+// 并入 file 后和全站主色 #1677ff、圆角 6、语义色 token 全对不上（AppShell 的注释
+// 里也早就写过「那个 #667eea→#764ba2 是另一套色，跟按钮对不上」）。
+// 统一走 antd CSS 变量：由 file 的 ThemeProvider 注入，深浅主题自动跟随。
+// 图表分类色是数据可视化需要的多色，单独在 report/ChartCard.tsx 里维护。
+const brand = "var(--ant-color-primary)";
+const brandBg = "var(--ant-color-primary-bg)";
+const surface = "var(--ant-color-bg-container)";
+const subtle = "var(--ant-color-fill-quaternary)";
+const borderLine = "var(--ant-color-border-secondary)";
+const danger = "var(--ant-color-error)";
+const warning = "var(--ant-color-warning)";
+const success = "var(--ant-color-success)";
+const muted = "var(--ant-color-text-tertiary)";
 
 const { Header, Sider, Content } = Layout;
 const { TextArea } = Input;
@@ -319,11 +329,9 @@ interface QueryStreamStartV2 {
 
 function App() {
   // 主题走 file 的全局主题（src/_shared/ThemeContext.tsx）。
-  // 2026-11-06 并入 file：原来 db 是独立 app，自己维护 darkMode 状态并自带
-  // ConfigProvider。并入后全站只有一套主题，切主题的按钮也已经在 file 的
-  // 顶栏里 —— 这里再存一份状态就会出现「两个开关、两个状态」。
-  // 所以改成直接读全局的 mode，切换也调全局的 toggle。
-  const { mode: themeMode, toggle: toggleTheme } = useTheme();
+  // 这里只读 mode（给 Sider/Menu 的 theme 属性用）；切换入口统一在 file 顶栏，
+  // 板块内不再放第二个开关 —— 避免两个开关、两套状态。
+  const { mode: themeMode } = useTheme();
   const darkMode = themeMode === "dark";
   const [connections, setConnections] = useState<DBConnection[]>([]);
   const [selectedConnection, setSelectedConnection] = useState<DBConnection | null>(null);
@@ -2098,7 +2106,7 @@ function App() {
             只删除本机保存的连接配置{isCurrent ? "，并先断开当前连接" : ""}；数据库里的数据不受影响。
           </p>
           {pending > 0 && (
-            <p style={{ color: "#ff4d4f" }}>
+            <p style={{ color: danger }}>
               当前结果里还有 {pending} 项未提交的网格变更，删除连接会一起丢弃。
             </p>
           )}
@@ -2400,7 +2408,7 @@ function App() {
                 style={
                   isChanged
                     ? {
-                        backgroundColor: "rgba(82, 196, 26, 0.15)",
+                        backgroundColor: "var(--ant-color-success-bg)",
                         padding: "1px 4px",
                         borderRadius: 2,
                       }
@@ -2413,6 +2421,13 @@ function App() {
           },
         }))
       : [];
+
+  /** 新建连接：侧栏按钮与空态按钮共用，避免两处各写一遍表单初始化。 */
+  const openNewConnection = () => {
+    setEditingConnection(null);
+    form.resetFields();
+    setShowConnectionModal(true);
+  };
 
   return (
     // 2026-11-06 并入 file：去掉了本组件自带的 ConfigProvider。
@@ -2430,7 +2445,7 @@ function App() {
           width={280}
           theme={darkMode ? "dark" : "light"}
           style={{
-            background: cardBgGradient,
+            background: surface,
             borderRight: `1px solid var(--ant-color-border-secondary)`,
           }}
         >
@@ -2443,23 +2458,8 @@ function App() {
               gap: 12,
             }}
           >
-            <DatabaseOutlined
-              style={{
-                fontSize: "20px",
-                background: brandGradient,
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-              }}
-            />
-            <strong
-              style={{
-                background: brandGradient,
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-              }}
-            >
-              数据库连接
-            </strong>
+            <DatabaseOutlined style={{ fontSize: 20, color: brand }} />
+            <strong>数据库连接</strong>
           </div>
           <div style={{ padding: "8px" }}>
             <Space orientation="vertical" style={{ width: "100%" }}>
@@ -2467,16 +2467,7 @@ function App() {
                 type="primary"
                 icon={<PlusOutlined />}
                 block
-                onClick={() => {
-                  setEditingConnection(null);
-                  form.resetFields();
-                  setShowConnectionModal(true);
-                }}
-                style={{
-                  borderRadius: 8,
-                  background: brandGradient,
-                  boxShadow: "0 4px 12px rgba(102,126,234,0.3)",
-                }}
+                onClick={openNewConnection}
               >
                 新建连接
               </Button>
@@ -2485,7 +2476,6 @@ function App() {
                 block
                 onClick={handleExport}
                 disabled={connections.length === 0}
-                style={{ borderRadius: 8 }}
               >
                 导出配置
               </Button>
@@ -2493,7 +2483,6 @@ function App() {
                 icon={<UploadOutlined />}
                 block
                 onClick={() => handleImportFile()}
-                style={{ borderRadius: 8 }}
               >
                 导入配置
               </Button>
@@ -2520,7 +2509,7 @@ function App() {
                         <WarningOutlined
                           role="img"
                           aria-label={conn.credentialNote ?? "密码取不回来了，请重新输入"}
-                          style={{ color: "#faad14" }}
+                          style={{ color: warning }}
                         />
                       </Tooltip>
                     ) : null}
@@ -2529,7 +2518,7 @@ function App() {
                         type="text"
                         size="small"
                         aria-label={`编辑连接「${conn.name}」`}
-                        icon={<EditOutlined style={{ color: "#1890ff" }} />}
+                        icon={<EditOutlined style={{ color: brand }} />}
                         onClick={(e) => {
                           e.stopPropagation();
                           editConnection(conn);
@@ -2541,7 +2530,7 @@ function App() {
                         type="text"
                         size="small"
                         aria-label={`删除连接「${conn.name}」`}
-                        icon={<DeleteOutlined style={{ color: "#ff4d4f" }} />}
+                        icon={<DeleteOutlined style={{ color: danger }} />}
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteConnection(conn.id);
@@ -2558,7 +2547,7 @@ function App() {
         <Layout>
           <Header
             style={{
-              background: darkMode ? "#141414" : "#fff",
+              background: surface,
               padding: "0 24px",
               borderBottom: `1px solid var(--ant-color-border-secondary)`,
               display: "flex",
@@ -2579,43 +2568,40 @@ function App() {
                   { label: "AI 报表", value: "report", icon: <DashboardOutlined /> },
                 ]}
               />
-              {isConnected && selectedConnection && (
+              {isConnected && selectedConnection ? (
                 <>
-                  <Tag color="green">已连接</Tag>
-                  <span>{selectedConnection.name}</span>
+                  <Tag color="success">已连接</Tag>
+                  <Text type="secondary">{selectedConnection.name}</Text>
                   <Button size="small" onClick={disconnectDB}>
                     断开连接
                   </Button>
                 </>
+              ) : (
+                <Tag>未连接</Tag>
               )}
             </Space>
-            <Space>
-              <Text type="secondary">{selectedConnection?.host || "未连接"}</Text>
-              <Switch
-                checked={darkMode}
-                onChange={toggleTheme}
-                aria-label="深色模式"
-                checkedChildren="🌙"
-                unCheckedChildren="☀️"
-              />
-              <Space>
-                <Tooltip title="AI 助手">
-                  <Button
-                    type="primary"
-                    aria-label="打开 AI 助手"
-                    icon={<RobotOutlined />}
-                    onClick={openAiAssistant}
-                  />
-                </Tooltip>
-                <Tooltip title="AI 服务设置">
-                  <Button
-                    type="text"
-                    aria-label="打开 AI 服务设置"
-                    icon={<SettingOutlined style={{ fontSize: "16px" }} />}
-                    onClick={() => setShowAiConfigModal(true)}
-                  />
-                </Tooltip>
-              </Space>
+            <Space size={4}>
+              {/* 主题开关由 file 顶栏统一管理：这里再放一个会出现两个开关、两套状态，
+                  而且「☀️/🌙」紧挨着连接状态，容易被读成「连接开关」。 */}
+              {isConnected && selectedConnection && (
+                <Text type="secondary">{selectedConnection.host}</Text>
+              )}
+              <Tooltip title="AI 助手">
+                <Button
+                  type="text"
+                  aria-label="打开 AI 助手"
+                  icon={<RobotOutlined />}
+                  onClick={openAiAssistant}
+                />
+              </Tooltip>
+              <Tooltip title="AI 服务设置">
+                <Button
+                  type="text"
+                  aria-label="打开 AI 服务设置"
+                  icon={<SettingOutlined />}
+                  onClick={() => setShowAiConfigModal(true)}
+                />
+              </Tooltip>
             </Space>
           </Header>
           <Content style={{ display: "flex", flexDirection: "column" }}>
@@ -2646,8 +2632,8 @@ function App() {
                   style={{
                     padding: "8px 16px 0",
                     borderBottom: `1px solid var(--ant-color-border-secondary)`,
-                    background: cardBgGradient,
-                    borderRadius: 16,
+                    background: surface,
+                    borderRadius: 6,
                     marginBottom: 12,
                   }}
                 >
@@ -2698,8 +2684,8 @@ function App() {
                         </Tooltip>
                       }
                       style={{
-                        borderRadius: 12,
-                        background: cardBgGradient,
+                        borderRadius: 6,
+                        background: surface,
                       }}
                     >
                       {tables.map((t) => (
@@ -2710,14 +2696,14 @@ function App() {
                             padding: "6px 8px",
                             cursor: "pointer",
                             background:
-                              selectedTable === t.name ? "rgba(102,126,234,0.1)" : undefined,
+                              selectedTable === t.name ? brandBg : undefined,
                             borderRadius: 6,
                             transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
                           }}
                           onMouseEnter={(e) => {
                             if (selectedTable !== t.name) {
                               (e.currentTarget as HTMLElement).style.background =
-                                "rgba(102,126,234,0.05)";
+                                subtle;
                             }
                           }}
                           onMouseLeave={(e) => {
@@ -2774,21 +2760,11 @@ function App() {
                       style={{
                         marginBottom: 8,
                         flex: "0 0 auto",
-                        borderRadius: 12,
-                        background: cardBgGradient,
+                        borderRadius: 6,
+                        background: surface,
                       }}
                       title={
-                        <span
-                          style={{
-                            fontWeight: 600,
-                            background: brandGradient,
-                            WebkitBackgroundClip: "text",
-                            WebkitTextFillColor: "transparent",
-                            backgroundImage: brandGradient,
-                          }}
-                        >
-                          SQL 编辑器
-                        </span>
+                        <span style={{ fontWeight: 600 }}>SQL 编辑器</span>
                       }
                       extra={
                         <Space>
@@ -2939,11 +2915,6 @@ function App() {
                               size="small"
                               icon={<PlayCircleOutlined />}
                               onClick={executeQuery}
-                              style={{
-                                borderRadius: 6,
-                                background: brandGradient,
-                                boxShadow: "0 4px 12px rgba(102,126,234,0.3)",
-                              }}
                             >
                               执行
                             </Button>
@@ -2961,7 +2932,7 @@ function App() {
                             style={{
                               height: "150px",
                               borderRadius: 6,
-                              background: "var(--ant-color-fill-quaternary, rgba(0,0,0,0.06))",
+                              background: subtle,
                               display: "flex",
                               alignItems: "center",
                               justifyContent: "center",
@@ -2990,8 +2961,8 @@ function App() {
                       style={{
                         flex: 1,
                         overflow: "hidden",
-                        borderRadius: 12,
-                        background: cardBgGradient,
+                        borderRadius: 6,
+                        background: surface,
                       }}
                       title={
                         <Space size={6}>
@@ -3033,7 +3004,6 @@ function App() {
                               onClick={() => {
                                 void planCommit();
                               }}
-                              style={{ borderRadius: 6, background: brandGradient }}
                             >
                               提交变更
                             </Button>
@@ -3062,7 +3032,7 @@ function App() {
                           showSizeChanger: true,
                           pageSizeOptions: ["50", "100", "200", "500"],
                         }}
-                        style={{ borderRadius: 8 }}
+                        style={{ borderRadius: 6 }}
                       />
                     </Card>
                   </div>
@@ -3083,7 +3053,7 @@ function App() {
                           key: "history",
                           label: (
                             <span>
-                              <HistoryOutlined style={{ color: brandGradient }} />
+                              <HistoryOutlined style={{ color: brand }} />
                               历史
                             </span>
                           ),
@@ -3093,7 +3063,7 @@ function App() {
                               <Space style={{ marginBottom: 8, width: "100%" }}>
                                 <Input
                                   placeholder="搜索 SQL 或连接名称..."
-                                  prefix={<SearchOutlined style={{ color: "#aaa" }} />}
+                                  prefix={<SearchOutlined style={{ color: muted }} />}
                                   size="small"
                                   allowClear
                                   style={{ flex: 1 }}
@@ -3129,7 +3099,7 @@ function App() {
                                     }}
                                     onMouseEnter={(e) => {
                                       (e.currentTarget as HTMLElement).style.background =
-                                        "rgba(102,126,234,0.05)";
+                                        subtle;
                                     }}
                                     onMouseLeave={(e) => {
                                       (e.currentTarget as HTMLElement).style.background =
@@ -3172,7 +3142,7 @@ function App() {
                           key: "saved",
                           label: (
                             <span>
-                              <StarFilled style={{ color: "#faad14" }} />
+                              <StarFilled style={{ color: warning }} />
                               常用
                             </span>
                           ),
@@ -3189,7 +3159,7 @@ function App() {
                                   }}
                                   onMouseEnter={(e) => {
                                     (e.currentTarget as HTMLElement).style.background =
-                                      "rgba(102,126,234,0.05)";
+                                      subtle;
                                   }}
                                   onMouseLeave={(e) => {
                                     (e.currentTarget as HTMLElement).style.background =
@@ -3257,36 +3227,21 @@ function App() {
                 </div>
               </>
             ) : (
-              <div
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="请从左侧选择一个连接，或创建一个新连接"
                 style={{
                   display: "flex",
                   flexDirection: "column",
                   justifyContent: "center",
                   alignItems: "center",
                   height: "100%",
-                  color: "var(--ant-color-text-secondary)",
                 }}
               >
-                <DatabaseOutlined
-                  style={{
-                    fontSize: "64px",
-                    marginBottom: "16px",
-                    background: brandGradient,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                  }}
-                />
-                <h2
-                  style={{
-                    background: brandGradient,
-                    WebkitBackgroundClip: "text",
-                    WebkitTextFillColor: "transparent",
-                  }}
-                >
-                  数据库管理工具
-                </h2>
-                <p>请从左侧选择一个连接或创建新连接</p>
-              </div>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openNewConnection}>
+                  新建连接
+                </Button>
+              </Empty>
             )}
           </Content>
         </Layout>
@@ -3447,7 +3402,7 @@ function App() {
           style={{
             maxHeight: 320,
             overflow: "auto",
-            border: "1px solid rgba(255,255,255,0.12)",
+            border: `1px solid ${borderLine}`,
             borderRadius: 6,
             padding: 8,
           }}
@@ -3462,7 +3417,7 @@ function App() {
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-all",
                 borderBottom:
-                  i === (commitPlan?.length ?? 0) - 1 ? "none" : "1px dashed rgba(255,255,255,0.08)",
+                  i === (commitPlan?.length ?? 0) - 1 ? "none" : `1px dashed ${borderLine}`,
               }}
             >
               {st.sql}
@@ -3693,8 +3648,8 @@ function App() {
                                 marginTop: 8,
                                 padding: "8px 10px",
                                 borderRadius: 6,
-                                borderLeft: "3px solid #1677ff",
-                                background: "rgba(22,119,255,0.08)",
+                                borderLeft: `3px solid ${brand}`,
+                                background: brandBg,
                                 fontSize: 12,
                               }}
                             >
@@ -3766,7 +3721,7 @@ function App() {
                       style={{ marginTop: 12 }}
                       title={
                         <Space size={4}>
-                          <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                          <CheckCircleOutlined style={{ color: success }} />
                           已填入编辑器
                         </Space>
                       }
@@ -3777,7 +3732,7 @@ function App() {
                             <Badge
                               count={aiDraft.repairs}
                               showZero
-                              color={aiDraft.repairs > 0 ? "#faad14" : "#52c41a"}
+                              color={aiDraft.repairs > 0 ? warning : success}
                             />
                           </Tooltip>
                         </Space>

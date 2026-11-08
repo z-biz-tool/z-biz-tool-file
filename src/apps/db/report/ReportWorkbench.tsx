@@ -76,6 +76,10 @@ import { ReportBoard, SqlList } from "./ReportBoard";
 import { describeDiff, diffSpec, type SpecSide } from "./diffSpec";
 
 const { Text, Title } = Typography;
+
+// 语义色走 antd CSS 变量：Badge 的 color 只吃色值字符串，不能写 token 对象。
+const success = "var(--ant-color-success)";
+const warning = "var(--ant-color-warning)";
 const { TextArea } = Input;
 
 /** 起草被本机挡下后，错误卡上留着的那张"错误单"：
@@ -1351,7 +1355,7 @@ export function ReportWorkbench({
             style={{ marginTop: 12 }}
             title={
               <Space size={4}>
-                <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                <CheckCircleOutlined style={{ color: "var(--ant-color-success)" }} />
                 草稿已过本机校验
               </Space>
             }
@@ -1360,7 +1364,7 @@ export function ReportWorkbench({
                 <Badge
                   count={draft.repairs}
                   showZero
-                  color={draft.repairs > 0 ? "#faad14" : "#52c41a"}
+                  color={draft.repairs > 0 ? warning : success}
                 />
               </Tooltip>
             }
@@ -1433,8 +1437,8 @@ export function ReportWorkbench({
                       marginTop: 8,
                       padding: "8px 10px",
                       borderRadius: 6,
-                      borderLeft: "3px solid #1677ff",
-                      background: "rgba(22,119,255,0.08)",
+                      borderLeft: "3px solid var(--ant-color-primary)",
+                      background: "var(--ant-color-primary-bg)",
                       fontSize: 12,
                     }}
                   >

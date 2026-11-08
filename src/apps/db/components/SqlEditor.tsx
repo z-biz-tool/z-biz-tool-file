@@ -122,7 +122,7 @@ const SqlEditor: React.FC<SqlEditorProps> = ({
       style={{
         height,
         border: '1px solid var(--ant-color-border)',
-        borderRadius: 8,
+        borderRadius: 6,
         overflow: 'hidden',
         backgroundColor: 'var(--ant-color-bg-container)',
       }}

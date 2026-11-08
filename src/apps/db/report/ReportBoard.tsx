@@ -32,8 +32,8 @@ function ChartPlaceholder({ height }: { height: number }) {
     <div
       style={{
         height,
-        borderRadius: 8,
-        background: "var(--ant-color-fill-quaternary, rgba(0,0,0,0.06))",
+        borderRadius: 6,
+        background: "var(--ant-color-fill-quaternary)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -293,7 +293,7 @@ export function ReportBoard({
           </div>
         ))}
       </div>
-      <Card size="small" title="数据集执行概况" style={{ borderRadius: 12 }}>
+      <Card size="small" title="数据集执行概况" style={{ borderRadius: 6 }}>
         <DatasetStats payload={payload} />
       </Card>
     </Space>

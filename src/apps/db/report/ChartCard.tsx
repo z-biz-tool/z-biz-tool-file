@@ -25,15 +25,17 @@ import type { ChartData, Scalar } from "./types";
 
 const { Text } = Typography;
 
+// 图表系列色：数据可视化必须多色，但统一取 antd 预设调色板，
+// 首色跟全站主色一致（不再是独立 app 时期那套 #667eea 紫）。
 export const CHART_COLORS = [
-  "#667eea",
+  "#1677ff",
   "#52c41a",
   "#faad14",
   "#eb2f96",
   "#13c2c2",
   "#722ed1",
   "#fa541c",
-  "#1890ff",
+  "#2f54eb",
 ];
 
 /** tooltip 回调可能给出数组/对象，这里只认标量，其余按 NULL 显示 */
@@ -214,7 +216,7 @@ export function ChartCard({
   return (
     <Card
       size="small"
-      style={{ height: "100%", borderRadius: 12, overflow: "hidden" }}
+      style={{ height: "100%", borderRadius: 6, overflow: "hidden" }}
       title={
         <span>
           {chart.title || chart.widget}{" "}
@@ -250,7 +252,7 @@ export function ChartCard({
         <Tooltip title={chart.warnings.join("\n")}>
           <Text type="secondary" style={{ fontSize: 11 }}>
             {chart.warnings.length > 0 && (
-              <WarningOutlined style={{ color: "#faad14", marginRight: 4 }} />
+              <WarningOutlined style={{ color: "var(--ant-color-warning)", marginRight: 4 }} />
             )}
             {chart.kind === "TABLE" || chart.kind === "KPI"
               ? `${chart.row_count} 行`
