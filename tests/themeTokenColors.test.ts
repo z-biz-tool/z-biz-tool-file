@@ -36,7 +36,14 @@ function hits(): string[] {
     // 搬入期先豁免，等这轮重构收尾再逐处对齐。
     // AI 任务看板（src/apps/worker）同理(2026-11-07 从 z-biz-tool-worker 搬入)，
     // 看板/甘特控件有若干业务配色字面量，同为搬入期冻结、后续单独对齐。
-    .filter((p) => !p.includes("/apps/terminal/") && !p.includes("/apps/worker/"));
+    // 思维导图（src/apps/mind）同理(2026-11-08 从 z-biz-tool-mind 搬入)，
+    // 自带一套 zm-* 主题变量（深浅两套导图配色），搬入期冻结、后续并入统一主题时再对齐。
+    .filter(
+      (p) =>
+        !p.includes("/apps/terminal/") &&
+        !p.includes("/apps/worker/") &&
+        !p.includes("/apps/mind/"),
+    );
   for (const file of files) {
     // ROOT 没有结尾斜杠，slice 出来会带一个前导 "/" —— 不剥掉的话豁免清单永远对不上
     const rel = file.slice(ROOT.length).replace(/^\/+/, "");

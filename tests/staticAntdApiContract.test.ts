@@ -27,7 +27,15 @@ function sourceFiles(): string[] {
     // 要动 40 多个面板组件的调用点，属于独立一轮重构。搬入期先不纳入门禁。
     // AI 任务看板（src/apps/worker）同理(2026-11-07 从 z-biz-tool-worker 仓搬入)，
     // 9 个文件用静态 message、scope 跨 store 与多面板，同为搬入期冻结、后续单独一轮对齐。
-    .filter((p) => !p.includes("/apps/terminal/") && !p.includes("/apps/worker/"));
+    // 思维导图（src/apps/mind）同理(2026-11-08 从 z-biz-tool-mind 仓搬入)，
+    // 3 个核心文件（ExportDialog / HistoryPanel / SearchPanel）用静态 message，
+    // 且保留了独立的 zm-* 主题体系，搬入期冻结、后续并入 file 统一提示通道时再改。
+    .filter(
+      (p) =>
+        !p.includes("/apps/terminal/") &&
+        !p.includes("/apps/worker/") &&
+        !p.includes("/apps/mind/"),
+    );
 }
 
 /**

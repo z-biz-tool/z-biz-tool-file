@@ -57,6 +57,7 @@ import {
   GlobalOutlined,
   BulbOutlined,
   BulbFilled,
+  ShareAltOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -237,6 +238,11 @@ const RAIL_APPS: ActivityBarApp[] = [
   // 排最后 —— 它是最「需要用户主动打开」的工具型板块（项目管理），
   // 不像文件/系统那样一进来就要用，放末尾不抢注意力。
   { key: "worker", label: "工作台", icon: <ProjectOutlined /> },
+  // 思维导图：2026-11-08 从 z-biz-tool-mind 仓搬入。
+  // 排最后 —— 和「工作台」一样是「需要用户主动打开」的工具型板块。
+  // 导图产出（.emmx）本身就是本地文件，和文件管理天然一体：在这里编辑，
+  // 导出/保存后直接就在文件区里看到、可用其它板块继续处理。
+  { key: "mind", label: "思维导图", icon: <ShareAltOutlined /> },
 ];
 
 /**
@@ -290,6 +296,9 @@ const SysApp = lazy(() => import("./apps/sys/SysApp"));
  * 项目管理在文件管理场景下用不到，没必要让每个用户都下载一遍。
  */
 const WorkerApp = lazy(() => import("./apps/worker/WorkerApp"));
+// 思维导图板块按需加载（和 WorkerApp 同样的理由：2.7 万行前端 + 手写 SVG
+// 画布引擎，静态 import 会撑大文件管理首屏；本地协议下切过去的 chunk 下载几十毫秒）。
+const MindApp = lazy(() => import("./apps/mind/App"));
 
 /**
  * 「点开才用」的功能组件 —— 一律走 lazyModal。
@@ -3097,6 +3106,28 @@ function AppShellInner() {
           }
         >
           <WorkerApp />
+        </Suspense>
+      ) : activeApp === "mind" ? (
+        // 思维导图板块：2026-11-08 从 z-biz-tool-mind 仓搬入。
+        // 整块替换主区 —— 导图编辑器自成一整套「工具条 + 页签 + 画布」，跟文件管理
+        // 的目录树 / 文件列表不搭；保存/导出的 .emmx 会进文件区，两者天然衔接。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载思维导图…
+            </div>
+          }
+        >
+          <MindApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

@@ -63,6 +63,11 @@ pub mod sys_app;
 // attach() + startup() + shutdown()。
 #[path = "worker_app/lib.rs"]
 pub mod worker_app;
+// 思维导图板块（导图编辑/渲染/文件关联打开）：2026-11-08 从 z-biz-tool-mind
+// 仓整体搬入，作为 file 的一个板块，整树挂 crate::mind_app::*。同样没有 run()，
+// 只暴露 attach()（manage 状态 + 运行前初始化）。
+#[path = "mind_app/lib.rs"]
+pub mod mind_app;
 mod updater;
 mod video_thumb;
 mod watcher;
@@ -107,6 +112,9 @@ pub fn run() {
     // AI 任务看板板块的状态（agent-proxy 句柄 / 会话表）由 worker_app::attach 挂上去。
     // 与 sys_app 同理断开再接，因为 attach 是自由函数。
     let builder = worker_app::attach(builder);
+
+    // 思维导图板块的状态（文件关联打开的待开队列）由 mind_app::attach 挂上去。
+    let builder = mind_app::attach(builder);
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -482,6 +490,49 @@ pub fn run() {
             // open_task_workspace 用系统文件管理器打开）
             worker_app::commands::get_task_workspace,
             worker_app::commands::open_task_workspace,
+            // ===== 思维导图板块（mind_app，2026-11-08 从 z-biz-tool-mind 仓搬入）=====
+            mind_app::commands::app_info,
+            mind_app::commands::config_get,
+            mind_app::commands::config_set,
+            mind_app::commands::config_reset_page,
+            mind_app::commands::recent_list,
+            mind_app::commands::recent_touch,
+            mind_app::commands::recent_remove,
+            mind_app::commands::recent_clear,
+            mind_app::commands::recent_set_capacity,
+            mind_app::commands::recent_set_pinned,
+            mind_app::commands::file_read_bytes,
+            mind_app::commands::file_write_bytes,
+            mind_app::commands::file_exists,
+            mind_app::commands::file_size,
+            mind_app::commands::file_remove,
+            mind_app::commands::autosave_write,
+            mind_app::commands::autosave_list,
+            mind_app::commands::autosave_clear,
+            mind_app::commands::autosave_drop,
+            mind_app::commands::backup_now,
+            mind_app::commands::backup_list,
+            mind_app::commands::backup_restore,
+            mind_app::commands::backup_delete,
+            mind_app::commands::backup_purge,
+            mind_app::commands::trash_list,
+            mind_app::commands::trash_restore,
+            mind_app::commands::trash_purge,
+            mind_app::commands::trash_purge_older_than,
+            mind_app::commands::history_list,
+            mind_app::commands::secret_store,
+            mind_app::commands::secret_drop,
+            mind_app::commands::secret_exists,
+            mind_app::commands::reveal_in_folder,
+            mind_app::openfile::open_take_pending,
+            mind_app::log::log_write,
+            mind_app::log::log_set_level,
+            mind_app::log::log_info,
+            mind_app::log::log_open_dir,
+            mind_app::crash::crash_report,
+            mind_app::crash::crash_info,
+            mind_app::crash::crash_open_dir,
+            mind_app::net::proxy_status,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
