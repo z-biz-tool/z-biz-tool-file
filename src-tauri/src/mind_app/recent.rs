@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{get_config_dir, read_json_file, write_private};
+use crate::mind_app::config::{get_config_dir, read_json_file, write_private};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

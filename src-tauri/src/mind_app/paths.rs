@@ -12,7 +12,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::config::get_config_dir;
+use crate::mind_app::config::get_config_dir;
 
 /// 应用自己管的目录：配置目录与临时目录永远可用，即使它们恰好落在被拦的位置里。
 fn allowed_roots() -> Vec<PathBuf> {

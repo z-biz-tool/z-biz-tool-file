@@ -159,8 +159,10 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 带进来 16 个纯图标按钮（项目/Agent 的编辑删除、视图切换、任务行内操作、
  * 侧栏折叠等，散在 WorkerApp 与各 view 组件里）。这 16 个都已带 aria-label，
  * 期间只补过 1 个漏网的（WorkerApp 的侧栏折叠钮）。
+ * 135 → 137：词库板块（src/apps/glossary）2026-11-08 新建，带进来 2 个纯图标按钮
+ * ——— 词条列表行内的「编辑」「删除」。两个都带了 aria-label（按词名动态给出）。
  */
-const TOTAL_ICON_ONLY = 135;
+const TOTAL_ICON_ONLY = 137;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

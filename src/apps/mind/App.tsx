@@ -33,6 +33,12 @@ import { HistoryPanel } from "./views/HistoryPanel.tsx";
 import { ExportDialog } from "./views/ExportDialog.tsx";
 import { PrintDialog } from "./views/PrintDialog.tsx";
 import { TopicInfoDialog } from "./views/TopicInfoDialog.tsx";
+import { AiTopicDialog } from "./views/AiTopicDialog.tsx";
+import { AiDiagramDialog } from "./views/AiDiagramDialog.tsx";
+import { AiImageDialog } from "./views/AiImageDialog.tsx";
+import { AiVisionDialog } from "./views/AiVisionDialog.tsx";
+import { AiEditImageDialog } from "./views/AiEditImageDialog.tsx";
+import { plainText } from "./types/model.ts";
 import { OptionsView } from "./views/OptionsView.tsx";
 import { ThemePanel } from "./views/ThemePanel.tsx";
 import { activeDoc, activePage, depthOf, dirtyOf, useDoc } from "./stores/docStore.ts";
@@ -40,6 +46,7 @@ import { countTopics } from "./engine/tree.ts";
 import { PROJECTIONS, useUi, type Projection } from "./stores/uiStore.ts";
 import { THEME_LABEL, THEME_ORDER, type ThemeMode } from "./model/constants.ts";
 import { startRecentListeners, useRecent } from "./stores/recentStore.ts";
+import { useLicense } from "./stores/licenseStore.ts";
 import { useSettings } from "./stores/settingsStore.ts";
 import {
   registerShortcuts,
@@ -49,6 +56,7 @@ import {
   isMac,
   type ShortcutHandlers,
 } from "./utils/shortcuts.ts";
+import { canSave } from "./utils/entitlement.ts";
 import { humanSize, timestampName } from "./utils/id.ts";
 import { installAppMenu, syncAppMenu, type MenuState } from "./services/appMenu.ts";
 import {
@@ -58,12 +66,15 @@ import {
   startAutosave,
 } from "./services/autosave.ts";
 import { installCrashWatch } from "./services/crash.ts";
-// 全局样式：原在 main.tsx 里 import。作为板块并入 file 后不自建挂载点，
-// 样式随本 chunk 懒加载时引入（zm-* 前缀与 file 的变量不冲突）。
+import { runAiInsert } from "./services/ai.ts";
+import type { Handoff } from "z-biz-tool-shared/protocol";
+import { resolveMindDeepLink } from "./_shared/deepLink.ts";
+// 家族深链：并入 file 后只保留一个接收器，mind 从这里收分流。
+import { subscribeMindHandoff, takePendingMindHandoff } from "./handoff.ts";
+// 全局样式：独立 app 时由 main.tsx 引入；作为板块并入 file 后随本 chunk 懒加载引入
+//（zm-* 前缀与 file 的 CSS 变量不冲突）。
 import "./index.css";
 import "./shared-style.css";
-import { startDeepLinkReceiver } from "z-biz-tool-shared/protocol";
-import { resolveMindDeepLink } from "./_shared/deepLink.ts";
 import {
   dirOf,
   listen,
@@ -105,6 +116,10 @@ function Shell() {
   const { message, modal } = AntdApp.useApp();
   const doc = useDoc((s) => activeDoc(s));
   const page = useDoc((s) => activePage(s));
+  const visionShapeId = useUi((s) => s.visionShapeId);
+  const visionShape = page?.shapes[visionShapeId];
+  const editImageShapeId = useUi((s) => s.editImageShapeId);
+  const editImageShape = page?.shapes[editImageShapeId];
   const title = useDoc((s) => s.title);
   const path = useDoc((s) => s.path);
   const savedAt = useDoc((s) => s.savedAt);
@@ -160,6 +175,11 @@ function Shell() {
     const s = useDoc.getState();
     const current = activeDoc(s);
     if (!current) return false;
+    const gate = canSave(current);
+    if (!gate.ok) {
+      message.warning(gate.reason);
+      return false;
+    }
     let target = s.path;
     if (!target) {
       target = await pickSavePath({
@@ -184,6 +204,11 @@ function Shell() {
       const s = useDoc.getState();
       const current = activeDoc(s);
       if (!current) return;
+      const gate = canSave(current);
+      if (!gate.ok) {
+        message.warning(gate.reason);
+        return;
+      }
       const ok = await s.saveAs(/\.[^.]+$/.test(target) ? target : `${target}.emmx`);
       if (ok) {
         message.success(`已另存为：${useDoc.getState().path}`);
@@ -273,54 +298,49 @@ function Shell() {
   /**
    * 家族深链（zbiz://mind/open?file=…）：box 等产品递过来的脑图文件。
    *
-   * 机制（冷启动补取 + zbiz-open 监听 + 不静默吞掉）在共享层 startDeepLinkReceiver，
-   * 本仓只提供语义：resolveMindDeepLink 决定「要打开哪个路径」。
+   * 并入 file 之后只保留 file/App.tsx 那**一个**接收器：共享层的 take_pending
+   * 是取走式的，两个接收器会互相抢空队列。统一接收器按 item.product === "mind"
+   * 分流到 handoff.ts，这里订阅它；本板块只提供语义（resolveMindDeepLink）。
    *
    * 落地必须走 openPicked —— 它带「手上还有没存的改动」的脏检查，
    * 跟手动「打开」完全一致。绕过它自己调 openPath 的话，深链会把用户的
    * 未保存改动静默顶掉，而用户根本没意识到刚才递过来了一份文件。
    */
   useEffect(() => {
-    const stop = startDeepLinkReceiver({
-      productId: "mind",
-      invoke: () => native.takePendingDeepLinks(),
-      listen: (event, handler) => listen(event, () => handler()),
-      translate: (item) => {
-        const out = resolveMindDeepLink(item);
-        if (!out.path) {
-          return { ok: false, problem: out.problem ?? "深链里没有要打开的文件" };
-        }
-        return { ok: true, effect: { path: out.path, asImport: out.asImport } };
-      },
-      onProblem: (msg) => {
+    const apply = (item: Handoff): void => {
+      const out = resolveMindDeepLink(item);
+      if (!out.path) {
+        const msg = out.problem ?? "深链里没有要打开的文件";
         console.warn("[mind] 深链:", msg);
         message.warning(msg);
-      },
-      onEffect: (effect) => {
-        const path = effect.path as string;
-        if (effect.asImport) {
-          // 导入路径：走引擎的 importBytes（能吃 .xmind 等格式），
-          // 但仍要过脏检查 —— 导入同样会顶掉当前画布。
-          guard("导入", () => {
-            void (async () => {
-              try {
-                const bytes = await native.fileReadBytes(path);
-                const built = await importBytes(path, bytes);
-                if (useDoc.getState().applyDoc(built, null, stemOf(path))) {
-                  setStartPage(false);
-                  message.success(`已导入 ${stemOf(path)}，还没有写进 .emmx，用「保存」落盘。`);
-                }
-              } catch (e) {
-                message.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const path = out.path;
+      if (out.asImport) {
+        // 导入路径：走引擎的 importBytes（能吃 .xmind 等格式），
+        // 但仍要过脏检查 —— 导入同样会顶掉当前画布。
+        guard("导入", () => {
+          void (async () => {
+            try {
+              const bytes = await native.fileReadBytes(path);
+              const built = await importBytes(path, bytes);
+              if (useDoc.getState().applyDoc(built, null, stemOf(path))) {
+                setStartPage(false);
+                message.success(`已导入 ${stemOf(path)}，还没有写进 .emmx，用「保存」落盘。`);
               }
-            })();
-          });
-          return;
-        }
-        openPicked(path);
-      },
-    });
-    return stop;
+            } catch (e) {
+              message.error(e instanceof Error ? e.message : String(e));
+            }
+          })();
+        });
+        return;
+      }
+      openPicked(path);
+    };
+    // 板块是 lazy 的：深链可能比挂载早到，先取暂存的那条，再订阅后续。
+    const queued = takePendingMindHandoff();
+    if (queued) apply(queued);
+    return subscribeMindHandoff(apply);
   }, [guard, message, openPicked, setStartPage]);
 
   /**
@@ -381,6 +401,12 @@ function Shell() {
     if (target) await saveTo(target);
   }, [saveTo]);
 
+  const doAi = useCallback(async () => {
+    const r = await runAiInsert("AI 生成主题");
+    if (r.ok) message.success(r.message);
+    else message.warning(r.message);
+  }, [message]);
+
   /**
    * 菜单「退出」：先过一遍未保存检查再收进程。
    * 系统那边的 Quit / Alt+F4 不会问，所以这条必须是自己的命令 + native.exit()，
@@ -397,6 +423,7 @@ function Shell() {
     void useRecent.getState().refreshAll();
     // 会员态要在任何闸门（canSave / canGenerate）被问到之前就位，否则启动后头几秒
     // 会被当成免费档，已兑换的用户会看到"还差 N 个文件"这种一闪而过的错话。
+    void useLicense.getState().refresh();
   }, []);
 
   useEffect(() => startAutosave(), []);
@@ -853,6 +880,17 @@ function Shell() {
         >
           重做
         </Button>
+        <Button size="small" onClick={() => void doAi()}>
+          AI 生成
+        </Button>
+        <Button
+          size="small"
+          disabled={!hasDoc}
+          onClick={() => openDialog("aiDiagram")}
+          title="一句话生成一张可编辑的结构图（流程图 / 架构图 / 时间线…）"
+        >
+          AI 生成图
+        </Button>
         <Button
           size="small"
           disabled={!hasDoc}
@@ -972,6 +1010,23 @@ function Shell() {
       <OptionsView open={dialog === "options"} onClose={closeDialog} />
       <ThemePanel open={dialog === "themes"} onClose={closeDialog} />
       <TopicInfoDialog page={page} onClose={closeDialog} />
+      <AiTopicDialog open={dialog === "aiTopic"} onClose={closeDialog} />
+      <AiDiagramDialog open={dialog === "aiDiagram"} onClose={closeDialog} />
+      <AiImageDialog open={dialog === "aiImage"} onClose={closeDialog} />
+      <AiVisionDialog
+        open={dialog === "aiVision"}
+        onClose={closeDialog}
+        shapeId={visionShapeId}
+        topicText={visionShape ? plainText(visionShape.text).slice(0, 30) : ""}
+        hasImage={Boolean(visionShape?.extras.image)}
+      />
+      <AiEditImageDialog
+        open={dialog === "aiEditImage"}
+        onClose={closeDialog}
+        shapeId={editImageShapeId}
+        topicText={editImageShape ? plainText(editImageShape.text).slice(0, 30) : ""}
+        hasImage={Boolean(editImageShape?.extras.image)}
+      />
       <Modal
         open={Boolean(pendingSwitch)}
         title={pendingSwitch ? `${pendingSwitch.label}：当前文档有未保存的修改` : ""}

@@ -4,12 +4,14 @@
  * 两件事决定这里的形状：
  * 1) Rust 侧命令一律 `Result<T, String>`，错误是完整中文句子，前端可以直接 show 出来，
  *    所以这里不再包一层错误类型 —— 再包一次只会把"读取文件失败: xxx"切成两半。
+ *    **例外**：`ai_generate_outline` 的 Err 是结构化对象（见 services/aiFailure.ts），
  *    那个必须包成 Error 才能穿过按 `instanceof Error` 判分支的调用方。
  * 2) 界面必须被真实点过一遍才算验证，而 `vite dev` 在浏览器里跑时没有 IPC。
  *    于是每个命令都有一份 Web 端实现：配置/最近文件落 localStorage，备份与自动保存落内存，
  *    字节读写走 File System Access API（不支持时退到 <input type=file> + <a download>）。
  *    浏览器分支不是"假装成功"：它真的能读 .emmx、真的能存盘，只是历史版本关在标签页里。
  */
+import { toAiFailureError } from "./aiFailure.ts";
 import type { HandoffItem } from "../_shared/deepLink.ts";
 export interface AppInfo {
   version: string;
@@ -85,6 +87,21 @@ export interface CrashInfo {
   latest: string;
 }
 
+/** 会员态。真相在 Rust 侧（license.rs），每次读都重新验签 —— 这里只是它的镜像。 */
+export interface LicenseStatus {
+  /** 是否是可用的会员（验签通过且字段合规）。 */
+  active: boolean;
+  /** member | free | invalid。invalid = 有许可文件但校验不过。 */
+  state: string;
+  tier: string;
+  /** 签发日期 YYYY-MM-DD，未激活为空串。 */
+  issued: string;
+  /** 兑换时间（本机本地时间），未激活为空串。 */
+  redeemedAt: string;
+  /** 非会员时说明为什么；直接展示，前端不再拼文案。 */
+  reason: string;
+}
+
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /**
@@ -124,6 +141,18 @@ function fromBase64(text: string): Uint8Array {
 
 const LS_CONFIG = "z-mind:config";
 const LS_RECENT = "z-mind:recent";
+/** 已保存配额账本（与 Rust 侧 saved.json 同语义）：不随最近列表清空而重置。 */
+const LS_SAVED = "z-mind:saved";
+
+/** 浏览器后备的会员态：恒为免费档。理由见 native.licenseStatus 的注释。 */
+const FREE_LICENSE: LicenseStatus = {
+  active: false,
+  state: "free",
+  tier: "free",
+  issued: "",
+  redeemedAt: "",
+  reason: "浏览器预览模式没有会员体系，请在桌面版中查看或兑换。",
+};
 
 // 与 Rust 侧 recent.rs 的默认 max_count 对齐；QUOTA.recentMax 是"用户能调到多少"，
 // 这里是"没调过时的容量"，两者不是一回事，别拿 UI 那个数当后备。
@@ -271,6 +300,47 @@ export const native = {
    * 它故意不长在最近列表上：那张表能在选项里调到 1 条，还能一键清空，
    * 拿它当名额等于让用户自己把付费闸门关掉。
    */
+  async quotaMarkSaved(path: string): Promise<number> {
+    if (!isTauri) {
+      const list = lsGet<string[]>(LS_SAVED, []);
+      if (!list.includes(path)) {
+        list.push(path);
+        lsSet(LS_SAVED, list);
+      }
+      return list.length;
+    }
+    return call<number>("quota_mark_saved", { path });
+  },
+
+  async quotaSavedList(): Promise<string[]> {
+    if (!isTauri) return lsGet<string[]>(LS_SAVED, []);
+    return call<string[]>("quota_saved_list");
+  },
+
+  /**
+   * 当前会员态。
+   *
+   * 浏览器后备**恒为免费档**：验签在 Rust 侧做（客户端只内置公钥），
+   * 浏览器里没有那把公钥、也没有 license.json 可写。
+   * 这里不是"假装没开通"——浏览器模式本来就没有付费墙可绕：
+   * 它连保存都落 localStorage，闸门在那儿毫无意义。
+   */
+  async licenseStatus(): Promise<LicenseStatus> {
+    if (!isTauri) return FREE_LICENSE;
+    return call<LicenseStatus>("license_status");
+  },
+
+  /**
+   * 兑换一张兑换码。验不过时 Rust 侧返回 Err（中文整句），这里原样抛给界面。
+   *
+   * 浏览器模式直接拒绝：让"兑换"这个动作在没有真实验签的地方**不成立**，
+   * 而不是默默成功 —— 后者会让用户以为在网页里也开通了，回到桌面版却仍是免费档。
+   */
+  async licenseRedeem(code: string): Promise<LicenseStatus> {
+    if (!isTauri) throw new Error("浏览器里无法兑换会员，请在桌面版中输入兑换码。");
+    return call<LicenseStatus>("license_redeem", { code });
+  },
+
   async recentRemove(path: string): Promise<RecentItem[]> {
     if (!isTauri) {
       const list = lsGet<RecentItem[]>(LS_RECENT, []).filter((r) => r.path !== path);
@@ -362,6 +432,11 @@ export const native = {
       });
       memAutosave.delete(path);
       handles.delete(path);
+      // 与 Rust 的 file_remove 同规格：文档没了就还一格保存名额。
+      lsSet(
+        LS_SAVED,
+        lsGet<string[]>(LS_SAVED, []).filter((p) => p !== path)
+      );
       return path;
     }
     return call<string>("file_remove", { path });
@@ -481,6 +556,9 @@ export const native = {
     if (!isTauri) {
       const b = memBackups.find((x) => x.id === id);
       if (!b) throw new Error(`回收站里没有这一项: ${id}`);
+      // 放回盘上就重新占回那一格（删除时已经还掉了）。
+      const saved = lsGet<string[]>(LS_SAVED, []);
+      if (!saved.includes(b.docPath)) lsSet(LS_SAVED, [...saved, b.docPath]);
       return b.docPath;
     }
     return call<string>("trash_restore", { id });
@@ -535,6 +613,127 @@ export const native = {
    * 是 fetch + Authorization 头，key 一直摊在 webview 内存里。
    * 浏览器模式没有后端：抛出的错误与"没配过"同一条路径，由 ai.ts 统一引导。
    */
+  async aiGenerateOutline(args: {
+    prompt: string;
+    endpoint: string;
+    model: string;
+    timeoutSec: number;
+  }): Promise<string> {
+    if (!isTauri) {
+      throw new Error("AI 生成需要在桌面版里使用（浏览器模式没有本机加密库与网络栈）。");
+    }
+    try {
+      return await call<string>("ai_generate_outline", { args });
+    } catch (e) {
+      // 后端的失败是**对象**（kind/status/message/hint/focus），invoke 会原样 reject。
+      // 这里必须把它包成 Error 再往上抛：调用方按 `instanceof Error` 判分支，
+      // 直接把裸对象抛出去会被当成「未知异常」，结构化字段全丢。
+      throw toAiFailureError(e);
+    }
+  },
+
+  /**
+   * AI 生成结构化图（与 aiGenerateOutline 同一条传输通道，系统提示词不同）。
+   *
+   * 后端只回原始 JSON 文本 —— 解析、四道闸校验、失败文案全在前端
+   * engine/diagram.ts。这里与 aiGenerateOutline 一样只负责把结构化失败
+   * 包成 Error 往上抛。
+   */
+  async aiGenerateDiagram(args: {
+    prompt: string;
+    endpoint: string;
+    model: string;
+    timeoutSec: number;
+  }): Promise<string> {
+    if (!isTauri) {
+      throw new Error("AI 生成需要在桌面版里使用（浏览器模式没有本机加密库与网络栈）。");
+    }
+    try {
+      return await call<string>("ai_generate_diagram", { args });
+    } catch (e) {
+      throw toAiFailureError(e);
+    }
+  },
+
+  /**
+   * AI 像素级生图（第二步）。端点/模型/密钥来自「选项 → 高级」的图像服务三件套。
+   *
+   * 网关是自建服务、不保证在线；后端已按 未配置/不可达/超时/HTTP 四类给出
+   * 结构化失败，这里照旧包成 Error 透传。
+   */
+  async aiGenerateImage(args: {
+    endpoint: string;
+    model: string;
+    prompt: string;
+    size: string;
+    apiKey?: string;
+    timeoutSec?: number;
+  }): Promise<{ b64?: string; url?: string; seed?: number; elapsedS?: number }> {
+    if (!isTauri) {
+      throw new Error("AI 生图需要在桌面版里使用（浏览器模式没有网络栈与密钥库）。");
+    }
+    try {
+      return await call<{ b64?: string; url?: string; seed?: number; elapsedS?: number }>(
+        "ai_generate_image",
+        { args }
+      );
+    } catch (e) {
+      throw toAiFailureError(e);
+    }
+  },
+
+  /**
+   * AI 改图（第四步，图生图）：原图 + 改动要求 → 新图。
+   *
+   * 与 aiGenerateImage 同一处配置、同一套失败分类，只是端点变成 /images/edits、
+   * 多带一张原图。denoise 是重绘力度（0.05~0.95），越大改得越狠。
+   */
+  async aiEditImage(args: {
+    endpoint: string;
+    model: string;
+    prompt: string;
+    image: string;
+    denoise: number;
+    apiKey?: string;
+    timeoutSec?: number;
+  }): Promise<{ b64?: string; url?: string; seed?: number; elapsedS?: number }> {
+    if (!isTauri) {
+      throw new Error("AI 改图需要在桌面版里使用（浏览器模式没有网络栈与密钥库）。");
+    }
+    try {
+      return await call<{ b64?: string; url?: string; seed?: number; elapsedS?: number }>(
+        "ai_edit_image",
+        { args }
+      );
+    } catch (e) {
+      throw toAiFailureError(e);
+    }
+  },
+
+  /**
+   * AI 看图（第三步，多模态理解）：图片 + 指令 → 文本回复。
+   *
+   * 与 aiGenerateOutline 同一条 cap-llm 通道，只是消息里带图片
+   * （data URL / 纯 base64 都收，编码细节在后端 wire 层）。
+   * 视觉模型与文本模型可以是不同的名字，由调用方显式传入。
+   */
+  async aiVision(args: {
+    endpoint: string;
+    model: string;
+    prompt: string;
+    image: string;
+    timeoutSec: number;
+  }): Promise<string> {
+    if (!isTauri) {
+      throw new Error("AI 看图需要在桌面版里使用（浏览器模式没有本机加密库与网络栈）。");
+    }
+    try {
+      return await call<string>("ai_vision", { args });
+    } catch (e) {
+      throw toAiFailureError(e);
+    }
+  },
+
   async revealInFolder(path: string): Promise<void> {
     if (!isTauri) throw new Error("浏览器模式打不开所在目录，请在桌面版里使用");
     await call<void>("reveal_in_folder", { path });

@@ -89,7 +89,7 @@ pub fn write_report(kind: &str, message: &str, detail: &str) -> Result<Option<Pa
     );
     config::write_private(&path, body.as_bytes())?;
     prune();
-    crate::log::log(
+    crate::mind_app::log::log(
         "error",
         "crash",
         &format!(

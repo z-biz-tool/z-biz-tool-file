@@ -69,6 +69,8 @@ import { putTerminalHandoff } from "./apps/terminal/handoff";
 import { putSysHandoff } from "./apps/sys/handoff";
 // AI 任务看板板块的深链分流槽（与终端/系统同一个模式：本仓只留一个接收器）
 import { putWorkerHandoff } from "./apps/worker/handoff";
+// 思维导图板块的深链分流槽（纯数据模块，不拖 React 依赖进首屏）
+import { putMindHandoff } from "./apps/mind/handoff";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
@@ -243,6 +245,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   // 导图产出（.emmx）本身就是本地文件，和文件管理天然一体：在这里编辑，
   // 导出/保存后直接就在文件区里看到、可用其它板块继续处理。
   { key: "mind", label: "思维导图", icon: <ShareAltOutlined /> },
+  // 词库板块：2026-11-08 新建（kb 通用能力由 cap-glossary 承载）。
+  // 排最后 —— 和「工作台」「思维导图」一路，是「需要用户主动打开」的沉淀型板块。
+  // 词条/问答/检索文件三块都在这里沉淀和回看。
+  { key: "glossary", label: "词库", icon: <BookOutlined /> },
 ];
 
 /**
@@ -299,6 +305,8 @@ const WorkerApp = lazy(() => import("./apps/worker/WorkerApp"));
 // 思维导图板块按需加载（和 WorkerApp 同样的理由：2.7 万行前端 + 手写 SVG
 // 画布引擎，静态 import 会撑大文件管理首屏；本地协议下切过去的 chunk 下载几十毫秒）。
 const MindApp = lazy(() => import("./apps/mind/App"));
+// 词库板块按需加载（和 WorkerApp 同样的理由：沉淀型板块，文件管理场景用不到）。
+const GlossayApp = lazy(() => import("./apps/glossary/GlossaryApp"));
 
 /**
  * 「点开才用」的功能组件 —— 一律走 lazyModal。
@@ -771,6 +779,13 @@ function AppShellInner() {
         if (item.product === "worker") {
           putWorkerHandoff(item);
           setActiveApp("worker");
+          return;
+        }
+        // 思维导图板块同理（2026-11-08 从 mind 仓搬入）：它是 lazy 板块，
+        // 必须由这里切过去才挂载；早到的深链由 mind/handoff.ts 暂存。
+        if (item.product === "mind") {
+          putMindHandoff(item);
+          setActiveApp("mind");
           return;
         }
         console.warn("[file] 深链:", msg);
@@ -3128,6 +3143,26 @@ function AppShellInner() {
           }
         >
           <MindApp />
+        </Suspense>
+      ) : activeApp === "glossary" ? (
+        // 词库板块：2026-11-08 新建。kb 通用能力落地，三个页签（词条/问答/检索文件）。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载词库…
+            </div>
+          }
+        >
+          <GlossayApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

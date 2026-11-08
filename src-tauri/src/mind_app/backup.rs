@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{get_config_dir, read_json_file, write_private};
-use crate::paths::sanitize_name;
+use crate::mind_app::config::{get_config_dir, read_json_file, write_private};
+use crate::mind_app::paths::sanitize_name;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +29,7 @@ pub struct BackupEntry {
 }
 
 fn root() -> PathBuf {
-    let cfg = crate::config::read_config();
+    let cfg = crate::mind_app::config::read_config();
     let custom = cfg
         .get("save")
         .and_then(|s| s.get("backupDir"))
@@ -91,7 +91,7 @@ fn save_index(map: &serde_json::Map<String, Value>) -> Result<(), String> {
 }
 
 fn history_count() -> usize {
-    let cfg = crate::config::read_config();
+    let cfg = crate::mind_app::config::read_config();
     cfg.get("save")
         .and_then(|s| s.get("historyCount"))
         .and_then(|v| v.as_u64())

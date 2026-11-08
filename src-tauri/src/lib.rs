@@ -68,6 +68,11 @@ pub mod worker_app;
 // 只暴露 attach()（manage 状态 + 运行前初始化）。
 #[path = "mind_app/lib.rs"]
 pub mod mind_app;
+// 词库板块（2026-11-08 新建）：kb（知识库）作为通用板块由 cap-glossary crate 承载，
+// 本板块实现词条增删改查/检索/问答。同构于 mind_app —— 命令在主 invoke_handler
+// 注册，attach 只 manage 状态。
+#[path = "glossary_app/lib.rs"]
+pub mod glossary_app;
 mod updater;
 mod video_thumb;
 mod watcher;
@@ -92,6 +97,9 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        // 思维导图板块 SSO：cap-sso 的 opener 用它打开 OAuth 授权页
+        // （shell::open 在 Tauri v2.3 起已 deprecated，官方替代是 opener）。
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 更新装完「立即重启」用（终端板块的 UpdaterGate 会调，file 自己不用）
         .plugin(tauri_plugin_process::init())
@@ -115,6 +123,9 @@ pub fn run() {
 
     // 思维导图板块的状态（文件关联打开的待开队列）由 mind_app::attach 挂上去。
     let builder = mind_app::attach(builder);
+
+    // 词库板块的状态（词条集合）由 glossary_app::attach 挂上去。
+    let builder = glossary_app::attach(builder);
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -533,6 +544,33 @@ pub fn run() {
             mind_app::crash::crash_info,
             mind_app::crash::crash_open_dir,
             mind_app::net::proxy_status,
+            // ── 免费档配额 / 会员许可（2026-11-08 补齐 mind 整块能力）──
+            mind_app::commands::quota_mark_saved,
+            mind_app::commands::quota_saved_list,
+            mind_app::commands::license_status,
+            mind_app::commands::license_redeem,
+            // ── SSO（ctc 统一登录）：IO 胶水在 cap-sso，协议在 z-biz-tool-shared/sso ──
+            mind_app::sso::sso_start_callback,
+            mind_app::sso::sso_wait_callback,
+            mind_app::sso::sso_cancel_callback,
+            mind_app::sso::sso_open_browser,
+            mind_app::sso::sso_set_tokens,
+            mind_app::sso::sso_get_tokens,
+            mind_app::sso::sso_clear_tokens,
+            mind_app::sso::sso_secure_store_available,
+            // ── AI 生成（走 cap-llm；密钥由后端自取，不回传前端界面）──
+            mind_app::ai::ai_generate_outline,
+            mind_app::ai::ai_generate_diagram,
+            mind_app::ai::ai_generate_image,
+            mind_app::ai::ai_edit_image,
+            mind_app::ai::ai_vision,
+            // ===== 词库板块（glossary_app，2026-11-08 新建，kb 通用能力）=====
+            glossary_app::commands::glossary_list,
+            glossary_app::commands::glossary_search,
+            glossary_app::commands::glossary_stats,
+            glossary_app::commands::glossary_upsert,
+            glossary_app::commands::glossary_remove,
+            glossary_app::commands::glossary_ask,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
@@ -582,11 +620,25 @@ pub fn run() {
             // AI 任务看板：拉起 agent-proxy 守护进程（连接本地 CLI 用）。
             // 失败不阻断启动 —— 只是代理暂时不可用，界面功能照常。
             worker_app::startup(app.handle());
+            // 思维导图板块：Windows / Linux 双击 .emmx 时路径就在命令行里，
+            // 趁前端开始渲染之前收进待开队列（macOS 走下面的 RunEvent::Opened）。
+            mind_app::openfile::seed_from_args(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
+            // macOS 上第二次双击 .emmx 不发新进程，只投一条 RunEvent::Opened；
+            // 把 URL 转成本地路径后交给思维导图板块的待开队列。
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                mind_app::openfile::push(
+                    app,
+                    urls.iter()
+                        .filter_map(|u| u.to_file_path().ok())
+                        .map(|p| p.to_string_lossy().to_string()),
+                );
+            }
             // 应用退出 ⇒ 主动关掉所有数据库连接池，让数据库端看到干净的断开。
             // 不关的话 TCP 连接要等服务端超时才回收（默认可以到几分钟）。
             //
@@ -596,7 +648,7 @@ pub fn run() {
                 db_app::shutdown_pool_registry();
                 // AI 任务看板：agent-proxy 和它拉起的 CLI 不能跟着"关窗即隐藏"继续烧
                 // token（独立运行时靠 exit(0) 触发；这里由文件统一在 Exit 时清理）。
-                worker_app::shutdown(_app);
+                worker_app::shutdown(app);
             }
         });
 }

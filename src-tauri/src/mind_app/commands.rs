@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{Emitter, Manager};
 
-use crate::mind_app::{backup, config, crash, log, net, paths, recent, secret};
+use crate::mind_app::{backup, config, crash, license, log, net, paths, quota, recent, secret};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +184,37 @@ pub fn recent_set_capacity(max_count: usize) -> Result<Vec<recent::RecentItem>, 
 #[tauri::command]
 pub fn recent_set_pinned(path: String, pinned: bool) -> Result<Vec<recent::RecentItem>, String> {
     recent::set_pinned(&path, pinned)
+}
+
+// ---------- 免费档保存配额 ----------
+
+/// 只有真的写盘成功才调这个；打开走 recent_touch，那条不占名额（01 A-13）。
+#[tauri::command]
+pub fn quota_mark_saved(path: String) -> Result<usize, String> {
+    quota::mark_saved(&path)
+}
+
+/// 已占用的名额清单，前端拿它做"已保存 N/10"的判定与文案。
+#[tauri::command]
+pub fn quota_saved_list() -> Result<Vec<String>, String> {
+    Ok(quota::list())
+}
+
+// ---------- 会员许可 ----------
+//
+// 判定全部在 Rust 侧（license.rs）：前端拿到的只是结果，没有能被绕过的前端闸门。
+// 这里不返回 Result::Err 表示"没有会员"——没兑换是正常状态，不是错误。
+
+/// 当前会员态。每次调用都会重新验签，手改 license.json 立刻失效。
+#[tauri::command]
+pub fn license_status() -> license::LicenseStatus {
+    license::status()
+}
+
+/// 兑换一张兑换码。验不过直接报错（中文整句，前端直接展示），且不落盘。
+#[tauri::command]
+pub fn license_redeem(code: String) -> Result<license::LicenseStatus, String> {
+    license::redeem(&code)
 }
 
 // ---------- 免费档保存配额 ----------
@@ -502,7 +533,7 @@ mod tests {
     /// 把配置目录挪到临时位置：失败保存要写一条 error 日志、历史版本要写索引，
     /// 那些都必须落在沙盒里，不能污染真实的 ~/.z-mind。持着返回的守卫跑完整个测试，
     /// 免得和别的改环境变量的测试互相串。
-    fn sandbox() -> (crate::ConfigEnvGuard, PathBuf) {
+    fn sandbox() -> (crate::mind_app::ConfigEnvGuard, PathBuf) {
         let g = crate::mind_app::lock_config_env();
         let dir = std::env::temp_dir().join(format!("z-mind-cmd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();

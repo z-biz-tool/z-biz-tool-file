@@ -39,7 +39,16 @@ import {
   menuProfileXml,
 } from "../services/profileIO.ts";
 import type { AppInfo, CrashInfo, LogInfo, ProxyStatus } from "../services/native.ts";
+import { useQuota } from "../stores/quotaStore.ts";
 import { useRecent } from "../stores/recentStore.ts";
+import { useLicense } from "../stores/licenseStore.ts";
+import {
+  login as ssoLogin,
+  loadSession as ssoLoadSession,
+  logout as ssoLogout,
+  ssoConfigured,
+  ssoSecureStoreAvailable,
+} from "../services/sso.ts";
 import { useSettings } from "../stores/settingsStore.ts";
 import type { Settings } from "../stores/settingsStore.ts";
 import {
@@ -64,7 +73,8 @@ type SectionKey =
   | "shortcut"
   | "advanced"
   | "rightMenu"
-  | "recent";
+  | "recent"
+  | "quota";
 
 interface OptionsViewProps {
   open: boolean;
@@ -123,6 +133,26 @@ function Field({
   );
 }
 
+/** 配额表：文案直接引实测提示原文的语气，用户在哪里被挡住，就该在哪里看到同一条规则。
+ * savedFiles 是账本里"真的存过盘而且还在"的份数（01 A-13），免费档那一行要把它显示出来，
+ * 否则用户只看到"10 个"却不知道已经花了几个，被拦下时只能猜。 */
+function quotaRows(savedFiles: number): { label: string; value: string }[] {
+  return [
+    {
+      label: "免费版可保存的文件数",
+      value: `${QUOTA.freeMaxFiles} 个（已用 ${savedFiles}）`,
+    },
+    { label: "AI 每点可生成的字数", value: `约 ${QUOTA.aiCharsPerPoint} 个汉字` },
+    { label: "智能解析字数区间", value: `${QUOTA.parseWordMin} – ${QUOTA.parseWordMax} 字` },
+    { label: "社区发布标题上限", value: `${QUOTA.publishTitleMax} 字` },
+    { label: "社区发布描述上限", value: `${QUOTA.publishDescMax} 字` },
+    { label: "撤销栈深度", value: `${QUOTA.undoMax} 步` },
+    { label: "历史版本份数", value: `${QUOTA.historyMax} 份` },
+    { label: "最近文件条数", value: `${QUOTA.recentMax} 条` },
+    { label: "回收站保留", value: `${QUOTA.trashKeepDays} 天` },
+  ];
+}
+
 /** 日志目录里留几天的文件。数值与 Rust log.rs 的 KEEP_FILES 同源，改一处要改两处。 */
 const LOG_KEEP = 14;
 /** 崩溃记录一份一个文件，只留最新这么多份。与 Rust crash.rs 的 KEEP_FILES 同源。 */
@@ -140,7 +170,11 @@ export function OptionsView({ open, onClose }: OptionsViewProps) {
   const load = useSettings((s) => s.load);
   const patch = useSettings((s) => s.patch);
   const resetSection = useSettings((s) => s.resetSection);
+  const savedFiles = useQuota((s) => s.saved.length);
   const clearRecent = useRecent((s) => s.clearRecent);
+  // 会员态读的是 Rust 侧验签后的结果（见 stores/licenseStore.ts），这里只负责展示。
+  const license = useLicense((s) => s.status);
+  const redeeming = useLicense((s) => s.redeeming);
 
   // API Key 是唯一不能进 settings 的输入：它只活在下面这份临时态里，按"保存密钥"才进本机加密库。
   const [apiKey, setApiKey] = useState("");
@@ -161,6 +195,35 @@ export function OptionsView({ open, onClose }: OptionsViewProps) {
   const [menuProfileTip, setMenuProfileTip] = useState<ProfileTip | null>(null);
   const [keyProfileTip, setKeyProfileTip] = useState<ProfileTip | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
+  // 兑换码是**不进 settings 的临时态**（和 API Key 同一类）：它是一次性凭据，
+  // 落盘的是 Rust 侧签发的许可，不是这串字符本身。
+  const [redeemCode, setRedeemCode] = useState("");
+  const [redeemTip, setRedeemTip] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  // SSO（ctc 统一登录）：两个条件都满足才显示入口 ——
+  // ① 配置齐全（ctc 侧参数定了才有得登）；② OS 密钥库可用（token 得有地方放）。
+  // 少任一条都不显示：半套配置比没有配置更糟，用户会点了才发现登不上。
+  const [ssoReady, setSsoReady] = useState(false);
+  const [ssoBusy, setSsoBusy] = useState(false);
+  const [ssoTip, setSsoTip] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  const [ssoUser, setSsoUser] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    void (async () => {
+      if (!ssoConfigured()) {
+        setSsoReady(false);
+        return;
+      }
+      // 密钥库不可用就不给入口 —— 而不是等用户点了之后才报错。
+      const ok = await ssoSecureStoreAvailable().catch(() => false);
+      setSsoReady(ok);
+      if (!ok) return;
+      // 显示「上次是谁登录的」：展示信息在 localStorage，不含 token。
+      const session = await ssoLoadSession();
+      const profile = session?.profile as { displayName?: string | null; username?: string | null } | null;
+      setSsoUser(profile?.displayName || profile?.username || null);
+    })();
+  }, [open]);
 
   useEffect(() => {
     // 这些读的是外壳里的**现状**，不是设置值：日志份数、崩溃份数、加密库里有没有密钥，
@@ -193,6 +256,94 @@ export function OptionsView({ open, onClose }: OptionsViewProps) {
     // 对话框可能被任何视图打开（工具栏、错误面板、F1），不保证有人替我们 load() 过。
     if (!useSettings.getState().loaded) void load();
   }, [load]);
+
+  useEffect(() => {
+    // "已用 N" 得跟着盘上的真实情况走：打开面板时重读一次账本，
+    // 而不是只信 App 启动那回缓存 —— 在资源管理器里删掉的文件要当场从计数里退掉。
+    //
+    // 会员态同理：Rust 每次读都重新验签，用户可能在别的窗口改过 license.json。
+    if (open) {
+      void useQuota.getState().refresh();
+      void useLicense.getState().refresh();
+      setRedeemTip(null);
+    }
+  }, [open]);
+
+  /**
+   * 兑换。成功后由 licenseStore 回读一次状态（Rust 侧重新验签），
+   * 所以这里判断"是不是真生效了"要看回读结果，而不是看 redeem() 没抛错。
+   */
+  async function doRedeem() {
+    const code = redeemCode.trim();
+    if (!code) {
+      setRedeemTip({ tone: "bad", text: "请输入兑换码。" });
+      return;
+    }
+    try {
+      await useLicense.getState().redeem(code);
+    } catch (e) {
+      // Rust 侧给的是完整中文句子（如"兑换码编码不合法: …"），直接展示。
+      setRedeemTip({ tone: "bad", text: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    if (useLicense.getState().status.active) {
+      setRedeemCode("");
+      setRedeemTip({ tone: "good", text: "兑换成功，会员权益已生效。" });
+    } else {
+      // redeem() 没抛错但也没成为会员 —— 只有"空码"会走这条，store 里已把原因写进 error。
+      setRedeemTip({ tone: "bad", text: useLicense.getState().error ?? "兑换未生效。" });
+    }
+  }
+
+  /**
+   * ctc 统一登录。
+   *
+   * 登录成功后拿到的只是**身份**（sub / 显示名 / 邮箱），不是会员权益 ——
+   * 会员态的真相仍在 Rust 侧（license.rs 的 ed25519 验签）。
+   * 两者是**两件事**：SSO 回答「你是谁」，会员回答「你能用多少」。
+   * 所以登录成功**不**顺带把会员态改成 active —— 那是另一个判据。
+   */
+  async function doSsoLogin() {
+    if (ssoBusy) return;
+    setSsoBusy(true);
+    setSsoTip(null);
+    try {
+      const res = await ssoLogin();
+      if (!res.ok) {
+        // 用户主动取消是**正常状态**，不该报成"出错了"。
+        // 协议层把「拒绝授权」归成 cancelled —— 这里照着静默处理。
+        if (res.code === "cancelled") {
+          setSsoTip({ tone: "bad", text: "已取消登录。" });
+        } else {
+          setSsoTip({ tone: "bad", text: res.reason });
+        }
+        return;
+      }
+      const name = res.value.user.displayName || res.value.user.username || res.value.user.email;
+      setSsoUser(name || null);
+      setSsoTip({ tone: "good", text: `已登录${name ? `：${name}` : ""}。` });
+    } catch (e) {
+      setSsoTip({ tone: "bad", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSsoBusy(false);
+    }
+  }
+
+  /** 退出登录：清掉密钥库里的会话。幂等 —— 连点两次也不报错。 */
+  async function doSsoLogout() {
+    if (ssoBusy) return;
+    setSsoBusy(true);
+    setSsoTip(null);
+    try {
+      await ssoLogout();
+      setSsoUser(null);
+      setSsoTip({ tone: "good", text: "已退出登录。" });
+    } catch (e) {
+      setSsoTip({ tone: "bad", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSsoBusy(false);
+    }
+  }
 
   async function saveKey() {
     const v = apiKey.trim();
@@ -1231,10 +1382,234 @@ export function OptionsView({ open, onClose }: OptionsViewProps) {
           ),
         },
         {
-          key: "about",
-          label: "关于",
+          key: "quota",
+          label: "会员",
           children: (
             <div>
+              {sectionHeader("quota", "会员与配额")}
+              {/* —— SSO（ctc 统一账号）——
+                  与下面的兑换码是**两件事**：SSO 回答「你是谁」（身份），
+                  兑换码回答「你能用多少」（权益）。SSO 登录成功**不会**自动开通会员。
+                  入口只在「配置齐全 + 密钥库可用」时出现：半套配置比没有配置更糟。 */}
+              {ssoReady ? (
+                <div
+                  style={{
+                    border: "1px solid var(--zm-border)",
+                    borderRadius: 4,
+                    padding: "10px 12px",
+                    marginBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <span style={{ fontSize: 13 }}>
+                      <b>统一账号</b>
+                      {ssoUser ? (
+                        <span style={{ color: "var(--zm-text-2)" }}>　{ssoUser}</span>
+                      ) : (
+                        <span style={{ color: "var(--zm-text-2)" }}>　未登录</span>
+                      )}
+                    </span>
+                    {ssoUser ? (
+                      <Button size="small" loading={ssoBusy} onClick={() => void doSsoLogout()}>
+                        退出
+                      </Button>
+                    ) : (
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={ssoBusy}
+                        onClick={() => void doSsoLogin()}
+                      >
+                        用 ctc 账号登录
+                      </Button>
+                    )}
+                  </div>
+                  {ssoTip ? (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        marginTop: 6,
+                        lineHeight: 1.6,
+                        color: ssoTip.tone === "bad" ? "#d4380d" : "var(--zm-text-2)",
+                      }}
+                    >
+                      {ssoTip.text}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {/* —— 当前档位 + 兑换入口 ——
+                  会员判定的真相在 Rust（license.rs，每次读都重新验签），
+                  这里只是把它显示出来；前端不持有任何"是不是会员"的判据。 */}
+              <div
+                style={{
+                  border: "1px solid var(--zm-border)",
+                  borderRadius: 4,
+                  padding: "10px 12px",
+                  marginBottom: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <span>
+                    <b style={{ fontSize: 13 }}>
+                      {license.active
+                        ? "会员已激活"
+                        : license.state === "invalid"
+                          ? "许可未通过校验"
+                          : "免费版"}
+                    </b>
+                    <Tag
+                      style={{ marginLeft: 8 }}
+                      color={
+                        license.active ? "green" : license.state === "invalid" ? "red" : undefined
+                      }
+                    >
+                      {license.state}
+                    </Tag>
+                  </span>
+                  {license.active && license.redeemedAt ? (
+                    <span style={{ fontSize: 12, color: "var(--zm-text-2)", flexShrink: 0 }}>
+                      兑换于 {license.redeemedAt}
+                    </span>
+                  ) : null}
+                </div>
+                {license.active ? (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--zm-text-2)",
+                      marginTop: 6,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    买断制：保存文件数与 AI 点数都不再受限。下面那张表是免费版的规则，留着供对照。
+                    {license.issued ? `　签发日 ${license.issued}` : ""}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 8 }}>
+                    {/* reason 是 Rust 侧的中文整句（"尚未激活…" / "许可校验未通过…"），
+                        直接显示；许可无效时说清楚"该怎么办"，语气要和免费态区分开。 */}
+                    {license.reason ? (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: license.state === "invalid" ? "#d4380d" : "var(--zm-text-2)",
+                          marginBottom: 6,
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        {license.reason}
+                      </div>
+                    ) : null}
+                    <div
+                      style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+                    >
+                      <Input
+                        size="small"
+                        style={{ maxWidth: 340, minWidth: 200 }}
+                        placeholder="ZBIZ-MIND-…"
+                        aria-label="兑换码"
+                        value={redeemCode}
+                        onChange={(e) => {
+                          setRedeemCode(e.target.value);
+                          setRedeemTip(null);
+                        }}
+                        onPressEnter={() => void doRedeem()}
+                        disabled={redeeming}
+                      />
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={redeeming}
+                        onClick={() => void doRedeem()}
+                      >
+                        兑换
+                      </Button>
+                    </div>
+                    {redeemTip ? (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          marginTop: 6,
+                          lineHeight: 1.6,
+                          color: redeemTip.tone === "bad" ? "#d4380d" : "var(--zm-text-2)",
+                        }}
+                      >
+                        {redeemTip.text}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--zm-text-2)",
+                  margin: "4px 0 8px",
+                  lineHeight: 1.6,
+                }}
+              >
+                下面这些数字来自 model/constants.ts 的
+                QUOTA，是业务规则而不是可调项（P-4）：界面上每一处限制都从同一份常量取，
+                改这里才会改到全部；把它们做成开关，等于把付费墙藏起来。
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: "0 16px",
+                  border: "1px solid var(--zm-border)",
+                  borderRadius: 4,
+                  padding: "8px 12px",
+                  fontSize: 13,
+                }}
+              >
+                <span>剩余 AI 点数</span>
+                <span>
+                  {license.active ? (
+                    <b>
+                      不限
+                      <span style={{ fontWeight: 400, color: "var(--zm-text-2)" }}>
+                        {" "}
+                        （会员不扣点）
+                      </span>
+                    </b>
+                  ) : (
+                    <b>
+                      {settings.quota.aiPoints - settings.quota.aiUsed}
+                      <span style={{ fontWeight: 400, color: "var(--zm-text-2)" }}>
+                        {" "}
+                        / {settings.quota.aiPoints}（已用 {settings.quota.aiUsed}）
+                      </span>
+                    </b>
+                  )}
+                </span>
+                {quotaRows(savedFiles).map((r) => (
+                  <div key={r.label} style={{ display: "contents" }}>
+                    <span style={{ color: "var(--zm-text-2)" }}>{r.label}</span>
+                    <span>{r.value}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--zm-text-2)", marginTop: 8 }}>
+                点数按“约 {QUOTA.aiCharsPerPoint} 个汉字 1 点”向上取整扣，见
+                useSettings.spendAiPoints{license.active ? "；会员不走这条扣减" : ""}。
+              </div>
               {info ? (
                 <div
                   style={{

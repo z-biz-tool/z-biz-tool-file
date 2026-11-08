@@ -167,7 +167,7 @@ pub fn sanitize(cfg: &mut Value) -> bool {
         net.insert("proxyHost".into(), Value::String(String::new()));
         net.insert("proxyPort".into(), serde_json::json!(0));
     }
-    crate::log::log(
+    crate::mind_app::log::log(
         "debug",
         "config",
         "非手动档，代理地址与端口已清空（只有手动这一档会用它们）",
@@ -182,7 +182,7 @@ pub fn validate(cfg: &Value) -> Result<(), String> {
 
 #[tauri::command]
 pub fn proxy_status() -> Result<ProxyStatus, String> {
-    status(&crate::config::read_config())
+    status(&crate::mind_app::config::read_config())
 }
 
 #[cfg(test)]
@@ -198,7 +198,7 @@ mod tests {
     /// 把别人的用例搅成随机失败（2026-10-21 实测：log 与 paths 两类用例各约 12% 概率挂，
     /// 报的还是「字节数对不上」「找不到路径」这种和本用例毫无关系的错）。
     /// 不隔离的第二重后果：日志会写进用户真实的 ~/.z-mind/logs。
-    fn sandbox(tag: &str) -> (crate::ConfigEnvGuard, std::path::PathBuf) {
+    fn sandbox(tag: &str) -> (crate::mind_app::ConfigEnvGuard, std::path::PathBuf) {
         crate::mind_app::isolated_sandbox(tag)
     }
 

@@ -15,6 +15,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # 家族统一深链协议（cap-hub）：zbiz:// 的构造、解析、待处理队列与产品清单。
 cap-hub = { path = "../../z-biz-tool-capability/crates/cap-hub", version = "0.1.0", features = ["tauri"] }
+# ── 思维导图板块（2026-11-08 从 z-biz-tool-mind 搬入）专属依赖 ──
+# cap-sso：SSO 回环回调服务器 + 开浏览器 + OS 密钥库；协议在 z-biz-tool-shared/sso。
+cap-sso = { path = "../../z-biz-tool-capability/crates/cap-sso", version = "0.1.0", features = ["tauri"] }
+# cap-sso 的 tauri feature 借官方 opener 插件开 OAuth 授权页（shell::open 已 deprecated）。
+tauri-plugin-opener = "~2.5.5"
+# 会员许可验签：客户端只内置公钥，私钥留在签发侧（lead/scripts/issue-license.mjs）。
+ed25519-dalek = "2.1.1"
 tauri = { version = "2", features = ["protocol-asset"] }
 # 文档解析原语（GAP-06 文档一片）：PDF / EPUB / MOBI。
 # 版本与实现统一收口到 z-biz-tool-capability/crates/cap-doc，
@@ -27,6 +34,9 @@ cap-llm = { path = "../../z-biz-tool-capability/crates/cap-llm", version = "0.1.
 # 家族统一 LLM 配置落点（2026-11-01）：~/.z-biz-tool/llm/config.json + OS 密钥库。
 # 本仓原明文 llm.json 由启动迁移器搬入并抹掉密钥。
 cap-llm-config = { path = "../../z-biz-tool-capability/crates/cap-llm-config", version = "0.1.0" }
+# 通用词库能力层（2026-11-08）：kb 作为通用板块收口到 cap-glossary，
+# file 词库板块用它做词条存取 + 切片检索 + 问答拼装（与 note 同一套逻辑）。
+cap-glossary = { path = "../../z-biz-tool-capability/crates/cap-glossary", version = "0.1.0" }
 # 哈希原语（cap-hash）：CRC-32 的实现与查表收口到能力层，
 # 本仓只留「打开文件 + 流式喂字节」的编排（mind 仓有同一份 CRC-32 的 TS 抄本）。
 # 2026-11-01 起走 crates.io 正式版（0.1.0 已发布，名字已占住）：

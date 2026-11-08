@@ -565,6 +565,7 @@ mod tests {
                     content: "Remember the word PINEAPPLE. Just reply ACK.".into(),
                 },
             ],
+            None,
         )
         .await
         .expect("turn 1 chat should succeed");
@@ -584,6 +585,7 @@ mod tests {
                 role: "user".to_string(),
                 content: "What word did I ask you to remember? Just the word.".into(),
             }],
+            None,
         )
         .await
         .expect("turn 2 chat should succeed");

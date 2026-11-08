@@ -9,7 +9,7 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use serde_json::Value;
 
-use crate::config::{get_config_dir, read_json_file, write_private};
+use crate::mind_app::config::{get_config_dir, read_json_file, write_private};
 
 const PREFIX: &str = "enc:v1:";
 

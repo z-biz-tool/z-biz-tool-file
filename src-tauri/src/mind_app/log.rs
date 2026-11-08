@@ -426,7 +426,7 @@ mod tests {
             RANKS[DEFAULT_LEVEL_IDX].0, "info",
             "静态默认档位的下标指向了别的档位"
         );
-        let cfg = crate::config::read_config();
+        let cfg = crate::mind_app::config::read_config();
         let from_cfg = cfg
             .get("advanced")
             .and_then(|a| a.get("logLevel"))
