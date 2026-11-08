@@ -4,6 +4,7 @@ import { lazy, Suspense, useMemo } from "react";
 import type { AlertEvent, HistoryPoint, MetricsSnapshot, StaticInfo } from "../../ipc_contract";
 import type { HistorySeedInfo, NetSessionTotals } from "../../hooks/useSystemMonitor";
 import { formatBytes, formatGb, formatPercent, formatRate } from "../../lib/format";
+import { pickDiskHeadline } from "../../lib/diskHeadline";
 import {
   TREND_RANGES,
   alignAlertMarkers,
@@ -70,13 +71,10 @@ export function OverviewTab({
     };
   }, [snapshot]);
 
-  const diskTotals = useMemo(() => {
-    const internal =
-      snapshot?.disks.filter((d) => d.mountPoint === "/" || d.totalBytes > 0) ?? [];
-    const total = internal.reduce((a, d) => a + d.totalBytes, 0);
-    const used = internal.reduce((a, d) => a + d.usedBytes, 0);
-    return { total, used, percent: total > 0 ? (used / total) * 100 : 0 };
-  }, [snapshot]);
+  // 与后端告警的 worst_disk 同口径：只展示最吃紧的那一个卷。
+  // APFS 的 "/" 与 "/System/Volumes/Data" 是同一容器的两个卷，求和会把
+  // 容量与已用同时翻倍（920.9 GB 的假盘就是这么来的）。明细在「磁盘」页。
+  const diskHeadline = useMemo(() => pickDiskHeadline(snapshot?.disks), [snapshot]);
 
   // 14 400 点的窗口裁剪 + 降采样只在数据或窗口真的变了才算：本组件每一帧都重渲染，
   // 不 memo 就等于每秒白烧一次 CPU（迷你模式同一套理由，见 MiniMenuBar）
@@ -132,7 +130,6 @@ export function OverviewTab({
             icon={<CloudOutlined />}
             title="内存使用"
             value={memory ? formatGb(memory.usedBytes) : "—"}
-            unit="GB"
             percent={memory?.usagePercent}
             footer={
               memory ? `共 ${formatGb(memory.totalBytes)} · ${memory.pressure}` : "等待首帧…"
@@ -143,10 +140,13 @@ export function OverviewTab({
           <MetricCard
             icon={<HddOutlined />}
             title="磁盘使用"
-            value={snapshot ? formatGb(diskTotals.used) : "—"}
-            unit="GB"
-            percent={snapshot ? diskTotals.percent : undefined}
-            footer={snapshot ? `共 ${formatGb(diskTotals.total)}` : "等待首帧…"}
+            value={diskHeadline.mountPoint ? formatGb(diskHeadline.usedBytes) : "—"}
+            percent={diskHeadline.mountPoint ? diskHeadline.percent : undefined}
+            footer={
+              diskHeadline.mountPoint
+                ? `共 ${formatGb(diskHeadline.totalBytes)} · ${diskHeadline.mountPoint}`
+                : "等待首帧…"
+            }
           />
         </Col>
         <Col span={6}>
