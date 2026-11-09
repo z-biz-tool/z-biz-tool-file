@@ -98,7 +98,9 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-process = "2"
 # ── 系统板块（2026-11-06 从 z-biz-tool-sys 搬入）用到的依赖 ──
 # sysinfo: CPU/内存/磁盘/网络的采集源；libc: macOS 上的 sysctl / proc_pidpath 等原生调用；
-# notification: 告警要发系统通知（只从 Rust 侧投递，capabilities 不需要加权限项）。
+# notification: 告警要发系统通知。注意 capabilities **必须**给 notification:default ——
+# 插件会往 webview 注入启动脚本，页面加载就调 plugin:notification|is_permission_granted，
+# 缺这条 ACL 会以「未处理的 Promise 拒绝」整屏启动失败（2026-11-09 踩过）。
 sysinfo = "0.33"
 libc = "0.2"
 tauri-plugin-notification = "2.4.0"

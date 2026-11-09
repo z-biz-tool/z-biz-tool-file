@@ -81,6 +81,52 @@ use tauri::Manager;
 use watcher::WatcherState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 启动 ACL 自检（`ZBIZ_ACL_SELFTEST=1` 时生效）。
+///
+/// 为什么需要：ACL 拒绝是**静默**的 —— Tauri 直接把 `Command X not allowed by ACL`
+/// 作为 IPC 错误回给 webview，Rust 侧不打日志；打包后的 .app 又没有 devtools，
+/// 于是唯一的线索就是前端那一屏「启动失败」。
+///
+/// 2026-11-09 的故障就是这么来的：`tauri_plugin_notification::init()` 会往
+/// webview 注入启动脚本，页面一加载就调 `plugin:notification|is_permission_granted`，
+/// 而 capabilities 里没给 `notification:default`。这里用 Tauri 自己的
+/// `RuntimeAuthority` 把同一条命令判一次，输出：
+///
+///   ZBIZ_ACL_SELFTEST=1 ./z-biz-tool-file 2>&1 | grep acl-selftest
+///   [acl-selftest] plugin:notification|is_permission_granted allowed=true
+///
+/// 默认不开启，正常启动零输出零开销。
+fn acl_selftest(ctx: &mut tauri::Context<tauri::Wry>) {
+    if std::env::var_os("ZBIZ_ACL_SELFTEST").is_none() {
+        return;
+    }
+    let allowed = ctx
+        .runtime_authority_mut()
+        .resolve_access(
+            "plugin:notification|is_permission_granted",
+            "main",
+            "main",
+            &tauri::ipc::Origin::Local,
+        )
+        .is_some();
+    eprintln!(
+        "[acl-selftest] plugin:notification|is_permission_granted allowed={}",
+        allowed
+    );
+    // 反向对照：没授权、也没注册的 shell 命令必须判 false。
+    // 少了这一条，上面那个 true 可能只是「任何命令都放行」的假阳性。
+    let control = ctx
+        .runtime_authority_mut()
+        .resolve_access(
+            "plugin:shell|execute",
+            "main",
+            "main",
+            &tauri::ipc::Origin::Local,
+        )
+        .is_some();
+    eprintln!("[acl-selftest] control plugin:shell|execute allowed={}", control);
+}
+
 pub fn run() {
     // 深链队列：manage 给命令用、seed 给冷启动用，两处必须是同一份。
     let zbiz_pending = cap_hub::receiver::SharedPending::default();
@@ -103,8 +149,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 更新装完「立即重启」用（终端板块的 UpdaterGate 会调，file 自己不用）
         .plugin(tauri_plugin_process::init())
-        // 系统板块的告警要发系统通知。sys 原来只从后端 Rust API 投递
-        // （不走 JS 通道），所以 capabilities 不需要加 notification 权限项。
+        // 系统板块的告警要发系统通知（从 Rust 侧投递）。
+        // 但插件会往 webview 注入启动脚本，页面一加载就调
+        // plugin:notification|is_permission_granted —— capabilities 必须同时给
+        // notification:default，否则启动即 ACL 拒绝、整屏「启动失败」。
         .plugin(tauri_plugin_notification::init())
         .manage(WatcherState::default())
         .manage(aria2::Aria2State::default())
@@ -126,6 +174,12 @@ pub fn run() {
 
     // 词库板块的状态（词条集合）由 glossary_app::attach 挂上去。
     let builder = glossary_app::attach(builder);
+
+    // 上下文只在这里展开一次：`generate_context!` 会嵌入 plist 等静态符号，
+    // 同一个 crate 里展开两次会撞 `_EMBED_INFO_PLIST`。
+    // 顺带跑一次可由环境变量开启的 ACL 自检（见 acl_selftest 注释）。
+    let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    acl_selftest(&mut context);
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -625,7 +679,7 @@ pub fn run() {
             mind_app::openfile::seed_from_args(app.handle());
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             // macOS 上第二次双击 .emmx 不发新进程，只投一条 RunEvent::Opened；
@@ -1077,3 +1131,4 @@ mod handler_registration_tests {
         );
     }
 }
+

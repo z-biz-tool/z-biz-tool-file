@@ -1,13 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window — 2026-10-04 收敛：摘除 fs/shell 授权（T-4-5 同款处置）。2026-11-04 终端板块搬入后补 process:default（更新装完「立即重启」用）。",
+  "description": "Capability for the main window — 2026-10-04 收敛：摘除 fs/shell 授权（T-4-5 同款处置）。2026-11-04 终端板块搬入后补 process:default（更新装完「立即重启」用）。2026-11-09 补 notification:default：通知插件会往 webview 注入启动脚本，页面加载即调 plugin:notification|is_permission_granted，缺这条 ACL 会整屏启动失败。",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "clipboard-manager:default",
     "dialog:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "notification:default"
   ]
 }
