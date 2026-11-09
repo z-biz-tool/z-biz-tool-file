@@ -623,7 +623,7 @@ mod tests {
         );
 
         let contract = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc_contract.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/ipc_contract.ts"),
         )
         .expect("前端 IPC 契约文件必须存在");
         assert!(

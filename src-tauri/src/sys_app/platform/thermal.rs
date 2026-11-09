@@ -888,7 +888,7 @@ mod tests {
     #[test]
     fn the_temperature_verdict_lives_in_exactly_one_place() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let agent_rs = std::fs::read_to_string(manifest.join("src/agent.rs")).unwrap();
+        let agent_rs = std::fs::read_to_string(manifest.join("src/sys_app/agent.rs")).unwrap();
         let agent_production = agent_rs
             .split("#[cfg(test)]")
             .next()
@@ -903,7 +903,7 @@ mod tests {
         );
 
         // 只扫生产段落：这条断言自己就写着那个常量名，连测试一起数等于自己绊自己。
-        let thermal_rs = std::fs::read_to_string(manifest.join("src/platform/thermal.rs")).unwrap();
+        let thermal_rs = std::fs::read_to_string(manifest.join("src/sys_app/platform/thermal.rs")).unwrap();
         let thermal_production = thermal_rs
             .split("#[cfg(test)]")
             .next()
@@ -915,7 +915,7 @@ mod tests {
         );
 
         let tab =
-            std::fs::read_to_string(manifest.join("../src/components/tabs/SystemInfoTab.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/SystemInfoTab.tsx"))
                 .unwrap();
         assert!(tab.contains("severity"), "系统信息页要按后端给的等级上色");
         assert!(!tab.contains("HEADROOM"), "界面又算了一遍温度阈值");
@@ -926,7 +926,7 @@ mod tests {
     #[test]
     fn the_status_wording_has_one_home_and_a_fan_gets_its_own_word() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let lib_ts = std::fs::read_to_string(manifest.join("../src/lib/thermal.ts")).unwrap();
+        let lib_ts = std::fs::read_to_string(manifest.join("../src/apps/sys/lib/thermal.ts")).unwrap();
         let wording = lib_ts
             .split("export function severityText")
             .nth(1)
@@ -938,7 +938,7 @@ mod tests {
         assert!(wording.contains(r#"kind === "fan""#), "分岔只看传感器种类");
 
         let tab =
-            std::fs::read_to_string(manifest.join("../src/components/tabs/SystemInfoTab.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/SystemInfoTab.tsx"))
                 .unwrap();
         assert!(
             tab.contains("severityText(sensor)"),
@@ -959,7 +959,7 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
 
         let sensor = Sensor::new(
             "Package id 0".to_string(),

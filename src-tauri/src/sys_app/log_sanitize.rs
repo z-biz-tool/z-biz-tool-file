@@ -156,7 +156,9 @@ mod tests {
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
-        collect(&manifest.join("src"), &mut files);
+        // 只审 sys 自己的源码：整个 crate 的 src 还含 terminal/db/worker 的日志，
+        // 那些板块的脱敏策略由各自的测试负责。
+        collect(&manifest.join("src/sys_app"), &mut files);
         assert!(
             files.len() > 15,
             "只找到 {} 个源文件，递归没生效",

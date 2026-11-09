@@ -1676,7 +1676,7 @@ mod tests {
     #[test]
     fn frontend_page_sizes_stay_inside_the_backend_cap() {
         let ui_ts = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/ui.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/lib/ui.ts"),
         )
         .expect("前端 lib/ui.ts 必须存在");
         let list = ui_ts
@@ -1724,7 +1724,7 @@ mod tests {
     #[test]
     fn mini_menubar_is_a_pure_projection_of_existing_streams() {
         let mini = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../src/components/MiniMenuBar.tsx");
+            .join("../src/apps/sys/components/MiniMenuBar.tsx");
         let src = std::fs::read_to_string(&mini).expect("MiniMenuBar.tsx 必须存在");
         for forbidden in [
             "invoke(",
@@ -1762,7 +1762,7 @@ mod tests {
     #[test]
     fn mini_mode_is_wired_into_the_process_stream_and_the_key_guard() {
         let app = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/App.tsx"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/SysApp.tsx"),
         )
         .expect("src/App.tsx 必须存在");
         assert!(
@@ -1950,7 +1950,7 @@ mod tests {
     #[test]
     fn fi03_neither_recovery_may_restart_the_loop_silently() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let production = std::fs::read_to_string(manifest.join("src/monitor.rs"))
+        let production = std::fs::read_to_string(manifest.join("src/sys_app/monitor.rs"))
             .unwrap()
             .split("#[cfg(test)]")
             .next()
@@ -2098,7 +2098,7 @@ mod tests {
         // 画成"用了 0 %"的进度条 —— 后端类型上给不出 `None`，这一列就是最后一道闸。
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let tab =
-            std::fs::read_to_string(manifest.join("../src/components/tabs/DiskTab.tsx")).unwrap();
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/DiskTab.tsx")).unwrap();
         assert!(
             tab.contains("const MISSING = \"—\""),
             "分区表没有统一的缺测画法"
@@ -2188,7 +2188,7 @@ mod tests {
     #[test]
     fn it01_every_stream_event_name_is_registered_by_the_frontend_contract() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         for event in [METRICS_EVENT, PROCESSES_EVENT, crate::sys_app::alert::ALERT_EVENT] {
             assert!(
                 contract.contains(&format!("\"{event}\"")),
@@ -2301,7 +2301,7 @@ mod tests {
     #[test]
     fn it02_the_loop_rereads_the_config_every_frame() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let source = std::fs::read_to_string(manifest.join("src/monitor.rs")).unwrap();
+        let source = std::fs::read_to_string(manifest.join("src/sys_app/monitor.rs")).unwrap();
         let loop_body = source
             .split("async fn run_metrics_loop")
             .nth(1)
@@ -2381,7 +2381,7 @@ mod tests {
         );
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let production = std::fs::read_to_string(manifest.join("src/monitor.rs"))
+        let production = std::fs::read_to_string(manifest.join("src/sys_app/monitor.rs"))
             .unwrap()
             .split("#[cfg(test)]")
             .next()
@@ -2642,7 +2642,7 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
 
         let sample = row(11, "java", 12.5, 4096);
         assert!(sample.detached, "阳性对照：夹具里这一行得真带着脱离旗");

@@ -1005,7 +1005,7 @@ mod tests {
             );
         }
 
-        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc_contract.ts");
+        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/ipc_contract.ts");
         let contract = fs::read_to_string(&ts).expect("前端 IPC 契约文件必须存在");
         assert!(
             contract.contains("getHistory: \"get_history\""),
@@ -1397,7 +1397,7 @@ mod tests {
         }
         assert!(!json.contains('_'), "序列化必须全 camelCase: {json}");
 
-        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc_contract.ts");
+        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/ipc_contract.ts");
         let contract = fs::read_to_string(&ts).expect("前端 IPC 契约文件必须存在");
         assert!(
             contract.contains("getAlertHistory: \"get_alert_history\""),

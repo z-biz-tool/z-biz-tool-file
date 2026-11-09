@@ -634,7 +634,7 @@ mod tests {
     /// 本模块自己的源码（有几条接线/门禁断言要看它本身）
     fn source_of_self() -> String {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        fs::read_to_string(manifest.join("src/startup.rs")).unwrap()
+        fs::read_to_string(manifest.join("src/sys_app/startup.rs")).unwrap()
     }
 
     /// 备份目录里现存的项（生产侧由 `merge` 拼进列表，测试就从它派生）
@@ -1466,7 +1466,7 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let outcome = StartupOutcome {
             id: String::new(),
             name: String::new(),
@@ -1517,16 +1517,18 @@ mod tests {
     #[test]
     fn the_operations_are_wired_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let lib_rs = fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+        let lib_rs = fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
         assert!(lib_rs.contains("mod startup;"), "startup 模块没接进 lib.rs");
+        // 注册在 crate 根，模块声明在子模块。
+        let root_lib = fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
         for name in [
             "commands::disable_startup_item",
             "commands::remove_startup_item",
             "commands::restore_startup_item",
         ] {
-            assert!(lib_rs.contains(name), "命令没注册进 invoke_handler: {name}");
+            assert!(root_lib.contains(name), "命令没注册进 invoke_handler: {name}");
         }
-        let commands_rs = fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let commands_rs = fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         for call in ["startup::run(", "startup::page("] {
             assert!(
                 commands_rs.contains(call),
@@ -1552,7 +1554,7 @@ mod tests {
             "扫描命令还停在无 AppHandle 的旧签名，备份里的禁用项列不出来"
         );
         let tab =
-            fs::read_to_string(manifest.join("../src/components/tabs/StartupTab.tsx")).unwrap();
+            fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/StartupTab.tsx")).unwrap();
         assert!(
             !tab.contains("尚未实现"),
             "界面上还挂着\u{201c}尚未实现\u{201d}的按钮"
@@ -1570,7 +1572,7 @@ mod tests {
         for hook in ["onDisable", "onRemove", "onRestore"] {
             assert!(tab.contains(hook), "StartupTab 缺 {hook}");
         }
-        let app = fs::read_to_string(manifest.join("../src/App.tsx")).unwrap();
+        let app = fs::read_to_string(manifest.join("../src/apps/sys/SysApp.tsx")).unwrap();
         for command in [
             "Commands.disableStartupItem",
             "Commands.removeStartupItem",
@@ -1584,7 +1586,7 @@ mod tests {
     #[test]
     fn the_module_never_deletes_a_startup_file_it_was_asked_to_move() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let source = fs::read_to_string(manifest.join("src/startup.rs")).unwrap();
+        let source = fs::read_to_string(manifest.join("src/sys_app/startup.rs")).unwrap();
         // 只看生产段：测试夹具自己会清临时目录，那不算"删用户的启动项"
         let production: String = source
             .split("#[cfg(test)]")

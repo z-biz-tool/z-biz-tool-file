@@ -376,7 +376,7 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let outcome = CsvExportOutcome {
             path: String::new(),
             bytes: 0,
@@ -403,22 +403,23 @@ mod tests {
     #[test]
     fn the_export_is_wired_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+        let lib_rs = std::fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
         assert!(lib_rs.contains("mod export;"), "export 模块没接进 lib.rs");
+        let root_lib = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
         assert!(
-            lib_rs.contains("commands::export_history_csv"),
+            root_lib.contains("commands::export_history_csv"),
             "export_history_csv 没注册进 invoke_handler"
         );
-        let commands_rs = std::fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         assert!(
             commands_rs.contains("export::write_history_csv"),
             "命令没有转调 export 模块"
         );
         let overview =
-            std::fs::read_to_string(manifest.join("../src/components/tabs/OverviewTab.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/OverviewTab.tsx"))
                 .unwrap();
         assert!(overview.contains("onExportCsv"), "概览上的导出按钮没接回调");
-        let app = std::fs::read_to_string(manifest.join("../src/App.tsx")).unwrap();
+        let app = std::fs::read_to_string(manifest.join("../src/apps/sys/SysApp.tsx")).unwrap();
         assert!(
             app.contains("Commands.exportHistoryCsv"),
             "App 没通过 export_history_csv 命令导出"

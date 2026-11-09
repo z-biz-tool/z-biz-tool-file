@@ -1338,7 +1338,7 @@ mod tests {
         }
         assert!(!json.contains('_'), "进度帧必须全 camelCase：{json}");
 
-        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc_contract.ts");
+        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/ipc_contract.ts");
         let contract = fs::read_to_string(&ts).expect("前端 IPC 契约文件必须存在");
         assert!(
             contract.contains(&format!("\"{SCAN_PROGRESS_EVENT}\"")),

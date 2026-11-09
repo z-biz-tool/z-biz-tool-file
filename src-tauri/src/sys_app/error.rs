@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn error_codes_match_the_frontend_ipc_contract() {
-        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/ipc_contract.ts");
+        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/ipc_contract.ts");
         let contract = fs::read_to_string(&ts).expect("前端 IPC 契约文件必须存在");
 
         let start = contract

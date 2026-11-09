@@ -574,7 +574,7 @@ mod tests {
         }
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = fs::read_to_string(manifest.join("../src/ipc_contract.ts"))
+        let contract = fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts"))
             .expect("前端 IPC 契约文件必须存在");
         for line in [
             "exportPrefsFile: \"export_prefs_file\"",
@@ -582,14 +582,17 @@ mod tests {
         ] {
             assert!(contract.contains(line), "前端未登记命令 {line}");
         }
-        let lib_rs = fs::read_to_string(manifest.join("src/lib.rs")).expect("lib.rs 必须存在");
+        let lib_rs = fs::read_to_string(manifest.join("src/sys_app/lib.rs")).expect("lib.rs 必须存在");
+        assert!(lib_rs.contains("mod prefs;"), "prefs 模块没接进 sys_app/lib.rs");
+        // 注册上移到 crate 根（sys 搬进 file 后 invoke_handler 只有一份）。
+        let root_lib = fs::read_to_string(manifest.join("src/lib.rs")).expect("crate lib.rs 必须存在");
         for name in ["commands::export_prefs_file", "commands::import_prefs_file"] {
-            assert!(lib_rs.contains(name), "命令没注册进 invoke_handler: {name}");
+            assert!(root_lib.contains(name), "命令没注册进 invoke_handler: {name}");
         }
         // 命令按仓库约定集中在 commands.rs，这里锁定"它确实转调本模块"，
         // 否则本模块改签名后 commands.rs 里的调用会静默变成另一套逻辑。
         let commands_rs =
-            fs::read_to_string(manifest.join("src/commands.rs")).expect("commands.rs 必须存在");
+            fs::read_to_string(manifest.join("src/sys_app/commands.rs")).expect("commands.rs 必须存在");
         for name in ["prefs::write_prefs_file", "prefs::read_prefs_file"] {
             assert!(commands_rs.contains(name), "commands.rs 未转调 {name}");
         }

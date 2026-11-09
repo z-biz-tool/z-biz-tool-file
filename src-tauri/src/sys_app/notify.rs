@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn the_notification_body_mirrors_the_frontend_toast() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let alert_ts = std::fs::read_to_string(manifest.join("../src/lib/alert.ts")).unwrap();
+        let alert_ts = std::fs::read_to_string(manifest.join("../src/apps/sys/lib/alert.ts")).unwrap();
         // 标签词只能有一处：后端这几个字面量必须逐个出现在前端那份标签表里。
         for label in ["CPU 使用率", "内存使用率", "磁盘使用率", "警告", "严重"] {
             assert!(
@@ -374,23 +374,25 @@ mod tests {
     #[test]
     fn the_delivery_path_is_wired_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+        let lib_rs = std::fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
         assert!(lib_rs.contains("mod notify;"), "notify 模块没接进 lib.rs");
+        // 插件注册与命令注册都在 crate 根：sys 搬进 file 后不再是独立 bin 的根。
+        let root_lib = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
         assert!(
-            lib_rs.contains("tauri_plugin_notification::init()"),
+            root_lib.contains("tauri_plugin_notification::init()"),
             "插件没注册，app.notification() 会 panic"
         );
         assert!(
-            lib_rs.contains("commands::notify_status"),
+            root_lib.contains("commands::notify_status"),
             "notify_status 没注册"
         );
-        let monitor_rs = std::fs::read_to_string(manifest.join("src/monitor.rs")).unwrap();
+        let monitor_rs = std::fs::read_to_string(manifest.join("src/sys_app/monitor.rs")).unwrap();
         assert_eq!(
             monitor_rs.matches("notify::post_alert(").count(),
             1,
             "采集循环里的投递点必须恰好一处：多了就是第二条告警通路"
         );
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert!(
             contract.contains("notifyStatus: \"notify_status\""),
             "前端未登记 notify_status"
@@ -401,10 +403,18 @@ mod tests {
         );
     }
 
-    /// 这条任务的授权门槛本来是"扩 capabilities"。实测走 Rust API 之后一条权限都不需要，
-    /// 于是把它钉成回归：谁哪天改走 JS 通道，必须显式改动这条测试并说清理由。
+    /// 权限清单必须显式、不许通配，**且必须带 `notification:default`**。
+    ///
+    /// 原以为"通知只从 Rust 侧投递，不需要权限"。2026-11-09 打包后启动崩了：
+    /// `tauri_plugin_notification::init()` 会往 webview 注入启动脚本，页面一加载
+    /// 就调 `plugin:notification|is_permission_granted`；没有这条 ACL，Tauri 直接
+    /// 拒绝，前端拿到一个未处理的 Promise 拒绝，启动守卫整屏刷红。Rust 侧投递
+    /// 确实不走 IPC，但**插件的启动探针走**，所以权限必须有。
+    ///
+    /// 这条测试因此从"不许出现 notification"翻转为"必须有 notification"，
+    /// 并保留"显式列出、不许通配"的原意。
     #[test]
-    fn capabilities_stay_the_explicit_list_without_any_notification_entry() {
+    fn capabilities_must_grants_notification_for_the_boot_probe() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let raw = std::fs::read_to_string(manifest.join("capabilities/default.json")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -414,36 +424,30 @@ mod tests {
             .iter()
             .map(|p| p.as_str().expect("权限项应是字符串"))
             .collect();
-        assert_eq!(
-            perms,
-            vec![
-                "core:default",
-                "core:event:default",
-                "core:event:allow-listen",
-                "core:event:allow-emit",
-                "dialog:default",
-                "dialog:allow-message",
-                "dialog:allow-ask",
-                "dialog:allow-confirm",
-                // 阶段 1 自动更新：前端 UpdaterDialog.tsx 走 plugin-updater
-                "updater:default",
-                // 阶段 1 自动更新：更新完要用 plugin-process 重启应用
-                "process:default",
-            ],
-            "capabilities 变了：通知走 Rust API 不需要 notification 权限，其余每一项都要显式列出"
-        );
-        assert!(
-            !perms.iter().any(|p| p.contains("notification")),
-            "系统通知走的是后端 Rust API；出现 notification 权限说明有人改走了 JS 通道"
-        );
+
+        // 每一项都写全名，禁止 "*" 之类的通配（通配会让 ACL 变成摆设）。
         assert!(!raw.contains('*'), "权限清单里不许出现通配项");
+
+        for required in [
+            "core:default",
+            "dialog:default",
+            "updater:default",
+            "process:default",
+            // 插件启动探针：缺了它应用一启动就整屏「启动失败」。
+            "notification:default",
+        ] {
+            assert!(
+                perms.contains(&required),
+                "capabilities 缺 {required}；notification:default 是通知插件启动探针的硬依赖"
+            );
+        }
     }
 
     /// 测试通知不许接任何参数：否则它就成了一条"前端可指定任意文本进系统通知"的通道。
     #[test]
     fn the_test_command_takes_no_arguments() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let commands_rs = std::fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         let signature = commands_rs
             .split("pub async fn send_test_notification")
             .nth(1)
@@ -478,7 +482,7 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let status = NotifyState::default().status();
         assert_eq!(status.suppressed, 0, "没投过就不该有静默计数");
         assert_eq!(
@@ -500,7 +504,7 @@ mod tests {
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let raw =
-            std::fs::read_to_string(manifest.join("../src/components/AlertSettingsDrawer.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"))
                 .unwrap();
         let visible = strip_ts_comments(&raw);
         for forbidden in ["已送达", "已授权", "通知成功"] {
@@ -523,7 +527,7 @@ mod tests {
 
         // 后端只给原文，不负责造句：否则语境会在两侧各加一半。只看函数体，
         // 那条解释性的文档注释本身就写着这几个字。
-        let commands_rs = std::fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         let body = commands_rs
             .split("pub async fn send_test_notification")
             .nth(1)
@@ -543,13 +547,13 @@ mod tests {
     fn no_frontend_path_builds_its_own_alert_notice() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let drawer =
-            std::fs::read_to_string(manifest.join("../src/components/AlertSettingsDrawer.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"))
                 .unwrap();
         assert!(
             !drawer.contains("new Notification") && !drawer.contains("plugin-notification"),
             "前端不许再开一条通知通路：那样会有第二个「要不要通知」的判断"
         );
-        let hook = std::fs::read_to_string(manifest.join("../src/hooks/useAlerts.ts")).unwrap();
+        let hook = std::fs::read_to_string(manifest.join("../src/apps/sys/hooks/useAlerts.ts")).unwrap();
         assert!(
             !hook.contains("new Notification") && !hook.contains("plugin-notification"),
             "同上：告警链路的前端半边只读记账、不自己发通知"
@@ -578,7 +582,7 @@ mod tests {
     #[test]
     fn the_presentation_check_happens_before_any_delivery() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let production = std::fs::read_to_string(manifest.join("src/notify.rs"))
+        let production = std::fs::read_to_string(manifest.join("src/sys_app/notify.rs"))
             .unwrap()
             .split("#[cfg(test)]")
             .next()
@@ -600,7 +604,7 @@ mod tests {
             "取不到状态时必须按不静默处理（宁可多弹一条，也不静默吞掉告警）"
         );
         let drawer =
-            std::fs::read_to_string(manifest.join("../src/components/AlertSettingsDrawer.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"))
                 .unwrap();
         use crate::sys_app::contract_fixtures::strip_ts_comments;
         let visible = strip_ts_comments(&drawer);

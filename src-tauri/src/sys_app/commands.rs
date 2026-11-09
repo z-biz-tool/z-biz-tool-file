@@ -742,10 +742,12 @@ mod tests {
     }
 
     /// SEC-V06：后端不得以提权方式执行命令，失败时只能返回供用户复制的手动命令。
-    /// 扫描是**递归**的：`src/platform/` 这类子目录一旦存在，只扫顶层就等于给审计留了个入口。
+    /// 扫描是**递归**的：`platform/` 这类子目录一旦存在，只扫顶层就等于给审计留了个入口。
+    /// 根目录是 `src/sys_app` —— 搬进 file 之后整个 crate 的 src 还含 terminal/db/worker，
+    /// 那些板块的 sudo 用法不属于本审计范围。
     #[test]
     fn backend_never_constructs_a_sudo_command() {
-        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sys_app");
         let mut offenders = Vec::new();
         let mut files = Vec::new();
         collect_rs_files(&src_dir, &mut files);
@@ -779,21 +781,24 @@ mod tests {
     #[test]
     fn thermal_command_is_registered_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+        let lib_rs = std::fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
         assert!(
             lib_rs.contains("mod platform;"),
             "platform 模块没接进 lib.rs"
         );
+        // 搬进 file 之后 sys 只是子模块：模块声明在 sys_app/lib.rs，
+        // invoke_handler 上移到 crate 根 src/lib.rs。
+        let root_lib = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
         assert!(
-            lib_rs.contains("commands::get_thermal"),
+            root_lib.contains("commands::get_thermal"),
             "get_thermal 没注册进 invoke_handler"
         );
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert!(
             contract.contains("getThermal: \"get_thermal\""),
             "前端未登记 get_thermal"
         );
-        let commands_rs = std::fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         assert!(
             commands_rs.contains("thermal: &thermal::probe()"),
             "Agent 的输入里没有温度报告，温度问题会一直回\"没有通路\""
@@ -888,7 +893,7 @@ mod tests {
     #[test]
     fn agent_command_section_has_no_execution_path() {
         let src = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands.rs"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sys_app/commands.rs"),
         )
         .unwrap();
         let head = "// ==================== 诊断 Agent";

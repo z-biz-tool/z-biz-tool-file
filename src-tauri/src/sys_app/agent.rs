@@ -1451,7 +1451,7 @@ mod tests {
     #[test]
     fn the_temperature_suggestion_points_at_a_real_tab() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let app = std::fs::read_to_string(manifest.join("../src/App.tsx")).unwrap();
+        let app = std::fs::read_to_string(manifest.join("../src/apps/sys/SysApp.tsx")).unwrap();
         let fixture = Fixture {
             thermal: normal_thermal(),
             ..Default::default()
@@ -1466,7 +1466,7 @@ mod tests {
         );
         // 系统信息页确实接了温度这条链路
         let tab_src =
-            std::fs::read_to_string(manifest.join("../src/components/tabs/SystemInfoTab.tsx"))
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/SystemInfoTab.tsx"))
                 .unwrap();
         assert!(tab_src.contains("thermal"), "系统信息页没有展示传感器");
     }
@@ -1656,8 +1656,11 @@ mod tests {
     /// 连测试一起扫等于自己绊自己。
     #[test]
     fn agent_module_has_no_destructive_call_path() {
-        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/agent.rs"))
-            .expect("agent.rs 必须存在");
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/sys_app/agent.rs"
+        ))
+        .expect("agent.rs 必须存在");
         let production = src.split("#[cfg(test)]").next().expect("应有测试模块");
         assert!(
             production.len() > 1000,
@@ -1686,18 +1689,20 @@ mod tests {
     #[test]
     fn agent_command_is_registered_and_typed_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+        let lib_rs = std::fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
         assert!(lib_rs.contains("mod agent;"), "agent 模块没接进 lib.rs");
+        // 注册在 crate 根（sys 搬进 file 后 invoke_handler 只有一份）。
+        let root_lib = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
         assert!(
-            lib_rs.contains("commands::agent_query"),
+            root_lib.contains("commands::agent_query"),
             "命令没注册进 invoke_handler"
         );
-        let commands_rs = std::fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         assert!(
             commands_rs.contains("agent::answer"),
             "commands.rs 未转调 Agent 引擎"
         );
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert!(
             contract.contains("agentQuery: \"agent_query\""),
             "前端未登记 agent_query"
@@ -1710,7 +1715,7 @@ mod tests {
     #[test]
     fn agent_panel_has_no_ipc_channel_of_its_own() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let panel = manifest.join("../src/agent/AgentPanel.tsx");
+        let panel = manifest.join("../src/apps/sys/agent/AgentPanel.tsx");
         let src = std::fs::read_to_string(&panel).expect("AgentPanel.tsx 必须存在");
         for forbidden in [
             "invoke(",
@@ -1736,7 +1741,7 @@ mod tests {
     #[test]
     fn suggested_tabs_are_all_real_page_keys() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let app = std::fs::read_to_string(manifest.join("../src/App.tsx")).unwrap();
+        let app = std::fs::read_to_string(manifest.join("../src/apps/sys/SysApp.tsx")).unwrap();
         let fixture = Fixture::default();
         for q in [
             "为什么这么卡",
@@ -1766,20 +1771,44 @@ mod tests {
     fn r07_there_is_no_outbound_network_path_at_all() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
-        let cargo_toml = std::fs::read_to_string(manifest.join("Cargo.toml")).unwrap();
+        // 搬进 file 之后 Cargo.toml 是整个 crate 的：worker 板块合法使用
+        // reqwest 连本地 agent-proxy，所以不能再拿它当"没有外呼"的证据。
+        // 真正的边界是 sys 自己的源码 —— Agent 只能读本机采集数据。
+        fn sys_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("sys_app 目录可读") {
+                let path = entry.expect("目录项可读").path();
+                if path.is_dir() {
+                    sys_sources(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        sys_sources(&manifest.join("src/sys_app"), &mut files);
+        assert!(files.len() > 10, "sys_app 源码文件数不对，扫描没有意义");
+
+        // 只看 crate 的**使用形式**（`reqwest::` 之类），否则会把
+        // `COMMAND_LIKE` 这张"拒绝代执行"的黑名单里的 "curl" 字面量当成外呼。
         for outbound in [
-            "reqwest",
-            "hyper",
-            "ureq",
-            "curl",
-            "attohttpc",
-            "tauri-plugin-http",
-            "tauri-plugin-opener",
+            "reqwest::",
+            "hyper::",
+            "ureq::",
+            "curl::",
+            "attohttpc::",
+            "tauri_plugin_http",
+            "tauri_plugin_opener",
         ] {
-            assert!(
-                !cargo_toml.contains(outbound),
-                "Cargo.toml 里出现了外呼依赖 {outbound}：R-07「没有外呼通道」的前提不再成立"
-            );
+            for file in &files {
+                let src = std::fs::read_to_string(file).unwrap();
+                // 只看生产代码：测试里为了断言会写到这些名字。
+                let production = src.split("#[cfg(test)]").next().unwrap_or("");
+                assert!(
+                    !production.contains(outbound),
+                    "{} 里出现了外呼依赖 {outbound}：R-07「sys 没有外呼通道」的前提不再成立",
+                    file.display()
+                );
+            }
         }
 
         let raw = std::fs::read_to_string(manifest.join("tauri.conf.json")).unwrap();
@@ -1799,8 +1828,10 @@ mod tests {
             assert!(
                 matches!(
                     target,
-                    "ipc:"
+                    "'self'"
+                        | "ipc:"
                         | "http://ipc.localhost"
+                        | "https://ipc.localhost"
                         | "ws://localhost:1420"
                         | "http://localhost:1420"
                 ),
@@ -1813,9 +1844,9 @@ mod tests {
         );
 
         for file in [
-            "../src/agent/AgentPanel.tsx",
-            "../src/App.tsx",
-            "../src/ipc_contract.ts",
+            "../src/apps/sys/agent/AgentPanel.tsx",
+            "../src/apps/sys/SysApp.tsx",
+            "../src/apps/sys/ipc_contract.ts",
         ] {
             let text = std::fs::read_to_string(manifest.join(file)).unwrap();
             for dial in ["fetch(", "XMLHttpRequest", "new WebSocket", "EventSource"] {
@@ -2059,7 +2090,7 @@ mod tests {
     #[test]
     fn census_suggestions_point_at_real_tabs() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let app = std::fs::read_to_string(manifest.join("../src/App.tsx")).unwrap();
+        let app = std::fs::read_to_string(manifest.join("../src/apps/sys/SysApp.tsx")).unwrap();
         let fixture = Fixture {
             rollup: vec![bucket(crate::sys_app::observe::CATEGORY_JVM, 2, gb(1), 0)],
             ..Fixture::default()
@@ -2082,7 +2113,7 @@ mod tests {
     /// 十有八九也会忘了改清单，两边一起漏，测试照样绿。
     fn intent_variants_in_source() -> Vec<String> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let src = std::fs::read_to_string(manifest.join("src/agent.rs")).unwrap();
+        let src = std::fs::read_to_string(manifest.join("src/sys_app/agent.rs")).unwrap();
         let head = "pub enum Intent {";
         let start = src.find(head).expect("本文件里应能找到 pub enum Intent");
         let body = &src[start + head.len()..];
@@ -2153,13 +2184,13 @@ mod tests {
             "serde 的 camelCase 与预测不一致，前端标签会漂"
         );
 
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let block = contract
             .find("export type AgentIntent =")
             .map(|at| &contract[at..])
             .and_then(|rest| rest.split(';').next())
             .expect("前端没有 AgentIntent 联合类型");
-        let panel = std::fs::read_to_string(manifest.join("../src/agent/AgentPanel.tsx")).unwrap();
+        let panel = std::fs::read_to_string(manifest.join("../src/apps/sys/agent/AgentPanel.tsx")).unwrap();
         let labels = panel
             .find("const INTENT_TEXT")
             .map(|at| &panel[at..])

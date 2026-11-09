@@ -538,7 +538,7 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
 
         let rows = vec![
             row(7, "java", 4096, Some(1)),
@@ -600,9 +600,11 @@ mod tests {
     #[test]
     fn rollup_and_socket_commands_are_wired_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
-        let lib_rs = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
-        let commands_rs = std::fs::read_to_string(manifest.join("src/commands.rs")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let lib_rs = std::fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
+        // 注册在 crate 根（搬进 file 后 invoke_handler 上移），模块声明仍在子模块。
+        let root_lib = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         for (front, back) in [
             (
                 "getProcessRollup: \"get_process_rollup\"",
@@ -614,7 +616,7 @@ mod tests {
             ),
         ] {
             assert!(contract.contains(front), "前端未登记 {front}");
-            assert!(lib_rs.contains(back), "命令未注册进 invoke_handler：{back}");
+            assert!(root_lib.contains(back), "命令未注册进 invoke_handler：{back}");
             assert!(
                 commands_rs.contains(&format!(
                     "pub async fn {}",
@@ -623,6 +625,8 @@ mod tests {
                 "commands.rs 里没有 {back} 的实现"
             );
         }
+        // 这条仍需子模块声明存在，避免"注册了但模块没挂"的假绿。
+        assert!(lib_rs.contains("mod observe;"), "observe 模块没接进 sys_app/lib.rs");
     }
 
     /// 真机对账：本机此刻必然有 TCP 监听（IDE、浏览器至少各一个），
@@ -664,10 +668,10 @@ mod tests {
                     .unwrap_or_else(|_| panic!("{file} 必须存在")),
             )
         };
-        let tab = read("../src/components/tabs/ProcessTab.tsx");
-        let app = read("../src/App.tsx");
-        let rollup_panel = read("../src/components/ProcessRollupPanel.tsx");
-        let ports_panel = read("../src/components/ListeningPortsPanel.tsx");
+        let tab = read("../src/apps/sys/components/tabs/ProcessTab.tsx");
+        let app = read("../src/apps/sys/SysApp.tsx");
+        let rollup_panel = read("../src/apps/sys/components/ProcessRollupPanel.tsx");
+        let ports_panel = read("../src/apps/sys/components/ListeningPortsPanel.tsx");
 
         for needle in [
             "<ProcessRollupPanel",

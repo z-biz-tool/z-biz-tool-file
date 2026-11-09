@@ -157,7 +157,7 @@ export interface Beta {
     #[test]
     fn it_reads_the_real_contract_file_too() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/ipc_contract.ts")).unwrap();
+        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert_eq!(
             ts_interface_keys(&contract, "NotifyStatus"),
             [
