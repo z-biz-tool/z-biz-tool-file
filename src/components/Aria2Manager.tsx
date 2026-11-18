@@ -232,7 +232,7 @@ export default function Aria2Manager({ open, onClose }: Aria2ManagerProps) {
                 <Statistic
                   title="下载速度"
                   value={formatSpeed(stat.download_speed)}
-                  valueStyle={{ color: "#1890ff", fontSize: 16 }}
+                  valueStyle={{ color: "var(--ant-color-primary)", fontSize: 16 }}
                 />
               </Card>
             </Col>

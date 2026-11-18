@@ -70,10 +70,11 @@ export function AppShell({
   // 脱钩（注册表改了这里不会跟），也是全应用第三种书写口径。
   const hint = useShortcutHint();
 
-  // 顶栏背景：两套主题都用同一套，不再区分
+  // 顶栏背景：两套主题都用同一套，不再区分。
+  // 亮色换暖纸灰（「墨青」设计语言，见 _shared/designTokens.ts），暗色保留深蓝夜色。
   const headerGradient = mode === "dark"
     ? "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-    : "linear-gradient(135deg, #ffffff 0%, #f8fafd 100%)";
+    : "linear-gradient(135deg, #ffffff 0%, #f6f7f3 100%)";
 
   return (
     <Layout style={{ height: "100vh" }}>
@@ -201,7 +202,7 @@ export function AppShell({
                   overflow: "hidden",
                   background: mode === "dark"
                     ? "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)"
-                    : "linear-gradient(180deg, #ffffff 0%, #f8fafd 100%)",
+                    : "linear-gradient(180deg, #ffffff 0%, #f6f7f3 100%)",
                   borderRight: `1px solid ${mode === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"}`,
                   boxShadow: "2px 0 8px rgba(0,0,0,0.03)",
                 }}
@@ -222,7 +223,7 @@ export function AppShell({
             style={{
               background: mode === "dark"
                 ? "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)"
-                : "linear-gradient(180deg, #ffffff 0%, #f8fafd 100%)",
+                : "linear-gradient(180deg, #ffffff 0%, #f6f7f3 100%)",
               borderRight: `1px solid ${mode === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"}`,
               overflow: "hidden",
               transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
@@ -248,7 +249,7 @@ export function AppShell({
             overflow: "auto",
             background: mode === "dark"
               ? "linear-gradient(180deg, #0f0f23 0%, #1a1a2e 100%)"
-              : "linear-gradient(180deg, #f8fafd 0%, #eef2f7 100%)",
+              : "linear-gradient(180deg, #f4f4f0 0%, #ecece6 100%)",
             transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
             // 主区要给「显式 height」，不能只给 min-height。
             // 各子板块（思维导图、看板、词库…）的布局链整条都是 height:100%，

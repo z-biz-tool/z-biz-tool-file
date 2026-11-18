@@ -11,13 +11,13 @@ const NODE_H = 48;
 type Pos = Record<string, [number, number]>;
 
 const PALETTE = [
-  "#1677ff",
-  "#722ed1",
-  "#13c2c2",
-  "#52c41a",
-  "#fa8c16",
-  "#eb2f96",
+  "#0f766e",
   "#2f54eb",
+  "#722ed1",
+  "#d46b08",
+  "#eb2f96",
+  "#08979c",
+  "#5b8c00",
   "#faad14",
 ];
 

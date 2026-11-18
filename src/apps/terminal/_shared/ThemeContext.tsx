@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { ConfigProvider, theme as antdTheme } from "antd";
+import { ConfigProvider } from "antd";
+import { zToolTheme } from "../../../_shared/designTokens";
 
 type ThemeMode = "light" | "dark";
 
@@ -39,12 +40,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ mode, toggle, setMode }}>
-      <ConfigProvider
-        theme={{
-          algorithm: mode === "dark" ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-          token: { colorPrimary: "#1677ff", borderRadius: 6, fontSize: 14 },
-        }}
-      >
+      <ConfigProvider theme={zToolTheme(mode)}>
         {children}
       </ConfigProvider>
     </ThemeContext.Provider>

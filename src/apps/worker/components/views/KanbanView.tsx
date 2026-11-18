@@ -153,7 +153,7 @@ function DragOverlayCard({ task, agents }: { task: Task; agents: Agent[] }) {
           <Space size={4}>
             {task.priority > 0 && <Tag style={{ fontSize: 10, margin: 0 }}>{PRIORITY_LABELS[task.priority]}</Tag>}
           </Space>
-          {agent && <Avatar size={20} style={{ backgroundColor: "#1677ff", fontSize: 10 }}>{agent.name[0]}</Avatar>}
+          {agent && <Avatar size={20} style={{ backgroundColor: "var(--ant-color-primary)", fontSize: 10 }}>{agent.name[0]}</Avatar>}
         </div>
       </div>
     </Card>
@@ -180,8 +180,8 @@ function KanbanColumn({
         minWidth: 280,
         maxWidth: 320,
         flex: "1 0 280px",
-        background: isOver ? "#e6f4ff" : "#fafafa",
-        outline: isOver ? "1px dashed #1677ff" : undefined,
+        background: isOver ? "var(--ant-color-primary-bg)" : "#fafafa",
+        outline: isOver ? "1px dashed var(--ant-color-primary)" : undefined,
         borderRadius: 8,
         display: "flex",
         flexDirection: "column",

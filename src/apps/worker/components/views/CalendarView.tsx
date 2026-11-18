@@ -93,10 +93,10 @@ export default function CalendarView({ tasks }: CalendarViewProps) {
               key={day}
               style={{
                 minHeight: 100,
-                border: isToday ? "2px solid #1677ff" : "1px solid #f0f0f0",
+                border: isToday ? "2px solid var(--ant-color-primary)" : "1px solid #f0f0f0",
                 padding: 4,
                 cursor: "pointer",
-                background: isToday ? "#e6f4ff" : "#fff",
+                background: isToday ? "var(--ant-color-primary-bg)" : "#fff",
               }}
               onClick={() => openNewTask(day)}
             >
@@ -105,7 +105,7 @@ export default function CalendarView({ tasks }: CalendarViewProps) {
                   style={{
                     fontSize: 12,
                     fontWeight: isToday ? 700 : 400,
-                    color: isToday ? "#1677ff" : undefined,
+                    color: isToday ? "var(--ant-color-primary)" : undefined,
                   }}
                 >
                   {day}

@@ -4,7 +4,7 @@
  * db 是 2026-11-06 从 z-biz-tool-db 整仓搬进来的，独立 app 时期自带一套
  * #667eea→#764ba2 紫渐变、8/12/16 手写圆角、硬编码语义色，以及一个自己的
  * 深色模式 Switch。搬入后主壳已经统一走 ThemeProvider 的 token
- * （colorPrimary #1677ff / borderRadius 6 / 语义色 / CSS 变量），
+ * （colorPrimary 全站主色 / borderRadius token / 语义色 / CSS 变量），
  * db 没跟上，于是同一窗口里出现两种主色、三种圆角、两个主题开关。
  *
  * 唯一允许写死颜色的是 report/ChartCard.tsx 的 CHART_COLORS：
@@ -22,7 +22,7 @@ const PALETTE = `${DB}/report/ChartCard.tsx`;
 const BANNED: { re: RegExp; why: string }[] = [
   { re: /#667eea|#764ba2|102,\s*126,\s*234|118,\s*75,\s*162/i, why: "独立 app 时期的紫色品牌色" },
   { re: /linear-gradient\(/, why: "板块自带的渐变底色/渐变文字" },
-  { re: /borderRadius:\s*["']?(?:8|10|12|14|16|18|20|24)\b/, why: "手写圆角（全站 token 是 6）" },
+  { re: /borderRadius:\s*["']?(?:8|10|12|14|16|18|20|24)\b/, why: "手写圆角（全站走 token，见 _shared/designTokens.ts）" },
   {
     re: /["']#(?:1890ff|ff4d4f|faad14|52c41a|f0f0f0|fff|000)["']/i,
     why: "硬编码语义色（应走 var(--ant-color-*)）",

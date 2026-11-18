@@ -267,7 +267,7 @@ export default function QuickActionsModal({ open, onClose, suggestedPath = "" }:
               <List.Item.Meta
                 title={
                   <Space>
-                    <code style={{ color: "#1677ff" }}>{actionSummary(a).head}</code>
+                    <code style={{ color: "var(--ant-color-primary)" }}>{actionSummary(a).head}</code>
                     <span>{a.name}</span>
                     {a.builtin && <span style={{ color: "var(--ant-color-text-tertiary)", fontSize: 11 }}>内置</span>}
                     {a.dangerous && <span style={{ color: "#f5222d", fontSize: 11 }}>危险</span>}

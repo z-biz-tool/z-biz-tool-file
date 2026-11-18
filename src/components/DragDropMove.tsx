@@ -160,9 +160,9 @@ export const DragDropTarget: React.FC<DragDropMoveProps> = ({
       style={{
         position: "relative",
         transition: "background 0.15s, outline 0.15s",
-        outline: isOver ? "2px dashed #1677ff" : "none",
+        outline: isOver ? "2px dashed var(--ant-color-primary)" : "none",
         outlineOffset: -2,
-        background: isOver ? "rgba(22, 119, 255, 0.06)" : "transparent",
+        background: isOver ? "var(--ant-color-primary-bg)" : "transparent",
         ...style,
       }}
       className={className}

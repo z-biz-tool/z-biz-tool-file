@@ -11,8 +11,15 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* 「墨青」字体口径与 _shared/designTokens.ts 的 token.fontFamily 保持一致 */
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI",
+    "Microsoft YaHei", "Helvetica Neue", sans-serif;
   overflow: hidden;
+}
+
+/* 文本选区跟主色走（默认的荧光蓝跟墨青主题不搭） */
+::selection {
+  background: rgba(15, 118, 110, 0.18);
 }
 
 #root {

@@ -398,7 +398,7 @@ export default function WorkerApp() {
                 key={p.id}
                 size="small"
                 hoverable
-                style={{ marginBottom: 6, borderLeft: p.id === store.currentProjectId ? "3px solid #1677ff" : undefined, cursor: "pointer" }}
+                style={{ marginBottom: 6, borderLeft: p.id === store.currentProjectId ? "3px solid var(--ant-color-primary)" : undefined, cursor: "pointer" }}
                 onClick={() => store.selectProject(p.id)}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -949,8 +949,8 @@ function ImportLocalAgentModal(props: {
                 key={cli.type}
                 size="small"
                 style={{
-                  borderColor: checked ? "#1677ff" : undefined,
-                  background: imported ? "#fafafa" : checked ? "#e6f4ff" : undefined,
+                  borderColor: checked ? "var(--ant-color-primary)" : undefined,
+                  background: imported ? "#fafafa" : checked ? "var(--ant-color-primary-bg)" : undefined,
                   opacity: imported ? 0.6 : 1,
                 }}
               >

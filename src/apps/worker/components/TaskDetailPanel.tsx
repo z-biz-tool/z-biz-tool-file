@@ -306,7 +306,7 @@ function TaskDetailPanelBody({ task, agents, open, onClose }: TaskDetailPanelPro
           allowClear
           options={agents.map((a) => ({
             value: a.id,
-            label: <Space><Avatar size={16} style={{ backgroundColor: "#1677ff" }}>{a.name[0]}</Avatar>{a.name}</Space>,
+            label: <Space><Avatar size={16} style={{ backgroundColor: "var(--ant-color-primary)" }}>{a.name[0]}</Avatar>{a.name}</Space>,
           }))}
         />
       </div>

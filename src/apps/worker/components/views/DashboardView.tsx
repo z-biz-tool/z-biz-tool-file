@@ -106,8 +106,8 @@ export default function DashboardView({ tasks, agents, stats }: DashboardViewPro
                 <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>进行中</span>
               }
               value={stats ? stats.tasks.doing : "—"}
-              valueStyle={{ color: "#1677ff", fontSize: 20, fontWeight: 600 }}
-              prefix={<PlayCircleOutlined style={{ color: "#1677ff" }} />}
+              valueStyle={{ color: "var(--ant-color-primary)", fontSize: 20, fontWeight: 600 }}
+              prefix={<PlayCircleOutlined style={{ color: "var(--ant-color-primary)" }} />}
             />
           </Card>
         </Col>

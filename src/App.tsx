@@ -1533,7 +1533,7 @@ function AppShellInner() {
         key: "header",
         type: "group" as const,
         label: (
-          <span style={{ fontWeight: 600, color: "#1677ff" }}>
+          <span style={{ fontWeight: 600, color: "var(--ant-color-primary)" }}>
             已选中 {count} 项 · {sizeStr}
           </span>
         ),
@@ -3434,9 +3434,9 @@ function AppShellInner() {
         <Modal
           title={
             <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
-              {mediaLibraryType === "image" && <PictureOutlined style={{ color: "#1677ff" }} />}
-              {mediaLibraryType === "video" && <VideoCameraOutlined style={{ color: "#1677ff" }} />}
-              {mediaLibraryType === "audio" && <AudioOutlined style={{ color: "#1677ff" }} />}
+              {mediaLibraryType === "image" && <PictureOutlined style={{ color: "var(--ant-color-primary)" }} />}
+              {mediaLibraryType === "video" && <VideoCameraOutlined style={{ color: "var(--ant-color-primary)" }} />}
+              {mediaLibraryType === "audio" && <AudioOutlined style={{ color: "var(--ant-color-primary)" }} />}
               {mediaLibraryType === "image" && "照片馆"}
               {mediaLibraryType === "video" && "视频馆"}
               {mediaLibraryType === "audio" && "音乐馆"}

@@ -182,7 +182,7 @@ export default function SearchBar({ rootPath }: SearchBarProps) {
           placeholder="全盘搜索文件名或内容..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          prefix={<SearchOutlined style={{ color: "#1677ff", fontSize: 16 }} />}
+          prefix={<SearchOutlined style={{ color: "var(--ant-color-primary)", fontSize: 16 }} />}
           allowClear
           style={{ 
             flex: 1,

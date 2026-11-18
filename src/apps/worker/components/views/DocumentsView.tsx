@@ -239,7 +239,7 @@ export default function DocumentsView({ projectId }: DocumentsViewProps) {
                 ]}
               >
                 <List.Item.Meta
-                  avatar={<FileTextOutlined style={{ fontSize: 16, color: "#1677ff" }} />}
+                  avatar={<FileTextOutlined style={{ fontSize: 16, color: "var(--ant-color-primary)" }} />}
                   title={<Text style={{ fontSize: 13 }} ellipsis>{doc.title}</Text>}
                   description={
                     <Text type="secondary" style={{ fontSize: 11 }}>

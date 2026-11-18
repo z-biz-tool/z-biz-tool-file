@@ -32,7 +32,7 @@ function tabTitle(tab: { path: string; kind: string }): string {
  *  文件夹 tab 之前套了渐变文字（紫的→后来蓝的），渐变在 12px 图标上只是糊掉，
  *  并不会真的「更好看」。这里跟另外两个一样用纯色，靠图标形状区分类型。 */
 function tabIcon(kind: string): React.ReactNode {
-  if (kind === "library") return <BookOutlined style={{ fontSize: 12, color: '#1677ff' }} />;
+  if (kind === "library") return <BookOutlined style={{ fontSize: 12, color: 'var(--ant-color-primary)' }} />;
   if (kind === "media") return <PictureOutlined style={{ fontSize: 12, color: '#13c2c2' }} />;
   return <FolderOpenOutlined style={{ fontSize: 12 }} />;
 }

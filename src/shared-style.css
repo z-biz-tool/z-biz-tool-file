@@ -23,6 +23,38 @@
   background: rgba(0, 0, 0, 0.25);
 }
 
+/* ============================================
+   「墨青」全局打磨（设计语言出处：_shared/designTokens.ts）
+   ============================================ */
+
+/* 可悬卡片：浮起 + 柔和投影，hover 才有"这是可点的"反馈 */
+.ant-card-hoverable {
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ant-card-hoverable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.1);
+}
+
+/* 表头与统计数字：等宽数字，多行数字列上下才对得齐 */
+.ant-table,
+.ant-statistic-content {
+  font-variant-numeric: tabular-nums;
+}
+.ant-table-thead > tr > th {
+  font-weight: 600;
+}
+
+/* 页面主标题（h1-h5）轻微收紧字距，去掉默认大字的松散感 */
+.ant-typography h4.ant-typography,
+.ant-typography h5.ant-typography,
+h4.ant-typography,
+h5.ant-typography {
+  letter-spacing: -0.01em;
+}
+
 /* 暗色模式兼容 */
 .ant-layout-sider-dark::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);

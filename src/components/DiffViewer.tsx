@@ -284,7 +284,7 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
               ellipsis: true,
               render: (rel: string, row: DirDiffEntry) => (
                 <span
-                  style={{ color: "#1677ff", cursor: "pointer" }}
+                  style={{ color: "var(--ant-color-primary)", cursor: "pointer" }}
                   onClick={() => drillIntoFile(row)}
                 >
                   {rel}
@@ -310,7 +310,7 @@ export default function DiffViewer({ open, onClose, initialLeft, initialRight }:
     <Modal
       title={
         <Space>
-          <SwapOutlined style={{ color: "#1890ff" }} />
+          <SwapOutlined style={{ color: "var(--ant-color-primary)" }} />
           <span>文件对比 (Diff)</span>
         </Space>
       }

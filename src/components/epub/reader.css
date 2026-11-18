@@ -16,9 +16,9 @@
   --r-line: #e8e8e8;
   --r-chrome: #fafafa;
   --r-chrome-text: #595959;
-  --r-accent: #1677ff;
+  --r-accent: var(--ant-color-primary, #0f766e);
   --r-hover: rgba(0, 0, 0, 0.04);
-  --r-active: rgba(22, 119, 255, 0.12);
+  --r-active: rgba(15, 118, 110, 0.12);
   --r-paper-edge: rgba(0, 0, 0, 0.05);
 
   display: flex;
