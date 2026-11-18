@@ -73,6 +73,11 @@ pub mod mind_app;
 // 注册，attach 只 manage 状态。
 #[path = "glossary_app/lib.rs"]
 pub mod glossary_app;
+// 知识库板块（2026-11-18 新建）：本地知识中枢 —— 资料/目录树、本地与语雀导入、
+// MinerU/cap-doc 解析、BM25 检索与带引用问答。交互形态移植自 future-brain
+// 知识中台。同构于 glossary_app：命令在主 invoke_handler 注册，attach 只 manage 状态。
+#[path = "kb_app/lib.rs"]
+pub mod kb_app;
 mod updater;
 mod video_thumb;
 mod watcher;
@@ -174,6 +179,9 @@ pub fn run() {
 
     // 词库板块的状态（词条集合）由 glossary_app::attach 挂上去。
     let builder = glossary_app::attach(builder);
+
+    // 知识库板块的状态（库/目录/物料索引）由 kb_app::attach 挂上去。
+    let builder = kb_app::attach(builder);
 
     // 上下文只在这里展开一次：`generate_context!` 会嵌入 plist 等静态符号，
     // 同一个 crate 里展开两次会撞 `_EMBED_INFO_PLIST`。
@@ -625,6 +633,53 @@ pub fn run() {
             glossary_app::commands::glossary_upsert,
             glossary_app::commands::glossary_remove,
             glossary_app::commands::glossary_ask,
+            // ===== 知识库板块（kb_app，2026-11-18 新建，本地知识中枢）=====
+            kb_app::commands::kb_base_list,
+            kb_app::commands::kb_base_create,
+            kb_app::commands::kb_base_rename,
+            kb_app::commands::kb_base_delete,
+            kb_app::commands::kb_category_tree,
+            kb_app::commands::kb_category_create,
+            kb_app::commands::kb_category_rename,
+            kb_app::commands::kb_category_delete,
+            kb_app::commands::kb_category_bind_local,
+            kb_app::commands::kb_category_unbind_local,
+            kb_app::commands::kb_sync_local_dir,
+            kb_app::commands::kb_material_list,
+            kb_app::commands::kb_material_detail,
+            kb_app::commands::kb_material_move,
+            kb_app::commands::kb_material_delete,
+            kb_app::commands::kb_import_local,
+            kb_app::commands::kb_register_text,
+            kb_app::commands::kb_parse,
+            kb_app::commands::kb_draft_save,
+            kb_app::commands::kb_search,
+            kb_app::commands::kb_ask,
+            kb_app::commands::kb_config_get,
+            kb_app::commands::kb_config_set,
+            kb_app::commands::kb_yuque_test,
+            kb_app::commands::kb_yuque_repos,
+            kb_app::commands::kb_yuque_toc,
+            kb_app::commands::kb_yuque_import,
+            kb_app::commands::kb_open_original,
+            kb_app::commands::kb_reveal_original,
+            // ===== 本体板块（认知 → 本体，2026-11-18 新建）=====
+            kb_app::ontology::onto_overview,
+            kb_app::ontology::onto_type_save,
+            kb_app::ontology::onto_type_delete,
+            kb_app::ontology::onto_edge_save,
+            kb_app::ontology::onto_edge_delete,
+            kb_app::ontology::onto_property_set,
+            kb_app::ontology::onto_property_delete,
+            kb_app::ontology::onto_instance_save,
+            kb_app::ontology::onto_instance_delete,
+            kb_app::ontology::onto_instance_list,
+            kb_app::ontology::onto_link_save,
+            kb_app::ontology::onto_link_delete,
+            kb_app::ontology::onto_links_of,
+            kb_app::ontology::onto_neighbors,
+            kb_app::ontology::onto_search,
+            kb_app::ontology::onto_layout_save,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。

@@ -252,6 +252,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   // 排最后 —— 和「工作台」「思维导图」一路，是「需要用户主动打开」的沉淀型板块。
   // 词条/问答/检索文件三块都在这里沉淀和回看。
   { key: "glossary", label: "词库", icon: <BookOutlined /> },
+  // 认知板块：2026-11-18 新建（本地知识中枢，交互形态移植自 future-brain 知识中台）。
+  // 与词库相邻 —— 两者都是「沉淀资料、检索问答」的知识侧板块：词库管词条，
+  // 认知管整份资料与本体（板块内首层：知识库 = 资料/解析/检索问答，本体 = 类型/实例图谱）。
+  { key: "knowledge", label: "认知", icon: <BulbOutlined /> },
 ];
 
 /**
@@ -310,6 +314,9 @@ const WorkerApp = lazy(() => import("./apps/worker/WorkerApp"));
 const MindApp = lazy(() => import("./apps/mind/App"));
 // 词库板块按需加载（和 WorkerApp 同样的理由：沉淀型板块，文件管理场景用不到）。
 const GlossayApp = lazy(() => import("./apps/glossary/GlossaryApp"));
+// 认知板块按需加载（与词库同理：MDEditor + 语雀树 + 资料详情一套工作台 + 本体页，
+// 只有真的点进认知图标才需要下载这个 chunk）。
+const KnowledgeApp = lazy(() => import("./apps/knowledge/KnowledgeApp"));
 
 /**
  * 「点开才用」的功能组件 —— 一律走 lazyModal。
@@ -3213,6 +3220,28 @@ function AppShellInner() {
           }
         >
           <GlossayApp />
+        </Suspense>
+      ) : activeApp === "knowledge" ? (
+        // 认知板块：2026-11-18 新建。首层「知识库 / 本体」—— 资料/导入解析/检索/AI 问答 + 类型/实例图谱。
+        // 整块替换主区 —— 它自带「列表 ↔ 工作台」两级视图和自己的三级布局，
+        // 与文件管理的「路径 + 标签条」不是一回事。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载知识库…
+            </div>
+          }
+        >
+          <KnowledgeApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

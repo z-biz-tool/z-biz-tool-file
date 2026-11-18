@@ -17,6 +17,18 @@
 (function () {
   var shown = false;
 
+  /**
+   * 应用是否已经挂载。挂载之后的故障（运行期异常、运行期未处理的 Promise 拒绝）
+   * 不该再由这个守卫接管 —— 它的职责是**启动期**兜底：
+   * 运行期的渲染异常由 React ErrorBoundary 呈现，运行期的拒绝由各自的
+   * catch 负责。把它们也画成整屏红，反而会盖掉用户正在看的东西
+   * （2026-11-18 踩过：antd v6 的 modal.confirm 在 onOk 被拒时会把拒绝
+   * 重新抛出，任意一处表单校验失败都会把整个应用糊成一张错误页）。
+   */
+  function appMounted() {
+    return !!window.__APP_MOUNTED__;
+  }
+
   function render(kind, detail) {
     if (shown) return;
     shown = true;
@@ -55,6 +67,7 @@
   window.addEventListener(
     "error",
     function (e) {
+      if (appMounted()) return;
       // 资源加载失败走这里：target 是 script/link 元素而不是 window
       var t = e && e.target;
       if (t && t !== window && t.tagName) {
@@ -78,6 +91,7 @@
   );
 
   window.addEventListener("unhandledrejection", function (e) {
+    if (appMounted()) return;
     var r = e && e.reason;
     render("未处理的 Promise 拒绝", (r && (r.stack || r.message)) || String(r));
   });
@@ -86,6 +100,7 @@
     // 给模块脚本留出执行时间再判空。语法错误不会触发 error 事件，
     // 但一定会表现成「root 里什么都没有」，这是唯一能抓到它的地方。
     setTimeout(function () {
+      if (appMounted()) return;
       var root = document.getElementById("root");
       if (!root || root.childElementCount === 0) {
         render(

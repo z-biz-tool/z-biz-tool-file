@@ -48,7 +48,9 @@ const DIST = `${ROOT}/dist`;
  * 不该因为这种波动就让人来改这条阈值。但结构性反弹（比如有人把
  * ArchiveExplorer 改回静态 import）会一次性涨 100KB+，必然撞线。
  */
-const MAX_STARTUP_BYTES = 1_470_000;
+// 2026-11-18 知识库板块接入：活动栏新增一个 lazy 引用 + 条目，首屏闭包多出
+// ~2KB 的加载器接线（KnowledgeApp 本体仍在独立 chunk 里），上限随之放宽。
+const MAX_STARTUP_BYTES = 1_480_000;
 
 /**
  * 这些组件是「点开才用」的重型功能组件，不许出现在首屏可达集里。
@@ -218,6 +220,7 @@ describe("点开才用的组件不许回到首屏", () => {
       "WorkerApp",
       "MindApp",
       "GlossayApp",
+      "KnowledgeApp",
       "FileManagerApp",
     ]);
     for (const m of src.matchAll(/const\s+(\w+)\s*=\s*lazy\s*\(/g)) {

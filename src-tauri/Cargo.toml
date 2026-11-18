@@ -108,7 +108,12 @@ tauri-plugin-notification = "2.4.0"
 # rusqlite: 任务/Agent 的组织数据落库（bundled 自带 SQLite，免系统库依赖）；
 # reqwest: 本地 agent-proxy 的 HTTP/SSE 转发。serde/serde_json/uuid/chrono 上面已有。
 rusqlite = { version = "0.31", features = ["bundled"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# multipart：kb 板块的 MinerU 同步解析要走 multipart/form-data 上传（/file_parse）
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart"] }
+# kb 板块的本地 OCR（图片/扫描件）：PP-OCRv6 管线，CPU 推理。
+# auto-download：模型（det+rec，约 20MB）首次使用时从 ModelScope 拉到 ~/.oar 并做
+# SHA-256 校验，之后完全离线。coreml：macOS 上的加速执行提供方。
+oar-ocr = { version = "0.10", features = ["auto-download", "coreml"] }
 dirs = "5"
 
 # ─────────────────────── 终端板块（2026-11-04 从 z-biz-tool-terminal 仓搬入）──

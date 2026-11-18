@@ -166,8 +166,11 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 「删除已保存的密钥」，三个都带 aria-label。同一轮删掉了 db 顶栏那个
  * 「打开 AI 服务设置」齿轮（它也带 aria-label，所以是净 +3 而不是 +4）；
  * dock 里另外两枚是原生 <button> 且带 aria-label，不计入这个数。
+ * 150 → 154：本体板块（src/apps/knowledge/ontology + OntologyPage）2026-11-18
+ * 新建，带进来 4 个纯图标按钮——类型行/关系行的「编辑」、关系行的「删除」、
+ * 属性表的「删除属性」。都带 aria-label（按类型/关系/属性名动态给出）。
  */
-const TOTAL_ICON_ONLY = 140;
+const TOTAL_ICON_ONLY = 154;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {
