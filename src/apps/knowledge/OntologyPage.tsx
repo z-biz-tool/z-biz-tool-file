@@ -282,34 +282,12 @@ export default function OntologyPage() {
 
   const typeOptions = types.map((t) => ({ value: t.id, label: t.display_name }));
 
-  const statCard = (
-    <div
-      style={{
-        padding: "10px 12px",
-        borderRadius: 8,
-        background: "var(--ant-color-fill-quaternary)",
-        marginBottom: 12,
-      }}
-    >
-      <Title level={5} style={{ margin: 0 }}>
-        本体
-      </Title>
-      <Space size={16} style={{ marginTop: 6 }}>
-        <Text type="secondary">
-          对象类型 <Text strong>{types.length}</Text>
-        </Text>
-        <Text type="secondary">
-          关系类型 <Text strong>{edges.length}</Text>
-        </Text>
-        <Text type="secondary">
-          实例 <Text strong>{overview?.instance_total ?? 0}</Text>
-        </Text>
-        <Text type="secondary">
-          关系 <Text strong>{overview?.link_total ?? 0}</Text>
-        </Text>
-      </Space>
-    </div>
-  );
+  const statItems = [
+    { label: "对象类型", value: types.length },
+    { label: "关系类型", value: edges.length },
+    { label: "实例", value: overview?.instance_total ?? 0 },
+    { label: "关系", value: overview?.link_total ?? 0 },
+  ];
 
   const typeList = (
     <div style={{ overflowY: "auto", flex: 1 }}>
@@ -438,13 +416,50 @@ export default function OntologyPage() {
         width: 300,
         flexShrink: 0,
         borderRight: "1px solid var(--ant-color-split)",
-        padding: 12,
+        background: "var(--ant-color-bg-container)",
+        padding: "14px 14px 8px",
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
       }}
     >
-      {statCard}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 10,
+        }}
+      >
+        <Title level={5} style={{ margin: 0 }}>
+          本体
+        </Title>
+        <Button
+          size="small"
+          type="text"
+          icon={<ReloadOutlined />}
+          aria-label="刷新本体数据"
+          onClick={() => void reload()}
+        />
+      </div>
+      <div
+        style={{
+          display: "flex",
+          gap: 22,
+          paddingBottom: 12,
+          marginBottom: 12,
+          borderBottom: "1px solid var(--ant-color-split)",
+        }}
+      >
+        {statItems.map((s) => (
+          <div key={s.label}>
+            <div style={{ fontSize: 18, fontWeight: 600, lineHeight: "24px" }}>{s.value}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {s.label}
+            </Text>
+          </div>
+        ))}
+      </div>
       <Space style={{ width: "100%", marginBottom: 8 }} direction="vertical" size={8}>
         <Input.Search
           size="small"
@@ -455,20 +470,25 @@ export default function OntologyPage() {
             if (!e.target.value) setLeftKeyword("");
           }}
         />
-        <Space wrap>
-          {leftTab === "type" ? (
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openTypeModal(null)}>
-              新建对象类型
-            </Button>
-          ) : (
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openEdgeModal(null)}>
-              新建关系类型
-            </Button>
-          )}
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => void reload()}>
-            刷新
+        {leftTab === "type" ? (
+          <Button
+            size="small"
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => openTypeModal(null)}
+          >
+            新建对象类型
           </Button>
-        </Space>
+        ) : (
+          <Button
+            size="small"
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => openEdgeModal(null)}
+          >
+            新建关系类型
+          </Button>
+        )}
       </Space>
       <Tabs
         activeKey={leftTab}
@@ -604,11 +624,20 @@ export default function OntologyPage() {
           minWidth: 0,
           display: "flex",
           flexDirection: "column",
-          padding: "8px 12px 12px",
+          padding: "12px 16px 16px",
           minHeight: 0,
         }}
       >
-        <Space style={{ marginBottom: 8 }} wrap>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 10,
+            flexShrink: 0,
+          }}
+        >
           <Segmented
             value={view}
             onChange={(v) => setView(v as "graph" | "instances")}
@@ -640,8 +669,20 @@ export default function OntologyPage() {
             }))}
             notFoundContent={searching ? <Spin size="small" /> : null}
           />
-        </Space>
-        <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            position: "relative",
+            display: "flex",
+            flexDirection: "column",
+            background: "var(--ant-color-bg-container)",
+            border: "1px solid var(--ant-color-border-secondary)",
+            borderRadius: 8,
+            overflow: "hidden",
+          }}
+        >
           {loading && !overview ? (
             <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}>
               <Spin />
@@ -667,14 +708,24 @@ export default function OntologyPage() {
               }}
             />
           ) : selectedType ? (
-            <OntInstances
-              type={selectedType}
-              types={types}
-              edges={edges}
-              focusInstanceId={focusInstanceId}
-              onConsumedFocus={() => setFocusInstanceId(null)}
-              onChanged={() => void reload()}
-            />
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                padding: "10px 14px",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <OntInstances
+                type={selectedType}
+                types={types}
+                edges={edges}
+                focusInstanceId={focusInstanceId}
+                onConsumedFocus={() => setFocusInstanceId(null)}
+                onChanged={() => void reload()}
+              />
+            </div>
           ) : (
             <Empty
               style={{ paddingTop: 80 }}

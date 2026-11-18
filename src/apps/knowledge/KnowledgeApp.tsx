@@ -27,7 +27,7 @@ export default function KnowledgeApp() {
           display: "flex",
           alignItems: "center",
           gap: 20,
-          padding: "8px 20px 0",
+          padding: "8px 16px 0",
           flexShrink: 0,
           borderBottom: "1px solid var(--ant-color-split)",
         }}

@@ -169,8 +169,10 @@ function scanTsxs(dir = "src"): { total: number; bad: string[] } {
  * 150 → 154：本体板块（src/apps/knowledge/ontology + OntologyPage）2026-11-18
  * 新建，带进来 4 个纯图标按钮——类型行/关系行的「编辑」、关系行的「删除」、
  * 属性表的「删除属性」。都带 aria-label（按类型/关系/属性名动态给出）。
+ * 154 → 155：本体页视觉统一时，左栏「刷新」从带文字按钮改成图标按钮
+ * （aria-label「刷新本体数据」）。
  */
-const TOTAL_ICON_ONLY = 154;
+const TOTAL_ICON_ONLY = 155;
 
 describe("图标按钮的可及名称", () => {
   it("确实扫到了全站绝大多数 tsx 与足够多的图标按钮", () => {

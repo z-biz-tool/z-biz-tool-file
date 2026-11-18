@@ -187,7 +187,7 @@ export default function OntGraph({
       ref={svgRef}
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="xMidYMid meet"
-      style={{ width: "100%", height: "100%", userSelect: "none", background: "var(--ant-color-fill-quaternary)", borderRadius: 8 }}
+      style={{ width: "100%", height: "100%", userSelect: "none", background: "var(--ant-color-bg-container)" }}
       onClick={() => onSelect(null)}
     >
       <defs>

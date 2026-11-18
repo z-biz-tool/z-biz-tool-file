@@ -113,7 +113,7 @@ export default function KbListPage({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "16px 20px 8px",
+          padding: "16px 16px 8px",
           flexShrink: 0,
         }}
       >
@@ -136,7 +136,7 @@ export default function KbListPage({
         </Space>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "8px 20px 20px" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "8px 16px 20px" }}>
         {loading ? (
           <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}>
             <Spin />
