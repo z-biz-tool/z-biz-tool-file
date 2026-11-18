@@ -1,6 +1,6 @@
 [package]
 name = "z-biz-tool-file"
-version = "0.2.6"
+version = "0.2.7"
 description = "万能文件管理器"
 edition = "2021"
 license = "MIT"
