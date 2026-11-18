@@ -16,7 +16,7 @@
  * 会往 webview 注脚本、需要前端权限的，capabilities 必须给对应的 `xxx:default`。
  * 新增插件时如果忘了配权限，这条测试先红，不用等到打完包启动才发现。
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -67,9 +67,17 @@ describe("Tauri 插件权限", () => {
     expect(identifiers).toContain("notification:default");
   });
 
-  it("acl-manifests 里确实存在 notification 的默认权限集（版本升级别悄悄改名）", () => {
+  // acl-manifests.json 是 tauri build 的生成物、被 .gitignore 忽略：本地/CI 的
+  // 前端测试跑在 build 之前，文件本就不该存在。旧版直接 read 会在 CI 必红
+  // （714/715 就挂这条），而这条门禁在意的是「Tauri 升级后权限名别悄悄改」。
+  // 因此：文件在（跑过 tauri build）才校验权限名；不在则跳过，由 build 流程里
+  // 构建后新增的同名门禁补上覆盖，避免 CI 误红又保留防改名牙齿。
+  const aclManifestPath = "src-tauri/gen/schemas/acl-manifests.json";
+  const itBuilt = existsSync(`${ROOT}${aclManifestPath}`) ? it : it.skip;
+
+  itBuilt("acl-manifests 里确实存在 notification 的默认权限集（版本升级别悄悄改名）", () => {
     const manifest = JSON.parse(
-      read("src-tauri/gen/schemas/acl-manifests.json")
+      read(aclManifestPath)
     ) as Record<string, { default_permission?: { permissions?: string[] } }>;
     const perms = manifest.notification?.default_permission?.permissions ?? [];
     expect(perms).toContain("allow-is-permission-granted");

@@ -43,7 +43,7 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": {
-      "runtime/bin/node": "runtime/bin/node",
+      "runtime/bin/*": "runtime/bin/",
       "runtime/lib/pi": "runtime/lib/pi",
       "runtime/agent-proxy/dist": "runtime/agent-proxy/dist"
     },

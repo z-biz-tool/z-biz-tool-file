@@ -2,7 +2,7 @@
 # 组装「离线捆绑的 AI 运行时」到 src-tauri/runtime/，供 Tauri resources 打包。
 #
 # 它包含三样东西（装完即用，不依赖用户机器上的 node/npm/网络）：
-#   runtime/bin/node         —— 独立 node 可执行（~110M）
+#   runtime/bin/node         —— 独立 node 可执行（~110M；Windows 上为 node.exe）
 #   runtime/lib/pi/          —— 捆绑的 Pi agent（@earendil-works/pi-coding-agent）
 #   runtime/agent-proxy/dist —— agent-proxy 前端 JS（自包含，无第三方 require）
 #
@@ -45,10 +45,23 @@ if [ ! -d "$AGENT_PROXY_DIST" ]; then
   exit 1
 fi
 
+# node 可执行文件名必须和运行时代码对得上，否则 Windows 打包能过、装完却找不到 node：
+#   - src-tauri/src/worker_app/agent_proxy.rs 的 node_exe_name()（cfg(windows)→node.exe）
+#   - src-tauri/agent-proxy-dist/wrappers/pi.js 的 bundledNode()（win32→node.exe）
+#   - tauri.conf.json 的 bundle.resources glob
+# Windows 上真实文件就是 node.exe；写死无扩展名的 node 会让 Tauri 在 build.rs
+# 校验 resources 时报 `resource path 'runtime\bin\node' doesn't exist`
+# （v0.2.3~v0.2.5 Windows 构建失败的真实根因，曾被误判为 ONNX 链接问题）。
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*) NODE_FILENAME="node.exe" ;;
+  *)                    NODE_FILENAME="node" ;;
+esac
+echo "▶ 目标平台 node 文件名: $NODE_FILENAME"
+
 mkdir -p "$RT/bin" "$RT/agent-proxy"
-echo "▶ 拷贝 node → $RT/bin/node"
-cp "$NODE_BIN" "$RT/bin/node"
-chmod +x "$RT/bin/node"
+echo "▶ 拷贝 node → $RT/bin/$NODE_FILENAME"
+cp "$NODE_BIN" "$RT/bin/$NODE_FILENAME"
+chmod +x "$RT/bin/$NODE_FILENAME"
 
 echo "▶ 拷贝 agent-proxy dist"
 rm -rf "$RT/agent-proxy/dist"

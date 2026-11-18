@@ -89,14 +89,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 2026-11-18：OCR 依赖 oar-ocr → ort-sys 的预编译 ONNX Runtime 库只在
-          # macOS-ARM 可链接。Linux（glibc 符号不匹配）、Windows、macOS-Intel
-          # （无 x86_64-osx 预编译包）四平台里后三者构建失败 ⇒ latest.json 永远
-          # 推不出去 ⇒ 自更新通道卡死。暂收窄为 macOS-ARM（用户主力机型），
-          # 待 OCR 依赖跨平台问题解决后再放开其余平台。
+          # 2026-11-18 四平台构建诊断（逐个看失败日志，勿再凭猜测砍平台）：
+          #   - macOS-ARM：成功。
+          #   - Windows：失败根因是 resource path 'runtime\bin\node' doesn't exist
+          #     —— 打包脚本写死无扩展名 node，但 Windows 上 node 真实文件是 node.exe。
+          #     已在 prepare-runtime.sh + tauri.conf.json + 契约测试修好，2026-11-19 恢复。
+          #   - macOS-Intel：真无解 —— ort-sys 不支持 x86_64-apple-darwin 的
+          #     xcframework 链接（"can't do xcframework linking"），ONNX Runtime 无 x64 macOS 包。
+          #   - Linux：真无解 —— 预编译 ONNX 库依赖更新的 glibc（__isoc23_strtol）
+          #     和 libstdc++ ABI，Ubuntu 22.04 工具链对不上。
+          # 故保留 macOS-ARM + Windows 两平台；Intel/Linux 待 OCR 依赖解决后再放开。
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             label: macOS-ARM
+          - platform: windows-latest
+            args: ''
+            label: Windows
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -204,6 +212,14 @@ jobs:
           # latest.json 由下面的 latest-json 作业统一生成：4 个矩阵各自生成会互相覆盖，
           # 最终只剩最后一个平台的条目。资产与 .sig 的上传不受此开关影响。
           includeUpdaterJson: false
+
+      # ACL 防改名门禁：tauri build 这一步会生成 src-tauri/gen/schemas/acl-manifests.json
+      # （被 .gitignore 忽略），tests/tauriPluginAcl.test.ts 里的同名用例在前端 test job
+      # 因文件尚未生成而 skip —— 在这里、清单确实存在时补跑，确保 Tauri 升级把
+      # notification:default 的权限名改掉时发版立刻红，而不是等启动才发现 ACL 拒绝。
+      - name: Verify Tauri ACL manifests (post-build)
+        shell: bash
+        run: npx vitest run tests/tauriPluginAcl.test.ts
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
