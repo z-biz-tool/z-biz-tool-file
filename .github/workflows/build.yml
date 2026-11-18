@@ -160,6 +160,17 @@ jobs:
       - name: Install npm dependencies
         run: npm install
 
+      # 组装离线 AI 运行时（Pi Agent + node + agent-proxy）。
+      # tauri.conf.json 的 bundle.resources 声明了 runtime/bin/node、runtime/lib/pi、
+      # runtime/agent-proxy/dist 三项，但整套 ~226M 不入库（.gitignore 忽略），
+      # 必须在 tauri build 之前由本步骤重建，否则 build.rs 直接报
+      # "resource path `runtime/agent-proxy/dist` doesn't exist" 四平台全挂
+      # （v0.2.3 首发实测踩到）。脚本从 PATH 取 node/npm（setup-node 已装好），
+      # agent-proxy dist 用本仓 vend 的 src-tauri/agent-proxy-dist，无需外网额外依赖。
+      - name: Prepare bundled AI runtime
+        shell: bash
+        run: bash scripts/prepare-runtime.sh
+
       # 自动更新签名（2026-10-25 接入，详见 z-biz-tool-lead/doc/分发/updater-官方化指南.md）：
       # tauri.conf.json 里 createUpdaterArtifacts=true + 非空 pubkey 时，tauri build 在
       # 没有 TAURI_SIGNING_PRIVATE_KEY 的情况下会**直接报错**（"A public key has been
