@@ -1,6 +1,6 @@
 [package]
 name = "z-biz-tool-file"
-version = "0.2.4"
+version = "0.2.5"
 description = "万能文件管理器"
 edition = "2021"
 license = "MIT"
@@ -112,8 +112,11 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart"] }
 # kb 板块的本地 OCR（图片/扫描件）：PP-OCRv6 管线，CPU 推理。
 # auto-download：模型（det+rec，约 20MB）首次使用时从 ModelScope 拉到 ~/.oar 并做
-# SHA-256 校验，之后完全离线。coreml：macOS 上的加速执行提供方。
-oar-ocr = { version = "0.10", features = ["auto-download", "coreml"] }
+# SHA-256 校验，之后完全离线。
+# coreml 是 macOS ARM 专属的 ONNX Runtime 加速，收窄到下方 target section：
+# 写在通用依赖里会让 Linux/Windows（无 coreml 预编译）和 macOS-Intel
+# （xcframework 不支持 x86_64 交叉编译）四平台 CI 打包全挂（2026-11-18 实测）。
+oar-ocr = { version = "0.10", features = ["auto-download"] }
 dirs = "5"
 
 # ─────────────────────── 终端板块（2026-11-04 从 z-biz-tool-terminal 仓搬入）──
@@ -186,6 +189,11 @@ keyring = "4.2.0"
 # x86_64-apple-darwin 在 arm64 runner 上交叉编译时找不到系统 OpenSSL，
 # vendored 让 openssl-sys 自己编一份
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
+# OCR 的 CoreML 加速只在 macOS ARM 可用（ort-sys 只提供 aarch64 的 xcframework）。
+# 放在 aarch64 专属段，避免污染 Linux/Windows/macOS-Intel 的 feature set。
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+oar-ocr = { version = "0.10", features = ["auto-download", "coreml"] }
 
 [dev-dependencies]
 # lopdf 的解析/改写能力已随文档模块迁入 cap-doc，**生产代码不再直接使用**。
