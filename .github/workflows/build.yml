@@ -89,18 +89,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 2026-11-18：OCR 依赖 oar-ocr → ort-sys 的预编译 ONNX Runtime 库只在
+          # macOS-ARM 可链接。Linux（glibc 符号不匹配）、Windows、macOS-Intel
+          # （无 x86_64-osx 预编译包）四平台里后三者构建失败 ⇒ latest.json 永远
+          # 推不出去 ⇒ 自更新通道卡死。暂收窄为 macOS-ARM（用户主力机型），
+          # 待 OCR 依赖跨平台问题解决后再放开其余平台。
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             label: macOS-ARM
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-            label: macOS-Intel
-          - platform: ubuntu-22.04
-            args: ''
-            label: Linux
-          - platform: windows-latest
-            args: ''
-            label: Windows
 
     runs-on: ${{ matrix.platform }}
     steps:
