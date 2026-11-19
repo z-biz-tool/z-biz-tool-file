@@ -30,9 +30,7 @@ use tauri::Manager;
 /// （和 sys_app 同一个模式）。如果在 attach 里再开一个 generate_handler 注册
 /// 同一批命令，Tauri 宏会把每个命令展开成同名的 `__cmd__xxx` 静态量，
 /// 两个 handler 一碰就报 `defined multiple times`。
-pub fn attach(
-    builder: tauri::Builder<tauri::Wry>,
-) -> tauri::Builder<tauri::Wry> {
+pub fn attach(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
         .manage(agent_proxy::AgentProxyHandle(std::sync::Mutex::new(None)))
         .manage(agent_session::AgentSessionState::load())

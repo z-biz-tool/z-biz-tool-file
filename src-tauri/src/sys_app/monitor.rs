@@ -911,8 +911,17 @@ impl MonitorService {
         {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                run_metrics_loop(app, config, latest, history, alert_history, alerts, notify, active)
-                    .await;
+                run_metrics_loop(
+                    app,
+                    config,
+                    latest,
+                    history,
+                    alert_history,
+                    alerts,
+                    notify,
+                    active,
+                )
+                .await;
             });
         }
 
@@ -943,6 +952,7 @@ impl Default for MonitorService {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // 采集循环的依赖都是独立注入的，打包成 struct 只为过 lint 反而绕
 async fn run_metrics_loop(
     app: AppHandle,
     config: Arc<RwLock<MonitorConfig>>,
@@ -1017,7 +1027,9 @@ async fn run_metrics_loop(
 
                 // 历史落盘（T3-07）：间隔节流在 recorder 内部，这里是每帧都调用。
                 if let Some(recorder) = recorder.as_mut() {
-                    recorder.observe(crate::sys_app::history::HistoryPoint::from_snapshot(&snapshot));
+                    recorder.observe(crate::sys_app::history::HistoryPoint::from_snapshot(
+                        &snapshot,
+                    ));
                 }
 
                 // 告警判定（T5-01）：与历史落盘同一时间轴，用帧自带的时间戳做冷却计算。
@@ -2098,7 +2110,8 @@ mod tests {
         // 画成"用了 0 %"的进度条 —— 后端类型上给不出 `None`，这一列就是最后一道闸。
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let tab =
-            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/DiskTab.tsx")).unwrap();
+            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/DiskTab.tsx"))
+                .unwrap();
         assert!(
             tab.contains("const MISSING = \"—\""),
             "分区表没有统一的缺测画法"
@@ -2188,8 +2201,13 @@ mod tests {
     #[test]
     fn it01_every_stream_event_name_is_registered_by_the_frontend_contract() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
-        for event in [METRICS_EVENT, PROCESSES_EVENT, crate::sys_app::alert::ALERT_EVENT] {
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        for event in [
+            METRICS_EVENT,
+            PROCESSES_EVENT,
+            crate::sys_app::alert::ALERT_EVENT,
+        ] {
             assert!(
                 contract.contains(&format!("\"{event}\"")),
                 "前端 MonitorEvent 里没有登记 {event}，推了也没人接"
@@ -2505,7 +2523,12 @@ mod tests {
         let our_uid: std::collections::HashMap<u32, Option<u32>> = sys
             .processes()
             .iter()
-            .map(|(pid, proc_info)| (pid.as_u32(), crate::sys_app::observe::effective_uid(proc_info)))
+            .map(|(pid, proc_info)| {
+                (
+                    pid.as_u32(),
+                    crate::sys_app::observe::effective_uid(proc_info),
+                )
+            })
             .collect();
         let me = crate::sys_app::observe::current_uid().expect("unix 上应取到自己的 uid");
 
@@ -2642,7 +2665,8 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
 
         let sample = row(11, "java", 12.5, 4096);
         assert!(sample.detached, "阳性对照：夹具里这一行得真带着脱离旗");

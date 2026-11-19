@@ -23,8 +23,8 @@ const MAX_OUTPUT_CHARS: usize = 400_000;
 
 /// 抽取结果：(工作表名，Markdown 表) 列表。
 pub fn extract_xlsx(path: &Path) -> Result<Vec<(String, String)>, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("打开 {} 失败: {}", path.display(), e))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("打开 {} 失败: {}", path.display(), e))?;
     let mut archive = ZipArchive::new(file)
         .map_err(|e| format!("打开 xlsx 压缩包失败（{}）: {}", path.display(), e))?;
 
@@ -258,8 +258,7 @@ fn render_markdown(grid: &BTreeMap<u32, BTreeMap<u32, String>>) -> Result<String
     let cols = (max_col + 1).min(MAX_COLS_PER_SHEET as u32) as usize;
 
     let mut table = String::new();
-    let mut shown = 0usize;
-    for (_, cells) in grid.iter() {
+    for (shown, cells) in grid.values().enumerate() {
         if shown >= MAX_ROWS_PER_SHEET {
             table.push_str(&format!(
                 "\n> 工作表共 {} 行，已截断显示前 {} 行。\n",
@@ -279,7 +278,6 @@ fn render_markdown(grid: &BTreeMap<u32, BTreeMap<u32, String>>) -> Result<String
         if shown == 0 {
             table.push_str(&format!("|{}|\n", "---|".repeat(cols)));
         }
-        shown += 1;
     }
     Ok(table)
 }
@@ -359,7 +357,11 @@ mod tests {
         assert_eq!(sheets.len(), 1);
         assert_eq!(sheets[0].0, "流水");
         let md = &sheets[0].1;
-        assert!(md.contains("| 名称 | MinerU |"), "首行应是共享字符串回拼: {}", md);
+        assert!(
+            md.contains("| 名称 | MinerU |"),
+            "首行应是共享字符串回拼: {}",
+            md
+        );
         assert!(md.contains("价格\\|含税"), "竖线要转义: {}", md);
         assert!(md.contains("12.5"), "数值单元格原文保留: {}", md);
 

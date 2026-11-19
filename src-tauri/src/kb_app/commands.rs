@@ -16,8 +16,8 @@ use crate::kb_app::parse;
 use crate::kb_app::search;
 use crate::kb_app::secret;
 use crate::kb_app::store::{
-    self, KbCategory, KbIndex, KbMaterial, KnowledgeBase, YuqueRef, STATUS_FAILED,
-    STATUS_PARSED, STATUS_PENDING, STATUS_PARSING,
+    self, KbCategory, KbIndex, KbMaterial, KnowledgeBase, YuqueRef, STATUS_FAILED, STATUS_PARSED,
+    STATUS_PARSING, STATUS_PENDING,
 };
 use crate::kb_app::yuque::{YuqueClient, YuqueRepo, YuqueTocItem};
 use crate::kb_app::KbState;
@@ -83,7 +83,7 @@ pub struct BaseCreateInput {
 pub fn kb_base_list(state: State<'_, KbState>) -> Result<Vec<KbSummary>, String> {
     let index = state.0.lock().unwrap();
     let mut bases = index.bases.clone();
-    bases.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    bases.sort_by_key(|a| std::cmp::Reverse(a.created_at));
     Ok(bases.iter().map(|b| summarize(&index, b)).collect())
 }
 
@@ -180,16 +180,15 @@ pub async fn kb_base_delete(app: AppHandle, kb_id: String) -> Result<(), String>
 // ── 目录 ──
 
 #[tauri::command]
-pub fn kb_category_tree(state: State<'_, KbState>, kb_id: String) -> Result<Vec<KbCategory>, String> {
+pub fn kb_category_tree(
+    state: State<'_, KbState>,
+    kb_id: String,
+) -> Result<Vec<KbCategory>, String> {
     let index = state.0.lock().unwrap();
     if index.base(&kb_id).is_none() {
         return Err("知识库不存在".to_string());
     }
-    Ok(index
-        .categories_of(&kb_id)
-        .into_iter()
-        .cloned()
-        .collect())
+    Ok(index.categories_of(&kb_id).into_iter().cloned().collect())
 }
 
 #[derive(Deserialize)]
@@ -215,7 +214,11 @@ pub fn kb_category_create(
         return Err("知识库不存在".to_string());
     }
     if let Some(parent) = &input.parent_id {
-        if index.categories.iter().any(|c| c.id == *parent && c.kb_id == input.kb_id) == false {
+        if !index
+            .categories
+            .iter()
+            .any(|c| c.id == *parent && c.kb_id == input.kb_id)
+        {
             return Err("父目录不存在".to_string());
         }
     }
@@ -351,10 +354,7 @@ pub fn kb_material_move(
 }
 
 #[tauri::command]
-pub fn kb_material_delete(
-    state: State<'_, KbState>,
-    material_id: String,
-) -> Result<(), String> {
+pub fn kb_material_delete(state: State<'_, KbState>, material_id: String) -> Result<(), String> {
     let mut index = state.0.lock().unwrap();
     let mat = index
         .material(&material_id)
@@ -394,7 +394,10 @@ pub fn kb_draft_save(
 /// 目录导入时要跳过的噪音目录（隐藏目录、依赖目录）。
 fn is_noise_dir(name: &str) -> bool {
     name.starts_with('.')
-        || matches!(name, "node_modules" | "target" | "__pycache__" | "dist" | "build")
+        || matches!(
+            name,
+            "node_modules" | "target" | "__pycache__" | "dist" | "build"
+        )
 }
 
 /// 递归收集文件（带相对目录链，用于镜像目录结构到库内目录树）。
@@ -407,8 +410,8 @@ fn collect_files(
     if depth > 12 {
         return Err(format!("目录嵌套过深（>12 层）: {}", path.display()));
     }
-    let meta = std::fs::metadata(path)
-        .map_err(|e| format!("读取 {} 失败: {}", path.display(), e))?;
+    let meta =
+        std::fs::metadata(path).map_err(|e| format!("读取 {} 失败: {}", path.display(), e))?;
     if meta.is_file() {
         out.push((path.to_path_buf(), rel_dirs.to_vec()));
         return Ok(());
@@ -439,16 +442,13 @@ fn collect_files(
 fn sha256_file(path: &std::path::Path) -> Result<(String, u64), String> {
     use sha2::Digest;
     use std::io::Read;
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("打开 {} 失败: {}", path.display(), e))?;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("打开 {} 失败: {}", path.display(), e))?;
     let meta = file
         .metadata()
         .map_err(|e| format!("读取 {} 元信息失败: {}", path.display(), e))?;
     if meta.len() > store::MAX_FILE_SIZE {
-        return Err(format!(
-            "文件超过 100MB 上限（{} 字节）",
-            meta.len()
-        ));
+        return Err(format!("文件超过 100MB 上限（{} 字节）", meta.len()));
     }
     let mut hasher = sha2::Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
@@ -478,11 +478,7 @@ fn ensure_category_path(
         let existing = index
             .categories
             .iter()
-            .find(|c| {
-                c.kb_id == kb_id
-                    && c.parent_id == parent
-                    && c.name == *name
-            })
+            .find(|c| c.kb_id == kb_id && c.parent_id == parent && c.name == *name)
             .map(|c| c.id.clone());
         parent = Some(existing.unwrap_or_else(|| {
             let created = KbCategory {
@@ -501,6 +497,7 @@ fn ensure_category_path(
     Ok(parent)
 }
 
+#[allow(clippy::too_many_arguments)] // 一条物料记录的字段，拆 struct 只是换一种写法
 fn register_material(
     index: &mut KbIndex,
     kb_id: &str,
@@ -579,8 +576,7 @@ pub async fn kb_import_local(
         let mut files = Vec::new();
         for raw in &input.paths {
             let path = std::path::PathBuf::from(raw.trim());
-            collect_files(&path, &[], 0, &mut files)
-                .map_err(|e| format!("收集文件失败: {}", e))?;
+            collect_files(&path, &[], 0, &mut files).map_err(|e| format!("收集文件失败: {}", e))?;
         }
         if files.is_empty() {
             return Err("没有找到可导入的文件".to_string());
@@ -606,7 +602,10 @@ pub async fn kb_import_local(
             let (fingerprint, size) = match sha256_file(&path) {
                 Ok(v) => v,
                 Err(e) => {
-                    report.skipped.push(SkippedItem { path: file_name, reason: e });
+                    report.skipped.push(SkippedItem {
+                        path: file_name,
+                        reason: e,
+                    });
                     continue;
                 }
             };
@@ -622,8 +621,12 @@ pub async fn kb_import_local(
                 continue;
             }
             // 目标目录：所选目录下按相对路径镜像（future-brain 的目录上传同款行为）
-            let category_id =
-                ensure_category_path(&mut index, &input.kb_id, input.category_id.clone(), &rel_dirs)?;
+            let category_id = ensure_category_path(
+                &mut index,
+                &input.kb_id,
+                input.category_id.clone(),
+                &rel_dirs,
+            )?;
             let mut material = register_material(
                 &mut index,
                 &input.kb_id,
@@ -795,11 +798,7 @@ pub struct AskResult {
 /// 库内问答：BM25 取证据片段 → 拼引用 → cap-llm 生成答案。
 /// 检索不到证据时直接给兜底话术，不调模型。
 #[tauri::command]
-pub async fn kb_ask(
-    app: AppHandle,
-    kb_id: String,
-    question: String,
-) -> Result<AskResult, String> {
+pub async fn kb_ask(app: AppHandle, kb_id: String, question: String) -> Result<AskResult, String> {
     let question = question.trim().to_string();
     if question.is_empty() {
         return Err("问题不能为空".to_string());
@@ -1119,10 +1118,7 @@ pub struct SyncReport {
 /// - 没变的 → 跳过；
 /// - 源文件已被删掉 → 该条目标记为「源文件已移除」（不删，保留历史）。
 #[tauri::command]
-pub async fn kb_sync_local_dir(
-    app: AppHandle,
-    category_id: String,
-) -> Result<SyncReport, String> {
+pub async fn kb_sync_local_dir(app: AppHandle, category_id: String) -> Result<SyncReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<KbState>();
         let (kb_id, local_path) = {
@@ -1192,7 +1188,9 @@ pub async fn kb_sync_local_dir(
                     let stored = store::originals_dir().join(format!(
                         "{}{}",
                         mat.id,
-                        ext.as_deref().map(|e| format!(".{}", e)).unwrap_or_default()
+                        ext.as_deref()
+                            .map(|e| format!(".{}", e))
+                            .unwrap_or_default()
                     ));
                     if let Err(e) = std::fs::copy(&path, &stored) {
                         report.failed += 1;
@@ -1323,8 +1321,7 @@ pub fn kb_reveal_original(app: AppHandle, material_id: String) -> Result<(), Str
             .and_then(|m| m.original_path.clone())
             .ok_or_else(|| "该物料没有原件副本".to_string())?
     };
-    tauri_plugin_opener::reveal_item_in_dir(path)
-        .map_err(|e| format!("定位原件失败: {}", e))
+    tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| format!("定位原件失败: {}", e))
 }
 
 #[cfg(test)]
@@ -1335,10 +1332,9 @@ mod tests {
     /// 嵌套结构体里的字段不会被转换，必须自己声明 rename_all。
     #[test]
     fn nested_inputs_accept_camel_case() {
-        let cat: CategoryCreateInput = serde_json::from_str(
-            r#"{"kbId":"kb1","parentId":null,"name":"目录"}"#,
-        )
-        .expect("camelCase 反序列化失败");
+        let cat: CategoryCreateInput =
+            serde_json::from_str(r#"{"kbId":"kb1","parentId":null,"name":"目录"}"#)
+                .expect("camelCase 反序列化失败");
         assert_eq!(cat.kb_id, "kb1");
         assert!(cat.parent_id.is_none());
 

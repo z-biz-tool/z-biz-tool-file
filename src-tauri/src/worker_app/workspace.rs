@@ -44,7 +44,13 @@ pub fn dir_for_task(task: &Task) -> PathBuf {
 fn sanitize_segment(s: &str) -> String {
     // id 是 uuid（安全），但防御：把路径分隔符 / \ 和 .. 换成 `_`，杜绝穿越
     s.chars()
-        .map(|c| if c == '/' || c == '\\' || c == ':' || c == '?' || c == '*' { '_' } else { c })
+        .map(|c| {
+            if c == '/' || c == '\\' || c == ':' || c == '?' || c == '*' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect::<String>()
         .replace("..", "_")
 }
@@ -80,7 +86,11 @@ pub fn list_dir(dir: &Path) -> Vec<WsEntry> {
                 name,
                 path: path.to_string_lossy().into_owned(),
                 dir: is_dir,
-                size: if is_dir { 0 } else { fs::metadata(&path).map(|m| m.len()).unwrap_or(0) },
+                size: if is_dir {
+                    0
+                } else {
+                    fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+                },
             });
         }
     }
@@ -97,7 +107,11 @@ pub fn file_inventory_text(dir: &Path) -> String {
     let mut lines = Vec::new();
     for e in entries {
         let tag = if e.dir { "[目录]" } else { "[文件]" };
-        let size = if e.dir { String::new() } else { format!(" ({}B)", e.size) };
+        let size = if e.dir {
+            String::new()
+        } else {
+            format!(" ({}B)", e.size)
+        };
         lines.push(format!("{tag} {}{size}", e.name));
     }
     lines.join("\n")
@@ -127,7 +141,13 @@ pub fn build_task_kickoff(task: &Task, deps: &[Task]) -> String {
         lines.push(String::new());
         lines.push("【同项目相关事项（避免重复/协同）】".to_string());
         for (i, d) in deps.iter().enumerate() {
-            lines.push(format!("  {}. [{}] {} — {} 开头", i + 1, d.status, d.title, d.description.chars().take(40).collect::<String>()));
+            lines.push(format!(
+                "  {}. [{}] {} — {} 开头",
+                i + 1,
+                d.status,
+                d.title,
+                d.description.chars().take(40).collect::<String>()
+            ));
         }
     }
     lines.join("\n")

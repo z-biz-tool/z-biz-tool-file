@@ -1465,9 +1465,10 @@ mod tests {
             "页签 {tab} 在 App.tsx 里不存在"
         );
         // 系统信息页确实接了温度这条链路
-        let tab_src =
-            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/SystemInfoTab.tsx"))
-                .unwrap();
+        let tab_src = std::fs::read_to_string(
+            manifest.join("../src/apps/sys/components/tabs/SystemInfoTab.tsx"),
+        )
+        .unwrap();
         assert!(tab_src.contains("thermal"), "系统信息页没有展示传感器");
     }
 
@@ -1656,11 +1657,9 @@ mod tests {
     /// 连测试一起扫等于自己绊自己。
     #[test]
     fn agent_module_has_no_destructive_call_path() {
-        let src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/sys_app/agent.rs"
-        ))
-        .expect("agent.rs 必须存在");
+        let src =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sys_app/agent.rs"))
+                .expect("agent.rs 必须存在");
         let production = src.split("#[cfg(test)]").next().expect("应有测试模块");
         assert!(
             production.len() > 1000,
@@ -1697,12 +1696,14 @@ mod tests {
             root_lib.contains("commands::agent_query"),
             "命令没注册进 invoke_handler"
         );
-        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
+        let commands_rs =
+            std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         assert!(
             commands_rs.contains("agent::answer"),
             "commands.rs 未转调 Agent 引擎"
         );
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert!(
             contract.contains("agentQuery: \"agent_query\""),
             "前端未登记 agent_query"
@@ -1956,7 +1957,12 @@ mod tests {
     #[test]
     fn census_declares_its_own_measurement_basis() {
         let fixture = Fixture {
-            rollup: vec![bucket(crate::sys_app::observe::CATEGORY_PYTHON, 4, gb(2), 0)],
+            rollup: vec![bucket(
+                crate::sys_app::observe::CATEGORY_PYTHON,
+                4,
+                gb(2),
+                0,
+            )],
             ..Fixture::default()
         };
         let notes = ask(&fixture, "python 都跑了多少").notes.join("\n");
@@ -2184,13 +2190,15 @@ mod tests {
             "serde 的 camelCase 与预测不一致，前端标签会漂"
         );
 
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let block = contract
             .find("export type AgentIntent =")
             .map(|at| &contract[at..])
             .and_then(|rest| rest.split(';').next())
             .expect("前端没有 AgentIntent 联合类型");
-        let panel = std::fs::read_to_string(manifest.join("../src/apps/sys/agent/AgentPanel.tsx")).unwrap();
+        let panel =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/agent/AgentPanel.tsx")).unwrap();
         let labels = panel
             .find("const INTENT_TEXT")
             .map(|at| &panel[at..])

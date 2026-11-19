@@ -25,16 +25,16 @@ use crate::kb_app::KbState;
 
 /// UTF-8 直读的文本类扩展名。
 pub const TEXT_EXTS: &[&str] = &[
-    "md", "markdown", "txt", "log", "csv", "tsv", "json", "jsonl", "ndjson", "html", "htm",
-    "xml", "yaml", "yml", "toml", "ini", "conf", "py", "java", "js", "jsx", "ts", "tsx", "go",
-    "rs", "c", "h", "cpp", "hpp", "cs", "rb", "php", "sh", "bash", "sql", "css", "scss", "less",
-    "vue", "svelte", "swift", "kt", "scala", "lua",
+    "md", "markdown", "txt", "log", "csv", "tsv", "json", "jsonl", "ndjson", "html", "htm", "xml",
+    "yaml", "yml", "toml", "ini", "conf", "py", "java", "js", "jsx", "ts", "tsx", "go", "rs", "c",
+    "h", "cpp", "hpp", "cs", "rb", "php", "sh", "bash", "sql", "css", "scss", "less", "vue",
+    "svelte", "swift", "kt", "scala", "lua",
 ];
 
 /// 音视频只登记不解析。
 pub const MEDIA_EXTS: &[&str] = &[
-    "mp3", "wav", "m4a", "aac", "flac", "ogg", "wma", "amr", "mp4", "mov", "avi", "mkv",
-    "webm", "flv", "wmv", "m4v",
+    "mp3", "wav", "m4a", "aac", "flac", "ogg", "wma", "amr", "mp4", "mov", "avi", "mkv", "webm",
+    "flv", "wmv", "m4v",
 ];
 
 pub fn is_text_ext(ext: &str) -> bool {
@@ -81,16 +81,15 @@ async fn try_mineru(url: &str, path: &std::path::Path) -> Option<Result<(String,
 
 /// 扫描版 PDF：抽出内嵌的整页扫描图逐页 OCR（扫描件每页通常就是一张图，
 /// 不需要 pdfium 渲染），页间加分页标记。
-async fn ocr_scanned_pdf(path: &std::path::Path, material_id: &str) -> Result<(String, String), String> {
+async fn ocr_scanned_pdf(
+    path: &std::path::Path,
+    material_id: &str,
+) -> Result<(String, String), String> {
     let input = path.to_string_lossy().to_string();
     let out_dir = store::kb_data_dir().join("tmp").join(material_id);
     let report = run_blocking(move || {
-        std::fs::create_dir_all(&out_dir)
-            .map_err(|e| format!("创建临时目录失败: {}", e))?;
-        cap_doc::extract_pdf_images_blocking(
-            input,
-            out_dir.to_string_lossy().to_string(),
-        )
+        std::fs::create_dir_all(&out_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+        cap_doc::extract_pdf_images_blocking(input, out_dir.to_string_lossy().to_string())
     })
     .await?;
     let images = report.images;
@@ -116,7 +115,10 @@ async fn ocr_scanned_pdf(path: &std::path::Path, material_id: &str) -> Result<(S
 
 /// 按路由规则产出 (markdown, parser_name)。本地能力优先，MinerU 只作为
 /// 配置了才启用的图像增强通道 —— 默认全离线。
-pub async fn produce_markdown(material: &KbMaterial, cfg: &KbConfig) -> Result<(String, String), String> {
+pub async fn produce_markdown(
+    material: &KbMaterial,
+    cfg: &KbConfig,
+) -> Result<(String, String), String> {
     let ext = material
         .ext
         .as_deref()
@@ -138,23 +140,25 @@ pub async fn produce_markdown(material: &KbMaterial, cfg: &KbConfig) -> Result<(
         return Err("音视频暂不支持解析，仅登记保存原件".to_string());
     }
 
-    let mineru_url = cfg.mineru_base_url.clone().filter(|s| mineru::is_configured(Some(s)));
+    let mineru_url = cfg
+        .mineru_base_url
+        .clone()
+        .filter(|s| mineru::is_configured(Some(s)));
 
     // ── 本地优先：文字层 / OOXML / xlsx 表格，不依赖任何外部服务 ──
     match ext.as_str() {
         "docx" => {
-            if let Some(result) = run_blocking({
+            if let Ok(result) = run_blocking({
                 let path = path.clone();
                 move || cap_doc::extract_docx_text(&path).map(|d| (d.full, "cap-doc".to_string()))
             })
             .await
-            .ok()
             {
                 return Ok(result);
             }
         }
         "pptx" | "ppt" => {
-            if let Some(result) = run_blocking({
+            if let Ok(result) = run_blocking({
                 let path = path.clone();
                 move || {
                     cap_doc::extract_pptx_text(&path)
@@ -162,7 +166,6 @@ pub async fn produce_markdown(material: &KbMaterial, cfg: &KbConfig) -> Result<(
                 }
             })
             .await
-            .ok()
             {
                 return Ok(result);
             }
@@ -212,7 +215,11 @@ pub async fn produce_markdown(material: &KbMaterial, cfg: &KbConfig) -> Result<(
                     Err(e) => {
                         if !is_image && !is_scanned_pdf {
                             // .doc/.xls：MinerU 失败且没有本地路径
-                            return Err(format!("{}（MinerU 增强通道失败: {}）", mineru_required_hint(&ext), e));
+                            return Err(format!(
+                                "{}（MinerU 增强通道失败: {}）",
+                                mineru_required_hint(&ext),
+                                e
+                            ));
                         }
                         eprintln!("[kb_app] MinerU 通道失败，回落本地 OCR: {}", e);
                     }

@@ -1466,7 +1466,8 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let outcome = StartupOutcome {
             id: String::new(),
             name: String::new(),
@@ -1526,7 +1527,10 @@ mod tests {
             "commands::remove_startup_item",
             "commands::restore_startup_item",
         ] {
-            assert!(root_lib.contains(name), "命令没注册进 invoke_handler: {name}");
+            assert!(
+                root_lib.contains(name),
+                "命令没注册进 invoke_handler: {name}"
+            );
         }
         let commands_rs = fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         for call in ["startup::run(", "startup::page("] {
@@ -1554,7 +1558,8 @@ mod tests {
             "扫描命令还停在无 AppHandle 的旧签名，备份里的禁用项列不出来"
         );
         let tab =
-            fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/StartupTab.tsx")).unwrap();
+            fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/StartupTab.tsx"))
+                .unwrap();
         assert!(
             !tab.contains("尚未实现"),
             "界面上还挂着\u{201c}尚未实现\u{201d}的按钮"

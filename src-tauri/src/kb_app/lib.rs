@@ -29,8 +29,8 @@
 
 pub mod commands; // 命令从主 invoke_handler 注册，须 pub 否则 lib.rs 引用不到
 pub mod mineru;
-pub mod ontology;
 pub mod ocr;
+pub mod ontology;
 pub mod parse;
 pub mod search;
 pub mod secret;

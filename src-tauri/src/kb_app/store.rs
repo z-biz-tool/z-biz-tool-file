@@ -214,12 +214,9 @@ impl KbIndex {
     }
 
     pub fn materials_of(&self, kb_id: &str) -> Vec<&KbMaterial> {
-        let mut list: Vec<&KbMaterial> = self
-            .materials
-            .iter()
-            .filter(|m| m.kb_id == kb_id)
-            .collect();
-        list.sort_by(|a, b| a.registered_at.cmp(&b.registered_at));
+        let mut list: Vec<&KbMaterial> =
+            self.materials.iter().filter(|m| m.kb_id == kb_id).collect();
+        list.sort_by_key(|a| a.registered_at);
         list
     }
 
@@ -243,7 +240,11 @@ impl KbIndex {
         let mut trail = Vec::new();
         let mut cursor = category_id.map(|s| s.to_string());
         while let Some(id) = cursor {
-            match self.categories.iter().find(|c| c.id == id && c.kb_id == kb_id) {
+            match self
+                .categories
+                .iter()
+                .find(|c| c.id == id && c.kb_id == kb_id)
+            {
                 Some(cat) => {
                     trail.push(cat.name.clone());
                     cursor = cat.parent_id.clone();

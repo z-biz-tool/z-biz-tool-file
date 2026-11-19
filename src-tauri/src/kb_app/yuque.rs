@@ -78,7 +78,11 @@ impl YuqueClient {
             return Err("语雀 Token 无效或已过期（HTTP 401），请到设置里重新配置".to_string());
         }
         if !status.is_success() {
-            return Err(format!("语雀接口返回 HTTP {}: {}", status, truncate(&body, 200)));
+            return Err(format!(
+                "语雀接口返回 HTTP {}: {}",
+                status,
+                truncate(&body, 200)
+            ));
         }
         serde_json::from_str(&body).map_err(|e| format!("语雀响应不是合法 JSON: {}", e))
     }
@@ -131,7 +135,9 @@ impl YuqueClient {
                 if group_login.is_empty() {
                     continue;
                 }
-                let list = self.get_json(&format!("/groups/{}/repos", group_login)).await?;
+                let list = self
+                    .get_json(&format!("/groups/{}/repos", group_login))
+                    .await?;
                 if let Ok(data) = self.data(&list) {
                     if let Some(items) = data.as_array() {
                         for item in items {
@@ -209,10 +215,7 @@ impl YuqueClient {
 }
 
 fn parse_repo(item: &serde_json::Value, scope: &str) -> Option<YuqueRepo> {
-    let namespace = item
-        .get("namespace")
-        .and_then(|v| v.as_str())?
-        .to_string();
+    let namespace = item.get("namespace").and_then(|v| v.as_str())?.to_string();
     let name = item
         .get("name")
         .and_then(|v| v.as_str())

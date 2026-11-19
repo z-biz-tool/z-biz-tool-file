@@ -73,7 +73,9 @@ pub fn get_sys_active(state: State<'_, MonitorService>) -> bool {
 /// 告警阈值配置（T5-01）：与 `set_monitor_config` 同口径 —— 后端夹取并把真正生效的值回给前端，
 /// 界面上的输入框据此校正，避免出现"显示 150、实际按 100 判"的两套数。
 #[tauri::command]
-pub fn get_alert_config(state: State<'_, crate::sys_app::alert::AlertState>) -> crate::sys_app::alert::AlertConfig {
+pub fn get_alert_config(
+    state: State<'_, crate::sys_app::alert::AlertState>,
+) -> crate::sys_app::alert::AlertConfig {
     state.get()
 }
 
@@ -337,7 +339,10 @@ fn run_dns_flush() -> DnsFlushResult {
         Ok(out) => dns_failure(String::from_utf8_lossy(&out.stderr).trim(), manual),
         Err(e) => DnsFlushResult {
             flushed: false,
-            message: crate::sys_app::log_sanitize::sanitize(&format!("无法调用 {}: {}", program, e)),
+            message: crate::sys_app::log_sanitize::sanitize(&format!(
+                "无法调用 {}: {}",
+                program, e
+            )),
             manual_command: Some(manual.to_string()),
         },
     }
@@ -793,12 +798,14 @@ mod tests {
             root_lib.contains("commands::get_thermal"),
             "get_thermal 没注册进 invoke_handler"
         );
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert!(
             contract.contains("getThermal: \"get_thermal\""),
             "前端未登记 get_thermal"
         );
-        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
+        let commands_rs =
+            std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         assert!(
             commands_rs.contains("thermal: &thermal::probe()"),
             "Agent 的输入里没有温度报告，温度问题会一直回\"没有通路\""
@@ -863,7 +870,11 @@ mod tests {
     #[test]
     fn agent_ranking_collection_returns_ordered_rows() {
         let cpu = collect_ranked(crate::sys_app::agent::RankBy::Cpu);
-        assert_eq!(cpu.len(), crate::sys_app::agent::MAX_RANK, "应正好取回一页排行榜");
+        assert_eq!(
+            cpu.len(),
+            crate::sys_app::agent::MAX_RANK,
+            "应正好取回一页排行榜"
+        );
         assert!(
             cpu.windows(2).all(|w| w[0].cpu_usage >= w[1].cpu_usage),
             "CPU 榜必须降序：{:?}",

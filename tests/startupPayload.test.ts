@@ -222,6 +222,7 @@ describe("点开才用的组件不许回到首屏", () => {
       "GlossayApp",
       "KnowledgeApp",
       "FileManagerApp",
+      "AigenApp", // AI 内容工厂（2026-11-19 搬入）：同样是活动栏切到才渲染的板块
     ]);
     for (const m of src.matchAll(/const\s+(\w+)\s*=\s*lazy\s*\(/g)) {
       if (BARE_LAZY_OK.has(m[1])) continue;

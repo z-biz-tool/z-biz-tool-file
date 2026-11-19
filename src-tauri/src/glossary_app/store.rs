@@ -42,10 +42,8 @@ pub fn load_store() -> GlossaryStore {
 pub fn save_store(store: &GlossaryStore) -> Result<(), String> {
     let path = glossary_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建词库目录失败: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建词库目录失败: {}", e))?;
     }
-    let json = serde_json::to_string_pretty(store)
-        .map_err(|e| format!("序列化词库失败: {}", e))?;
+    let json = serde_json::to_string_pretty(store).map_err(|e| format!("序列化词库失败: {}", e))?;
     std::fs::write(&path, json).map_err(|e| format!("写词库文件失败: {}", e))
 }

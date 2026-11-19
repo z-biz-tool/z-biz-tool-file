@@ -128,10 +128,7 @@ pub fn strip_image_refs(markdown: &str) -> (String, usize) {
     let mut i = 0;
     let mut stripped = 0usize;
     while i < bytes.len() {
-        if bytes[i] == '!'
-            && i + 1 < bytes.len()
-            && bytes[i + 1] == '['
-        {
+        if bytes[i] == '!' && i + 1 < bytes.len() && bytes[i + 1] == '[' {
             // 找 alt 的 ']'，再跟一个 '(' … ')'
             if let Some(alt_end) = find_bracket_end(&bytes, i + 1) {
                 if alt_end + 1 < bytes.len() && bytes[alt_end + 1] == '(' {

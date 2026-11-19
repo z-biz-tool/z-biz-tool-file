@@ -58,6 +58,7 @@ import {
   BulbOutlined,
   BulbFilled,
   ShareAltOutlined,
+  RobotOutlined,
 } from "@ant-design/icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -71,6 +72,8 @@ import { putSysHandoff } from "./apps/sys/handoff";
 import { putWorkerHandoff } from "./apps/worker/handoff";
 // 思维导图板块的深链分流槽（纯数据模块，不拖 React 依赖进首屏）
 import { putMindHandoff } from "./apps/mind/handoff";
+// AI 内容工厂板块的深链分流槽（2026-11-19 搬入，与 mind 同一个模式）
+import { putAigenHandoff } from "./apps/aigen/handoff";
 import { getFileTypeVisual, compareByKindThenName } from "./utils/fileTypeIcon";
 import { fuzzyFilter } from "./utils/fuzzyMatch";
 import { toKeySet } from "./utils/virtualList";
@@ -256,6 +259,10 @@ const RAIL_APPS: ActivityBarApp[] = [
   // 与词库相邻 —— 两者都是「沉淀资料、检索问答」的知识侧板块：词库管词条，
   // 认知管整份资料与本体（板块内首层：知识库 = 资料/解析/检索问答，本体 = 类型/实例图谱）。
   { key: "knowledge", label: "认知", icon: <BulbOutlined /> },
+  // AI 内容工厂：2026-11-19 从 z-biz-tool-aigen 整树搬入（aigen 独立 app 下线）。
+  // 排在最后 —— 它是「主动去生成内容」的工具型板块，与思维导图/工作台一类；
+  // 本体的 23 个 IPC 命令在后端 aigen_app 模块，前端在 src/apps/aigen。
+  { key: "aigen", label: "AI 内容工厂", icon: <RobotOutlined /> },
 ];
 
 /**
@@ -317,6 +324,9 @@ const GlossayApp = lazy(() => import("./apps/glossary/GlossaryApp"));
 // 认知板块按需加载（与词库同理：MDEditor + 语雀树 + 资料详情一套工作台 + 本体页，
 // 只有真的点进认知图标才需要下载这个 chunk）。
 const KnowledgeApp = lazy(() => import("./apps/knowledge/KnowledgeApp"));
+// AI 内容工厂按需加载（7 个 store + 10 个面板/抽屉 + SSE 客户端，静态 import
+// 会撑大文件管理首屏；本地协议下切过去的 chunk 下载几十毫秒）。
+const AigenApp = lazy(() => import("./apps/aigen/App"));
 
 /**
  * 「点开才用」的功能组件 —— 一律走 lazyModal。
@@ -822,6 +832,13 @@ function AppShellInner() {
         if (item.product === "mind") {
           putMindHandoff(item);
           setActiveApp("mind");
+          return;
+        }
+        // AI 内容工厂同理（2026-11-19 从 aigen 仓搬入）：商品清单里仍叫 aigen，
+        // 深链由 file 单点接收后投进板块自己的 handoff 槽。
+        if (item.product === "aigen") {
+          putAigenHandoff(item);
+          setActiveApp("aigen");
           return;
         }
         console.warn("[file] 深链:", msg);
@@ -3242,6 +3259,27 @@ function AppShellInner() {
           }
         >
           <KnowledgeApp />
+        </Suspense>
+      ) : activeApp === "aigen" ? (
+        // AI 内容工厂：图片 / 视频 / PPT / 长文 / 批量生成。
+        // 自带一层模式切换侧栏（五种生成模式），file 的活动栏负责板块级切换。
+        <Suspense
+          fallback={
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--ant-color-text-tertiary)",
+                fontSize: 13,
+              }}
+            >
+              正在加载 AI 内容工厂…
+            </div>
+          }
+        >
+          <AigenApp />
         </Suspense>
       ) : (
         // 兜底分支：只有"注册了应用但主区还没接"才会走到这里。

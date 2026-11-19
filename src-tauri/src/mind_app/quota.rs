@@ -139,7 +139,11 @@ mod tests {
         for i in 0..5 {
             crate::mind_app::recent::touch(&format!("D:/docs/r{}.emmx", i), "R", "local").unwrap();
         }
-        assert_eq!(crate::mind_app::recent::list().len(), 1, "容量调到 1 时列表只剩一条");
+        assert_eq!(
+            crate::mind_app::recent::list().len(),
+            1,
+            "容量调到 1 时列表只剩一条"
+        );
         assert_eq!(list().len(), 2, "列表容量不该影响账本");
         std::env::remove_var("Z_MIND_CONFIG_DIR");
         let _ = std::fs::remove_dir_all(&dir);

@@ -775,10 +775,12 @@ fn cleanup_declared(declared: &[String]) -> CleanupResult {
         .filter_map(|path| match approved_cleanup_root(path) {
             Some(root) => Some(root),
             None => {
-                result.errors.push(crate::sys_app::log_sanitize::sanitize(&format!(
-                    "已跳过受保护目录: {}",
-                    path
-                )));
+                result
+                    .errors
+                    .push(crate::sys_app::log_sanitize::sanitize(&format!(
+                        "已跳过受保护目录: {}",
+                        path
+                    )));
                 result.skipped_paths += 1;
                 None
             }
@@ -793,11 +795,13 @@ fn cleanup_declared(declared: &[String]) -> CleanupResult {
                 if let Err(e) = fs::remove_file(entry.path()) {
                     result.failed_files += 1;
                     if result.errors.len() < 10 {
-                        result.errors.push(crate::sys_app::log_sanitize::sanitize(&format!(
-                            "{}: {}",
-                            entry.path().display(),
-                            e
-                        )));
+                        result
+                            .errors
+                            .push(crate::sys_app::log_sanitize::sanitize(&format!(
+                                "{}: {}",
+                                entry.path().display(),
+                                e
+                            )));
                     }
                 } else {
                     result.deleted_files += 1;
@@ -1338,7 +1342,8 @@ mod tests {
         }
         assert!(!json.contains('_'), "进度帧必须全 camelCase：{json}");
 
-        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/apps/sys/ipc_contract.ts");
+        let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/apps/sys/ipc_contract.ts");
         let contract = fs::read_to_string(&ts).expect("前端 IPC 契约文件必须存在");
         assert!(
             contract.contains(&format!("\"{SCAN_PROGRESS_EVENT}\"")),

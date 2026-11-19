@@ -367,16 +367,21 @@ pub fn bundled_node_path() -> Option<PathBuf> {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::metadata(&p).ok()?.permissions();
         if perms.mode() & 0o111 == 0 {
-            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(perms.mode() | 0o755));
+            let _ =
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(perms.mode() | 0o755));
         }
     }
     Some(p)
 }
 
 #[cfg(windows)]
-fn node_exe_name() -> &'static str { "node.exe" }
+fn node_exe_name() -> &'static str {
+    "node.exe"
+}
 #[cfg(not(windows))]
-fn node_exe_name() -> &'static str { "node" }
+fn node_exe_name() -> &'static str {
+    "node"
+}
 
 /// 捆绑运行时目录：`<Contents>/Resources/runtime`（macOS）或
 /// binary 旁 `runtime`（其它平台）。找不到返回 `None`。

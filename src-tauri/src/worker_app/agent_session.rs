@@ -272,7 +272,11 @@ pub async fn chat(
     // 只有 cli_type == pi 才读（claude-code/hermes/opencode 走各自原生登录，不受影响）。
     if cli_type == "pi" {
         if let Ok((cfg, key)) = crate::llm_config::read_shared_config_with_key() {
-            let provider = if cfg.preset.is_empty() { cfg.provider } else { cfg.preset };
+            let provider = if cfg.preset.is_empty() {
+                cfg.provider
+            } else {
+                cfg.preset
+            };
             if let Some(env_name) = pi_api_key_env(&provider) {
                 if !key.trim().is_empty() {
                     req = req.header("X-LLM-Key-Env", env_name);

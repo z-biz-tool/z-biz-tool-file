@@ -459,14 +459,11 @@ async fn run_task_background(app: &tauri::AppHandle, task_id: &str, agent_id: &s
     // 工作区文件夹：若 agent 是内置 Pi（或任何支持 workingDir 的 CLI），
     // 把它作为 Pi 的工作目录 —— AI 在这里读取上下文、写回产出。
     // 非 Pi 的 CLI 传 None，走各自默认 cwd。
-    let working_dir = match crate::worker_app::storage::find_task(task_id) {
-        Some(t) => Some(
-            crate::worker_app::workspace::ensure_task_dir(&t)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        ),
-        None => None,
-    };
+    let working_dir = crate::worker_app::storage::find_task(task_id).map(|t| {
+        crate::worker_app::workspace::ensure_task_dir(&t)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
 
     let result = crate::worker_app::agent_session::run_agent_turn_inner(
         app,

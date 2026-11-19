@@ -299,9 +299,9 @@ pub fn listening_sockets() -> ListeningReport {
     if !output.status.success() && output.status.code() != Some(1) {
         return ListeningReport {
             sockets: Vec::new(),
-            reason: Some(crate::sys_app::log_sanitize::sanitize(&String::from_utf8_lossy(
-                &output.stderr,
-            ))),
+            reason: Some(crate::sys_app::log_sanitize::sanitize(
+                &String::from_utf8_lossy(&output.stderr),
+            )),
         };
     }
     let sockets = parse_lsof_listeners(&String::from_utf8_lossy(&output.stdout));
@@ -538,7 +538,8 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
 
         let rows = vec![
             row(7, "java", 4096, Some(1)),
@@ -600,11 +601,13 @@ mod tests {
     #[test]
     fn rollup_and_socket_commands_are_wired_on_both_sides() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let lib_rs = std::fs::read_to_string(manifest.join("src/sys_app/lib.rs")).unwrap();
         // 注册在 crate 根（搬进 file 后 invoke_handler 上移），模块声明仍在子模块。
         let root_lib = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
-        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
+        let commands_rs =
+            std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         for (front, back) in [
             (
                 "getProcessRollup: \"get_process_rollup\"",
@@ -616,7 +619,10 @@ mod tests {
             ),
         ] {
             assert!(contract.contains(front), "前端未登记 {front}");
-            assert!(root_lib.contains(back), "命令未注册进 invoke_handler：{back}");
+            assert!(
+                root_lib.contains(back),
+                "命令未注册进 invoke_handler：{back}"
+            );
             assert!(
                 commands_rs.contains(&format!(
                     "pub async fn {}",
@@ -626,7 +632,10 @@ mod tests {
             );
         }
         // 这条仍需子模块声明存在，避免"注册了但模块没挂"的假绿。
-        assert!(lib_rs.contains("mod observe;"), "observe 模块没接进 sys_app/lib.rs");
+        assert!(
+            lib_rs.contains("mod observe;"),
+            "observe 模块没接进 sys_app/lib.rs"
+        );
     }
 
     /// 真机对账：本机此刻必然有 TCP 监听（IDE、浏览器至少各一个），

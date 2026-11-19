@@ -53,8 +53,8 @@ mod trash;
 // 整棵树挂在 crate::sys_app::* 下，避免和本仓已有的 commands / monitor / ... 撞名。
 //
 // 和 db_app 一样要显式 #[path]：搬进来后目录名变成了 sys_app，
-    // 与 Rust 2018 的「目录名 = 模块名」规则对不上，必须指到 sys_app/lib.rs。
-    // 它没有 run()（Tauri Builder 归本仓管），对外只暴露 attach() + startup()。
+// 与 Rust 2018 的「目录名 = 模块名」规则对不上，必须指到 sys_app/lib.rs。
+// 它没有 run()（Tauri Builder 归本仓管），对外只暴露 attach() + startup()。
 #[path = "sys_app/lib.rs"]
 pub mod sys_app;
 // AI 任务看板（项目管理 / Agent 员工 / 任务分配执行验收）：从 z-biz-tool-worker
@@ -78,6 +78,11 @@ pub mod glossary_app;
 // 知识中台。同构于 glossary_app：命令在主 invoke_handler 注册，attach 只 manage 状态。
 #[path = "kb_app/lib.rs"]
 pub mod kb_app;
+// AI 内容工厂板块（2026-11-19 从 z-biz-tool-aigen 整树搬入）：
+// 图片 / 视频 / PPT / 长文 / 批量生成。命令在主 invoke_handler 注册，
+// attach 只 manage 一份 AppState（服务商配置 + 历史 + 任务队列 + 模板）。
+#[path = "aigen_app/lib.rs"]
+pub mod aigen_app;
 mod updater;
 mod video_thumb;
 mod watcher;
@@ -129,7 +134,10 @@ fn acl_selftest(ctx: &mut tauri::Context<tauri::Wry>) {
             &tauri::ipc::Origin::Local,
         )
         .is_some();
-    eprintln!("[acl-selftest] control plugin:shell|execute allowed={}", control);
+    eprintln!(
+        "[acl-selftest] control plugin:shell|execute allowed={}",
+        control
+    );
 }
 
 pub fn run() {
@@ -182,6 +190,9 @@ pub fn run() {
 
     // 知识库板块的状态（库/目录/物料索引）由 kb_app::attach 挂上去。
     let builder = kb_app::attach(builder);
+
+    // AI 内容工厂板块的状态（服务商配置 / 历史 / 生成任务 / 模板）由 aigen_app::attach 挂上去。
+    let builder = aigen_app::attach(builder);
 
     // 上下文只在这里展开一次：`generate_context!` 会嵌入 plist 等静态符号，
     // 同一个 crate 里展开两次会撞 `_EMBED_INFO_PLIST`。
@@ -680,6 +691,31 @@ pub fn run() {
             kb_app::ontology::onto_neighbors,
             kb_app::ontology::onto_search,
             kb_app::ontology::onto_layout_save,
+            // ── AI 内容工厂（aigen_app，2026-11-19 从 z-biz-tool-aigen 搬入）──
+            // 命令名保持 aigen 原样（前端 invoke 契约不变）。深链命令 zbiz_take_pending
+            // 属于 file 主壳、已在上方注册，板块侧不再重复注册（重复会启动 panic）。
+            aigen_app::commands::submit_generation,
+            aigen_app::commands::get_generation,
+            aigen_app::commands::list_generations,
+            aigen_app::commands::cancel_generation,
+            aigen_app::commands::list_history,
+            aigen_app::commands::delete_history,
+            aigen_app::commands::clear_history,
+            aigen_app::commands::set_history_favorite,
+            aigen_app::commands::save_api_config,
+            aigen_app::commands::load_api_config,
+            aigen_app::commands::delete_provider,
+            aigen_app::commands::set_active_provider,
+            aigen_app::commands::test_provider,
+            aigen_app::commands::list_templates,
+            aigen_app::commands::save_template,
+            aigen_app::commands::delete_template,
+            aigen_app::commands::set_template_favorite,
+            aigen_app::commands::render_template,
+            aigen_app::commands::assist_generation,
+            aigen_app::commands::save_export,
+            aigen_app::commands::prepare_reference_image,
+            aigen_app::commands::data_dir_path,
         ])
         .setup(move |app| {
             // 冷启动时带进来的 zbiz:// 先入队，前端挂上监听后再取走。
@@ -732,6 +768,11 @@ pub fn run() {
             // 思维导图板块：Windows / Linux 双击 .emmx 时路径就在命令行里，
             // 趁前端开始渲染之前收进待开队列（macOS 走下面的 RunEvent::Opened）。
             mind_app::openfile::seed_from_args(app.handle());
+            // AI 内容工厂板块（2026-11-19 搬入）：启动即从加密存储载入服务商配置，
+            // 渲染进程不主动调用也能生成。配置损坏只告警、不阻止应用启动。
+            if let Err(e) = app.state::<aigen_app::ai_client::AppState>().load_config() {
+                eprintln!("[aigen] 载入 API 配置失败（{}）：使用默认配置", e.code);
+            }
             Ok(())
         })
         .build(context)
@@ -1186,4 +1227,3 @@ mod handler_registration_tests {
         );
     }
 }
-

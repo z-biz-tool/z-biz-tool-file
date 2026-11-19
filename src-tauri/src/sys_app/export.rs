@@ -376,7 +376,8 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let outcome = CsvExportOutcome {
             path: String::new(),
             bytes: 0,
@@ -410,14 +411,16 @@ mod tests {
             root_lib.contains("commands::export_history_csv"),
             "export_history_csv 没注册进 invoke_handler"
         );
-        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
+        let commands_rs =
+            std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         assert!(
             commands_rs.contains("export::write_history_csv"),
             "命令没有转调 export 模块"
         );
-        let overview =
-            std::fs::read_to_string(manifest.join("../src/apps/sys/components/tabs/OverviewTab.tsx"))
-                .unwrap();
+        let overview = std::fs::read_to_string(
+            manifest.join("../src/apps/sys/components/tabs/OverviewTab.tsx"),
+        )
+        .unwrap();
         assert!(overview.contains("onExportCsv"), "概览上的导出按钮没接回调");
         let app = std::fs::read_to_string(manifest.join("../src/apps/sys/SysApp.tsx")).unwrap();
         assert!(

@@ -213,7 +213,8 @@ mod tests {
     #[test]
     fn the_notification_body_mirrors_the_frontend_toast() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let alert_ts = std::fs::read_to_string(manifest.join("../src/apps/sys/lib/alert.ts")).unwrap();
+        let alert_ts =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/lib/alert.ts")).unwrap();
         // 标签词只能有一处：后端这几个字面量必须逐个出现在前端那份标签表里。
         for label in ["CPU 使用率", "内存使用率", "磁盘使用率", "警告", "严重"] {
             assert!(
@@ -392,7 +393,8 @@ mod tests {
             1,
             "采集循环里的投递点必须恰好一处：多了就是第二条告警通路"
         );
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         assert!(
             contract.contains("notifyStatus: \"notify_status\""),
             "前端未登记 notify_status"
@@ -447,7 +449,8 @@ mod tests {
     #[test]
     fn the_test_command_takes_no_arguments() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
+        let commands_rs =
+            std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         let signature = commands_rs
             .split("pub async fn send_test_notification")
             .nth(1)
@@ -482,7 +485,8 @@ mod tests {
         use crate::sys_app::contract_fixtures::{serialized_keys, ts_interface_keys};
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let contract = std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
+        let contract =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/ipc_contract.ts")).unwrap();
         let status = NotifyState::default().status();
         assert_eq!(status.suppressed, 0, "没投过就不该有静默计数");
         assert_eq!(
@@ -503,9 +507,10 @@ mod tests {
         use crate::sys_app::contract_fixtures::strip_ts_comments;
 
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let raw =
-            std::fs::read_to_string(manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"))
-                .unwrap();
+        let raw = std::fs::read_to_string(
+            manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"),
+        )
+        .unwrap();
         let visible = strip_ts_comments(&raw);
         for forbidden in ["已送达", "已授权", "通知成功"] {
             assert!(
@@ -527,7 +532,8 @@ mod tests {
 
         // 后端只给原文，不负责造句：否则语境会在两侧各加一半。只看函数体，
         // 那条解释性的文档注释本身就写着这几个字。
-        let commands_rs = std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
+        let commands_rs =
+            std::fs::read_to_string(manifest.join("src/sys_app/commands.rs")).unwrap();
         let body = commands_rs
             .split("pub async fn send_test_notification")
             .nth(1)
@@ -546,14 +552,16 @@ mod tests {
     #[test]
     fn no_frontend_path_builds_its_own_alert_notice() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let drawer =
-            std::fs::read_to_string(manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"))
-                .unwrap();
+        let drawer = std::fs::read_to_string(
+            manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"),
+        )
+        .unwrap();
         assert!(
             !drawer.contains("new Notification") && !drawer.contains("plugin-notification"),
             "前端不许再开一条通知通路：那样会有第二个「要不要通知」的判断"
         );
-        let hook = std::fs::read_to_string(manifest.join("../src/apps/sys/hooks/useAlerts.ts")).unwrap();
+        let hook =
+            std::fs::read_to_string(manifest.join("../src/apps/sys/hooks/useAlerts.ts")).unwrap();
         assert!(
             !hook.contains("new Notification") && !hook.contains("plugin-notification"),
             "同上：告警链路的前端半边只读记账、不自己发通知"
@@ -603,9 +611,10 @@ mod tests {
             production.contains("window.is_fullscreen().ok()"),
             "取不到状态时必须按不静默处理（宁可多弹一条，也不静默吞掉告警）"
         );
-        let drawer =
-            std::fs::read_to_string(manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"))
-                .unwrap();
+        let drawer = std::fs::read_to_string(
+            manifest.join("../src/apps/sys/components/AlertSettingsDrawer.tsx"),
+        )
+        .unwrap();
         use crate::sys_app::contract_fixtures::strip_ts_comments;
         let visible = strip_ts_comments(&drawer);
         assert!(

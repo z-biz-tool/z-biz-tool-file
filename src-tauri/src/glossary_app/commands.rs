@@ -4,7 +4,7 @@
 //! `indexer_search_content`（见 indexer.rs），前端各调各的。
 
 use cap_glossary::{
-    chunk_markdown, to_citations, Bm25Index, Citation, Chunk, GlossaryTerm, DEFAULT_MAX_CHARS,
+    chunk_markdown, to_citations, Bm25Index, Chunk, Citation, GlossaryTerm, DEFAULT_MAX_CHARS,
     DEFAULT_TOP_K, SYSTEM_PROMPT,
 };
 use serde::{Deserialize, Serialize};
@@ -95,9 +95,10 @@ pub fn glossary_upsert(
     if term.is_empty() {
         return Err("词条名不能为空".to_string());
     }
-    let id = input.id.filter(|s| !s.is_empty()).unwrap_or_else(|| {
-        uuid::Uuid::new_v4().to_string()
-    });
+    let id = input
+        .id
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let now = chrono::Utc::now().timestamp_millis();
 
     let mut store = state.0.lock().unwrap();
@@ -109,7 +110,9 @@ pub fn glossary_upsert(
             tags: input.tags,
             updated_at: now,
         };
-        store.upsert(entry).map_err(|e| format!("保存词条失败: {}", e))?;
+        store
+            .upsert(entry)
+            .map_err(|e| format!("保存词条失败: {}", e))?;
         // upsert 后取回（能直接拿到刚写入的）
         store
             .get(&id)
@@ -181,7 +184,7 @@ pub async fn glossary_ask(
         })
         .collect();
     let index = Bm25Index::build(chunks);
-    let hits = index.search(&question, DEFAULT_TOP_K, None);
+    let hits = index.search(question, DEFAULT_TOP_K, None);
     if hits.is_empty() {
         return Ok(AskResult {
             answer: cap_glossary::no_evidence_message(corpus_chunks, false),
@@ -190,7 +193,7 @@ pub async fn glossary_ask(
     }
 
     let citations = to_citations(&index, &hits);
-    let user = cap_glossary::build_user_message(&question, &citations);
+    let user = cap_glossary::build_user_message(question, &citations);
     let answer = crate::ai::ai_chat(app, SYSTEM_PROMPT.to_string(), user).await?;
 
     Ok(AskResult { answer, citations })

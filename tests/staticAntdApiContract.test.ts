@@ -30,11 +30,15 @@ function sourceFiles(): string[] {
     // 思维导图（src/apps/mind）同理(2026-11-08 从 z-biz-tool-mind 仓搬入)，
     // 3 个核心文件（ExportDialog / HistoryPanel / SearchPanel）用静态 message，
     // 且保留了独立的 zm-* 主题体系，搬入期冻结、后续并入 file 统一提示通道时再改。
+    // AI 内容工厂（src/apps/aigen）2026-11-19 整树搬入：14 个面板/store 用静态
+    // message、3 处 Modal.confirm，全部改成 App.useApp() 要动一整个已独立的模块，
+    // 搬入期冻结，后续单独一轮并入 file 统一提示通道。
     .filter(
       (p) =>
         !p.includes("/apps/terminal/") &&
         !p.includes("/apps/worker/") &&
-        !p.includes("/apps/mind/"),
+        !p.includes("/apps/mind/") &&
+        !p.includes("/apps/aigen/"),
     );
 }
 

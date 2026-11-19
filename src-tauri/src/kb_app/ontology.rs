@@ -12,8 +12,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::atomic_write::atomic_write;
 use super::store;
+use crate::atomic_write::atomic_write;
 
 pub struct OntState(pub Mutex<OntologyData>);
 
@@ -208,7 +208,13 @@ fn e_name(data: &OntologyData, edge_id: &str) -> String {
     data.edges
         .iter()
         .find(|e| e.id == edge_id)
-        .map(|e| if e.display_name.is_empty() { e.name.clone() } else { e.display_name.clone() })
+        .map(|e| {
+            if e.display_name.is_empty() {
+                e.name.clone()
+            } else {
+                e.display_name.clone()
+            }
+        })
         .unwrap_or_else(|| "?".to_string())
 }
 
@@ -256,7 +262,11 @@ fn validate_props(props: &[(String, OntProperty)], values: &PropMap) -> Result<(
             return Err(format!(
                 "属性「{}」的类型应为 {}",
                 key,
-                PROP_DATA_TYPES.iter().find(|t| **t == def.data_type).copied().unwrap_or("text")
+                PROP_DATA_TYPES
+                    .iter()
+                    .find(|t| **t == def.data_type)
+                    .copied()
+                    .unwrap_or("text")
             ));
         }
     }
@@ -356,7 +366,11 @@ fn neighbors(data: &OntologyData, instance_id: &str, hops: usize) -> NeighborsRe
                         dst_id: l.dst_id.clone(),
                     });
                 }
-                let peer = if l.src_id == *id { &l.dst_id } else { &l.src_id };
+                let peer = if l.src_id == *id {
+                    &l.dst_id
+                } else {
+                    &l.src_id
+                };
                 if seen.insert(peer.clone()) {
                     next.push(peer.clone());
                 }
@@ -403,9 +417,11 @@ pub fn onto_type_save(
         return Err("类型代号不能为空".to_string());
     }
     data_mut(&state, |data| {
-        if data.types.iter().any(|t| {
-            input.id.as_deref() != Some(t.id.as_str()) && t.name == name
-        }) {
+        if data
+            .types
+            .iter()
+            .any(|t| input.id.as_deref() != Some(t.id.as_str()) && t.name == name)
+        {
             return Err(format!("类型代号「{}」已存在", name));
         }
         if let Some(id) = &input.id {
@@ -459,7 +475,8 @@ pub fn onto_type_delete(state: State<'_, OntState>, type_id: String) -> Result<(
             .filter(|e| e.src_type == type_id || e.dst_type == type_id)
             .map(|e| e.id.clone())
             .collect();
-        data.edges.retain(|e| e.src_type != type_id && e.dst_type != type_id);
+        data.edges
+            .retain(|e| e.src_type != type_id && e.dst_type != type_id);
         data.links.retain(|l| {
             !dead_edges.contains(&l.edge_id)
                 && !dead_instances.contains(&l.src_id)
@@ -472,10 +489,7 @@ pub fn onto_type_delete(state: State<'_, OntState>, type_id: String) -> Result<(
 }
 
 #[tauri::command]
-pub fn onto_edge_save(
-    state: State<'_, OntState>,
-    input: EdgeSaveInput,
-) -> Result<OntEdge, String> {
+pub fn onto_edge_save(state: State<'_, OntState>, input: EdgeSaveInput) -> Result<OntEdge, String> {
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err("关系代号不能为空".to_string());
@@ -541,10 +555,7 @@ pub fn onto_property_set(state: State<'_, OntState>, input: PropertyInput) -> Re
         return Err("属性代号不能为空".to_string());
     }
     if !PROP_DATA_TYPES.contains(&input.data_type.as_str()) {
-        return Err(format!(
-            "属性类型只能是 {}",
-            PROP_DATA_TYPES.join(" / ")
-        ));
+        return Err(format!("属性类型只能是 {}", PROP_DATA_TYPES.join(" / ")));
     }
     data_mut(&state, |data| {
         let located = match input.owner.as_str() {
@@ -711,9 +722,11 @@ pub fn onto_instance_list(
         .filter(|i| {
             kw.is_empty()
                 || i.name.to_lowercase().contains(&kw)
-                || i.properties
-                    .values()
-                    .any(|v| v.as_str().map(|s| s.to_lowercase().contains(&kw)).unwrap_or(false))
+                || i.properties.values().any(|v| {
+                    v.as_str()
+                        .map(|s| s.to_lowercase().contains(&kw))
+                        .unwrap_or(false)
+                })
         })
         .collect();
     items.sort_by(|a, b| a.name.cmp(&b.name));

@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use oar_ocr::prelude::{load_image, OAROCR, OAROCRBuilder, PpOcrV6Size};
+use oar_ocr::prelude::{load_image, OAROCRBuilder, PpOcrV6Size, OAROCR};
 
 /// 进程内唯一 OCR 引擎。Err 存首次初始化的失败原因（缺模型/网络等），
 /// 下次调用原样返回 —— 不反复重试把用户晾在等待里。
@@ -35,8 +35,8 @@ fn engine() -> Result<&'static OAROCR, String> {
 /// 框按纵坐标排序，纵坐标差在行高一半以内的归为同一行，行内按横坐标排。
 pub fn ocr_image(path: &Path) -> Result<String, String> {
     let engine = engine()?;
-    let image = load_image(path)
-        .map_err(|e| format!("读取图片失败（{}）: {}", path.display(), e))?;
+    let image =
+        load_image(path).map_err(|e| format!("读取图片失败（{}）: {}", path.display(), e))?;
 
     let results = engine
         .predict(vec![image])
@@ -65,7 +65,11 @@ pub fn ocr_image(path: &Path) -> Result<String, String> {
     if lines.is_empty() {
         return Ok(String::new());
     }
-    lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+    lines.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap()
+            .then(a.1.partial_cmp(&b.1).unwrap())
+    });
 
     // 行归组阈值：框高中位数的 0.6 倍，最低 10px（页眉小字）
     heights.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -108,7 +112,9 @@ mod tests {
     /// 阈值判定的两侧都要能证伪：正常文本不算空，空白/页码算空。
     #[test]
     fn text_layer_empty_threshold() {
-        assert!(!text_layer_looks_empty("MinerU 对接验证文档，包含正文内容若干。"));
+        assert!(!text_layer_looks_empty(
+            "MinerU 对接验证文档，包含正文内容若干。"
+        ));
         assert!(text_layer_looks_empty("   \n\t "));
         assert!(text_layer_looks_empty("1\n2\n3"));
     }

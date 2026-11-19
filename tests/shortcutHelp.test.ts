@@ -204,7 +204,9 @@ describe('结构闸：hint("…") 引用的 description 必须真实存在于注
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
       const url = new URL(ent.name + (ent.isDirectory() ? "/" : ""), dir);
       if (ent.isDirectory()) walk(url);
-      else if (/\.tsx?$/.test(ent.name))
+      // 测试文件里的 hint("SOMETHING_NEW") / hint("") 是断言用的假数据，
+      // 不是真实 UI 的键位提示；交给门禁解析会把它们当成「谎报键位」。
+      else if (/\.tsx?$/.test(ent.name) && !/\.test\.tsx?$/.test(ent.name))
         sources.push({
           path: decodeURIComponent(url.pathname).split("/src/")[1],
           text: readFileSync(url, "utf8"),
